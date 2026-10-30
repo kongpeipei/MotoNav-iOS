@@ -75,6 +75,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 所选路线全程距离/用时（导航信息卡：剩余里程与时间按比例估算）
     @Published var routeDistanceM = 0
     @Published var routeDurationS = 0
+    /// 实时速度（m/s，来自定位，导航卡显示 km/h）
+    @Published var currentSpeed = 0.0
 
     private let historyKey = "search_history"
     private let historyLimit = 10
@@ -651,6 +653,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let coord = loc.coordinate
         Task { @MainActor in
             currentLocation = coord
+            currentSpeed = loc.speed > 0 ? loc.speed : 0
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
             checkNavigation(at: coord)
@@ -1049,7 +1052,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let remainS = (routeDurationS > 0 && total > 0)
             ? Int(Double(routeDurationS) * Double(remainM) / Double(total))
             : 0
-        let speed = (loc.speed > 0) ? loc.speed * 3.6 : 0
+        let speed = (currentSpeed > 0) ? currentSpeed * 3.6 : 0
         let nt = routeTurns.first { $0.fromStartM > traveled }
         return NavStatus(remainM: remainM, remainS: remainS, speedKph: speed,
                          nextTurn: nt, distToTurnM: nt.map { $0.fromStartM - traveled } ?? 0)
