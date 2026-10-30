@@ -76,6 +76,8 @@ class MapView @JvmOverloads constructor(
     private var hasPreview = false
     /** 市区加油站（经纬度） */
     private var gasStations: List<Pair<Double, Double>> = emptyList()
+    /** 地图小区/商铺名称标签（纬度,经度,名称） */
+    private var placeLabels: List<Triple<Double, Double, String>> = emptyList()
 
     /** 视图平移偏移（像素，地图层坐标系），用户拖动地图后保留 */
     private var panX = 0f
@@ -94,6 +96,8 @@ class MapView @JvmOverloads constructor(
     var onLongPress: ((Double, Double) -> Unit)? = null
     /** 长按命中已有点位回调 */
     var onPoiLongPress: ((Poi) -> Unit)? = null
+    /** 点击小区/商铺标签回调（纬度, 经度, 名称） */
+    var onPlaceClick: ((Double, Double, String) -> Unit)? = null
 
     // ==================== OSM 瓦片 ====================
     private val R = 6378137.0
@@ -235,6 +239,12 @@ class MapView @JvmOverloads constructor(
     /** 设置市区加油站列表 */
     fun setGasStations(list: List<Pair<Double, Double>>) {
         gasStations = list
+        postInvalidate()
+    }
+
+    /** 设置地图小区/商铺名称标签（纬度,经度,名称） */
+    fun setPlaceLabels(list: List<Triple<Double, Double, String>>) {
+        placeLabels = list
         postInvalidate()
     }
 
@@ -395,6 +405,7 @@ class MapView @JvmOverloads constructor(
         drawRoute(canvas)
         pois.forEach { drawPoi(canvas, it) }
         drawGasStations(canvas)
+        drawPlaceLabels(canvas)
         drawPreview(canvas)
         drawUser(canvas)
         canvas.restore()
@@ -472,8 +483,7 @@ class MapView @JvmOverloads constructor(
     }
 
     /** 加油站：橙色圆点 + 油字 */
-    private fun drawGasStations(canvas: Canvas) {
-        for ((lat, lon) in gasStations) {
+    private fun drawGasStations(canvas: Canvas) {        for ((lat, lon) in gasStations) {
             val s = toScreen(lat, lon)
             if (s[0] < -40 || s[0] > width + 40 || s[1] < -40 || s[1] > height + 40) continue
             canvas.drawCircle(s[0], s[1], 13f, gasPaint)
@@ -482,6 +492,27 @@ class MapView @JvmOverloads constructor(
             })
             canvas.drawText("油", s[0] - 7f, s[1] + 6f, Paint().apply {
                 color = Color.WHITE; textSize = 20f; isFakeBoldText = true
+            })
+        }
+    }
+
+    /** 地图小区/商铺名称标签（放大地图后显示，浅色小字，点击可导航） */
+    private fun drawPlaceLabels(canvas: Canvas) {
+        if (metersPerPx > 6f || placeLabels.isEmpty()) return
+        val bg = Paint().apply {
+            color = Color.parseColor("#66000000"); style = Paint.Style.FILL; isAntiAlias = true
+        }
+        val txt = Paint().apply {
+            color = Color.parseColor("#DDFFFFFF"); textSize = 22f; isAntiAlias = true
+        }
+        for ((lat, lon, name) in placeLabels) {
+            val s = toScreen(lat, lon)
+            if (s[0] < -120 || s[0] > width + 120 || s[1] < -40 || s[1] > height + 40) continue
+            val w = txt.measureText(name) + 12f
+            canvas.drawRoundRect(s[0] - w / 2, s[1] - 38f, s[0] + w / 2, s[1] - 16f, 8f, 8f, bg)
+            canvas.drawText(name, s[0] - txt.measureText(name) / 2, s[1] - 20f, txt)
+            canvas.drawCircle(s[0], s[1] - 4f, 3f, Paint().apply {
+                color = Color.parseColor("#88FFFFFF"); style = Paint.Style.FILL
             })
         }
     }
@@ -592,6 +623,21 @@ class MapView @JvmOverloads constructor(
                     onPoiClick?.invoke(best)
                     postInvalidate()
                     return true
+                }
+                // 未命中点位：尝试命中小区/商铺标签
+                if (metersPerPx <= 6f) {
+                    var bestPlace: Triple<Double, Double, String>? = null
+                    var bestD = Float.MAX_VALUE
+                    for (p in placeLabels) {
+                        val ps = toScreen(p.first, p.second)
+                        val d = kotlin.math.hypot(s[0] - ps[0], s[1] - ps[1])
+                        if (d < 55f && d < bestD) { bestD = d; bestPlace = p }
+                    }
+                    if (bestPlace != null) {
+                        onPlaceClick?.invoke(bestPlace.first, bestPlace.second, bestPlace.third)
+                        postInvalidate()
+                        return true
+                    }
                 }
             }
         }

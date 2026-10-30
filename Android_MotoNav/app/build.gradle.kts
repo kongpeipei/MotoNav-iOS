@@ -11,8 +11,8 @@ android {
         applicationId = "com.motonav.app"
         minSdk = 24
         targetSdk = 33
-        versionCode = 11
-        versionName = "1.11"
+        versionCode = 12
+        versionName = "1.12"
     }
 
     buildTypes {

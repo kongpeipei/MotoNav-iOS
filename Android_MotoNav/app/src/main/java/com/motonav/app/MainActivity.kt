@@ -190,13 +190,32 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         }.start()
     }
 
-    private fun refreshSuggestions() {
+    private fun refreshSuggestions(query: String = "") {
+        val q = query.trim()
         val items = (repo.all().map { it.name } + history.map { it.first } + hfPois)
-            .distinct().map { displayName(it) }.take(60).toMutableList()
+            .distinct().map { displayName(it) }
+            .filter { q.isEmpty() || it.contains(q, ignoreCase = true) }
+            .take(60).toMutableList()
+        if (q.isNotEmpty() && items.none { it.contains(q, true) }) {
+            items.add(0, "🔍 在线搜索「$q」")
+        }
         items.add(NAV_ITEM)
         binding.etSearch.setAdapter(
-            ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, items)
+            NoFilterAdapter(this, android.R.layout.simple_dropdown_item_1line, items)
         )
+    }
+
+    /** 不过滤的联想适配器（列表已按输入预过滤，保留 🔍 / ▶ 特殊条目） */
+    private class NoFilterAdapter(ctx: Context, res: Int, private val items: List<String>) :
+        ArrayAdapter<String>(ctx, res, items) {
+        override fun getFilter(): android.widget.Filter = object : android.widget.Filter() {
+            override fun performFiltering(constraint: CharSequence?): FilterResults {
+                val r = FilterResults()
+                r.values = items; r.count = items.size
+                return r
+            }
+            override fun publishResults(constraint: CharSequence?, results: FilterResults?) { }
+        }
     }
 
     /** 联想展示简化：去掉"与XX路交口"，只显示地址名称（导航目标不变） */
@@ -301,19 +320,36 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
 
         binding.mapView.setPois(visiblePois())
 
-        // 搜索框智能联想：点位名称 + 历史目的地 + 合肥小区/商铺 + 尾部开始导航
+        // 搜索框智能联想：点位名称 + 历史目的地 + 合肥小区/商铺 + 在线搜索入口 + 尾部开始导航
         loadHefeiPois()
         refreshSuggestions()
+        binding.etSearch.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                refreshSuggestions(s?.toString() ?: "")
+            }
+            override fun afterTextChanged(s: android.text.Editable?) { }
+        })
         binding.etSearch.setOnItemClickListener { _, _, pos, _ ->
             val name = binding.etSearch.adapter.getItem(pos) as String
-            if (name == NAV_ITEM) {
-                hideKeyboard()
-                toggleNavigation()
-            } else {
-                doSearch(name)
+            when {
+                name == NAV_ITEM -> {
+                    hideKeyboard()
+                    toggleNavigation()
+                }
+                name.startsWith("🔍") -> {
+                    val q = name.substringAfter("「").substringBefore("」")
+                    onlineSearch(q)
+                }
+                else -> doSearch(name)
             }
         }
-        binding.btnSearch.setOnClickListener { doSearch(binding.etSearch.text.toString()) }
+        binding.btnSearch.setOnClickListener {
+            val q = binding.etSearch.text.toString().trim()
+            if (q.isEmpty()) { showToast("请输入目的地"); return@setOnClickListener }
+            if (q.startsWith("🔍")) { onlineSearch(q.substringAfter("「").substringBefore("」")); return@setOnClickListener }
+            doSearch(q)
+        }
         binding.etSearch.setOnEditorActionListener { _, _, _ ->
             doSearch(binding.etSearch.text.toString())
             true
@@ -326,12 +362,14 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         }
         binding.btnZoomIn.setOnClickListener { binding.mapView.zoomIn() }
         binding.btnZoomOut.setOnClickListener { binding.mapView.zoomOut() }
-        // 搜索预览"去这里"：规划当前定位点到预览点路线
+        // 搜索预览"去这里" / 点选"导航到此处"：规划路线
         binding.btnGoHere.setOnClickListener {
-            if (previewLat != 0.0 || previewLon != 0.0) {
-                planRouteTo(previewLat, previewLon, previewName.ifEmpty { "目的地" })
+            if (pendingName.isNotEmpty()) {
+                planRouteTo(pendingLat, pendingLon, pendingName)
                 binding.btnGoHere.visibility = android.view.View.GONE
                 binding.mapView.clearPreview()
+                binding.mapView.setSelected(null)
+                pendingName = ""
             }
         }
         binding.btnExitNav.setOnClickListener { toggleNavigation() }
@@ -345,6 +383,16 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         binding.mapView.onLongPress = { lat, lon -> showMapLongPressMenu(lat, lon) }
         // 长按已有点位：删除 / 导航到这里
         binding.mapView.onPoiLongPress = { poi -> showPoiManageMenu(poi) }
+        // 点击点位/小区：高亮并显示"导航到此处"按钮
+        binding.mapView.onPoiClick = { poi ->
+            binding.mapView.setSelected(poi.id)
+            setPendingNav(poi.lat, poi.lon, poi.name, "导航到此处：${poi.name}")
+        }
+        binding.mapView.onPlaceClick = { lat, lon, name ->
+            setPendingNav(lat, lon, name, "导航到此处：${name}")
+        }
+        // 预加载地图小区名称标签
+        loadPlaceLabels()
         // 手机朝向传感器：驱动地图旋转 + 指南针
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
@@ -436,8 +484,8 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         }
         locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)?.let { onLocationChanged(it) }
         monitoring = true
-        binding.tvStatus.text = getString(R.string.gps_on)
-        if (!navigating) showToast("开始监控，接近点位将语音提醒")
+        // v1.12：默认开启监控，不再显示"GPS 已开启"状态条
+        if (!navigating) showToast("已开启监控，接近点位将语音提醒")
     }
 
     private fun stopMonitoring() {
@@ -501,13 +549,22 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
     private var previewLat = 0.0
     private var previewLon = 0.0
     private var previewName = ""
+    /** 待导航目标（搜索预览或点击地图地点） */
+    private var pendingLat = 0.0
+    private var pendingLon = 0.0
+    private var pendingName = ""
+
+    private fun setPendingNav(lat: Double, lon: Double, name: String, btnText: String) {
+        pendingLat = lat; pendingLon = lon; pendingName = name
+        binding.btnGoHere.visibility = android.view.View.VISIBLE
+        binding.btnGoHere.text = btnText
+    }
 
     private fun showPreview(lat: Double, lon: Double, name: String) {
         previewLat = lat; previewLon = lon; previewName = name
         binding.mapView.setPreview(lat, lon)
         binding.mapView.focusOn(lat, lon)
-        binding.btnGoHere.visibility = android.view.View.VISIBLE
-        binding.btnGoHere.text = "去这里：${displayName(name)}"
+        setPendingNav(lat, lon, name, "去这里：${displayName(name)}")
         binding.tvStatus.text = "已定位到「$name」，点「去这里」规划路线"
     }
 
@@ -543,28 +600,34 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             }
             return
         }
-        // 合肥小区/商铺：在线查询坐标后预览
+        // 合肥小区/商铺：联想命中则在线查询坐标后预览（精确）
         if (hfPois.any { it.contains(query, ignoreCase = true) }) {
             showToast("正在查询「$query」位置…")
             Thread {
-                val c = fetchNameCoordinate(query)
+                val c = fetchNameCoordinate(query, fuzzy = false)
                 handler.post {
                     if (c != null) {
                         showPreview(c.first, c.second, query)
                     } else {
-                        showToast("未找到「$query」的坐标，可尝试地图长按选点")
+                        onlineSearch(query)
                     }
                 }
             }.start()
             return
         }
-        showToast("未找到「$query」，请尝试点位名称或输入 纬度,经度")
+        // 兜底：模糊在线搜索（覆盖未收录的新小区/商铺）
+        onlineSearch(query)
     }
 
-    /** 通过 Overpass 按名称查询合肥地点坐标（纬度,经度），失败返回 null */
-    private fun fetchNameCoordinate(name: String): Pair<Double, Double>? {
+    /** 通过 Overpass 按名称查询合肥地点坐标（纬度,经度），失败返回 null。
+     *  fuzzy=true 时模糊匹配 node/way/relation（小区多为 way，精确匹配找不到时兜底） */
+    private fun fetchNameCoordinate(name: String, fuzzy: Boolean = false): Pair<Double, Double>? {
         return try {
-            val q = "[out:json][timeout:15];node[\"name\"=\"$name\"](31.55,116.85,32.05,117.70);out center 1;"
+            val esc = name.replace("\\", "\\\\").replace("\"", "\\\"").replace("[", "\\[").replace("]", "\\]")
+            val q = if (fuzzy)
+                "[out:json][timeout:20];(node[\"name\"~\"$esc\",i](31.55,116.85,32.05,117.70);way[\"name\"~\"$esc\",i](31.55,116.85,32.05,117.70);relation[\"name\"~\"$esc\",i](31.55,116.85,32.05,117.70););out center 15;"
+            else
+                "[out:json][timeout:15];node[\"name\"=\"$name\"](31.55,116.85,32.05,117.70);out center 1;"
             val url = URL("https://overpass-api.de/api/interpreter")
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
@@ -577,18 +640,85 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             conn.disconnect()
             val root = org.json.JSONObject(body)
             val els = root.optJSONArray("elements") ?: return null
+            // 模糊结果优先取名称完全包含关键词的
+            var best: Pair<Double, Double>? = null
+            var bestIsExact = false
             for (i in 0 until els.length()) {
                 val e = els.getJSONObject(i)
-                val lat = e.optDouble("lat", 0.0)
-                val lon = e.optDouble("lon", 0.0)
-                if (lat != 0.0 && lon != 0.0) return Pair(lat, lon)
+                var lat = e.optDouble("lat", 0.0)
+                var lon = e.optDouble("lon", 0.0)
                 val c = e.optJSONObject("center")
-                if (c != null) return Pair(c.getDouble("lat"), c.getDouble("lon"))
+                if ((lat == 0.0 || lon == 0.0) && c != null) {
+                    lat = c.getDouble("lat"); lon = c.getDouble("lon")
+                }
+                if (lat == 0.0 || lon == 0.0) continue
+                val exact = e.optJSONObject("tags")?.optString("name", "")?.contains(name, ignoreCase = true) == true
+                if (exact && !bestIsExact) { best = Pair(lat, lon); bestIsExact = true }
+                if (best == null) best = Pair(lat, lon)
             }
-            null
+            best
         } catch (_: Exception) {
             null
         }
+    }
+
+    /** 在线搜索兜底：联想库未收录的地点（如新小区），Overpass 模糊查询后预览 */
+    private fun onlineSearch(name: String) {
+        showToast("正在在线搜索「$name」…")
+        Thread {
+            val c = fetchNameCoordinate(name, fuzzy = true)
+            handler.post {
+                if (c != null) {
+                    showPreview(c.first, c.second, name)
+                } else {
+                    showToast("未找到「$name」，可尝试地图长按选点或换更短的关键词")
+                }
+            }
+        }.start()
+    }
+
+    /** 地图小区/商铺名称标签（带坐标，点击可导航） */
+    private var placeLabels: List<Triple<Double, Double, String>> = emptyList()
+
+    private fun loadPlaceLabels() {
+        Thread {
+            try {
+                val q = "[out:json][timeout:30];(node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](31.55,116.85,32.05,117.70);way[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](31.55,116.85,32.05,117.70););out center 500;"
+                val url = URL("https://overpass-api.de/api/interpreter")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 20000; conn.readTimeout = 20000
+                conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                conn.doOutput = true
+                conn.outputStream.use { it.write("data=${java.net.URLEncoder.encode(q, "UTF-8")}".toByteArray()) }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val root = org.json.JSONObject(body)
+                val els = root.getJSONArray("elements")
+                val seen = LinkedHashMap<String, Triple<Double, Double, String>>()
+                for (i in 0 until els.length()) {
+                    val e = els.getJSONObject(i)
+                    val t = e.optJSONObject("tags")
+                    val n = t?.optString("name", "")?.trim() ?: ""
+                    if (n.isEmpty() || n.length > 12) continue
+                    var lat = e.optDouble("lat", 0.0)
+                    var lon = e.optDouble("lon", 0.0)
+                    val c = e.optJSONObject("center")
+                    if ((lat == 0.0 || lon == 0.0) && c != null) {
+                        lat = c.getDouble("lat"); lon = c.getDouble("lon")
+                    }
+                    if (lat == 0.0 || lon == 0.0) continue
+                    seen.putIfAbsent(n, Triple(lat, lon, n))
+                }
+                if (seen.size > 30) {
+                    handler.post {
+                        placeLabels = seen.values.take(600)
+                        binding.mapView.setPlaceLabels(placeLabels)
+                    }
+                }
+            } catch (_: Exception) { }
+        }.start()
     }
 
     /** 规划到任意目的地，并高亮沿途抓拍点位 */
@@ -822,29 +952,18 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
 
     private fun showMenu() {
         val pop = PopupMenu(this, binding.btnMenu)
-        pop.menu.add(0, 5, 0, getString(if (allPoiEnabled) R.string.menu_disable_all else R.string.menu_enable_all))
-        pop.menu.add(0, 6, 0, getString(R.string.menu_type_filter))
-        pop.menu.add(0, 7, 0, getString(R.string.menu_import))
-        pop.menu.add(0, 8, 0, getString(R.string.menu_export))
-        pop.menu.add(0, 13, 0, if (navigating) "退出导航" else "开始导航")
         pop.menu.add(0, 9, 0, getString(R.string.menu_clear_history))
         pop.menu.add(0, 10, 0, getString(R.string.menu_clear_route))
+        pop.menu.add(0, 7, 0, getString(R.string.menu_import))
+        pop.menu.add(0, 8, 0, getString(R.string.menu_export))
         pop.setOnMenuItemClickListener { item -> onMenuItem(item) }
         pop.show()
     }
 
     private fun onMenuItem(item: MenuItem): Boolean {
         return when (item.itemId) {
-            5 -> {
-                allPoiEnabled = !allPoiEnabled
-                refreshPois()
-                showToast(if (allPoiEnabled) "全部点位提醒已开启" else "全部点位提醒已关闭")
-                true
-            }
-            6 -> { showTypeFilter(); true }
             7 -> { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")); true }
             8 -> { exportLauncher.launch("motonav_pois.json"); true }
-            13 -> { toggleNavigation(); true }
             9 -> { clearHistory(); true }
             10 -> { clearRoute(); true }
             else -> false

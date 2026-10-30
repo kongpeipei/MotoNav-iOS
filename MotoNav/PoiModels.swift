@@ -52,3 +52,11 @@ struct Poi: Codable, Identifiable, Equatable {
         CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
 }
+
+/// 地图小区/商铺名称标签（带坐标，点击可导航）
+struct PlaceLabel: Identifiable, Hashable {
+    let name: String
+    let lat: Double
+    let lon: Double
+    var id: String { name }
+}

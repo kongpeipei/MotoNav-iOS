@@ -20,6 +20,11 @@ struct ContentView: View {
     @State private var showTypePicker = false
     @State private var poiManagePoi: Poi?
     @State private var headingNeedleTick = 0
+    /// 待导航目标（搜索预览 / 点击地图地点）
+    @State private var goHereName: String?
+    @State private var goHereLat = 0.0
+    @State private var goHereLon = 0.0
+    @State private var goHereLabel = ""
 
     var body: some View {
         ZStack {
@@ -87,7 +92,16 @@ struct ContentView: View {
         } message: { p in
             Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
         }
-        .onAppear { model.authorizeAndStart() }
+        .onAppear { model.authorizeAndStart(); model.fetchPlaceLabels() }
+        // 预览点变化（含在线搜索兜底）→ 同步"去这里"按钮
+        .onChange(of: model.searchPreview) { p in
+            if let p = p {
+                goHereLabel = "去这里：\(displayName(model.searchPreviewName))"
+                goHereName = model.searchPreviewName
+                goHereLat = p.latitude
+                goHereLon = p.longitude
+            }
+        }
     }
 
     /// 地图全屏层（高德式：地图在上，搜索框下置）
@@ -103,12 +117,28 @@ struct ContentView: View {
             preview: model.searchPreview,
             gasStations: model.gasStations,
             gasTick: model.gasTick,
+            placeLabels: model.placeLabels,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
             },
             onPoiLongPress: { p in
                 poiManagePoi = p
+            },
+            onPoiSelect: { p in
+                model.selectedPoi = p
+                goHereLabel = "导航到此处：\(displayName(p.name))"
+                goHereName = p.name
+                goHereLat = p.lat
+                goHereLon = p.lon
+                model.clearPreview()
+            },
+            onPlaceSelect: { pl in
+                goHereLabel = "导航到此处：\(displayName(pl.name))"
+                goHereName = pl.name
+                goHereLat = pl.lat
+                goHereLon = pl.lon
+                model.clearPreview()
             }
         )
         .ignoresSafeArea()
@@ -116,7 +146,7 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 右上角 ⋯ 菜单（v1.11 清理：去掉监控/模拟/手动坐标/背景）
+    /// 右上角 ⋯ 菜单（v1.12 精简：只剩清历史/清路线/导入/导出）
     private var menuOverlay: some View {
         VStack {
             HStack {
@@ -130,33 +160,11 @@ struct ContentView: View {
                         .background(.black.opacity(0.5), in: Capsule())
                 }
                 Menu {
-                    Button(model.navigating ? "结束导航" : "开始导航") {
-                        model.toggleNavigation()
-                    }
-                    Divider()
-                    Button(model.allPoiEnabled ? "全部点位关闭" : "全部点位开启") {
-                        model.setAllPoiEnabled(!model.allPoiEnabled)
-                    }
-                    Menu("点位类型筛选") {
-                        ForEach(PoiType.allCases, id: \.self) { t in
-                            Button {
-                                let on = model.enabledTypes.contains(t)
-                                model.setTypeEnabled(t, enabled: !on)
-                            } label: {
-                                if model.enabledTypes.contains(t) {
-                                    Label(t.label, systemImage: "checkmark")
-                                } else {
-                                    Text(t.label)
-                                }
-                            }
-                        }
-                    }
+                    Button("清空历史搜索") { model.clearHistory() }
+                    Button("清空路线") { model.clearRoute() }
                     Divider()
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
-                    Divider()
-                    Button("清空历史搜索") { model.clearHistory() }
-                    Button("清空路线") { model.clearRoute() }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title2)
@@ -171,7 +179,7 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：状态 + 历史 + 去这里 + 搜索框/退出导航 + 定位按钮
+    /// 底部浮层：状态 + 历史 + 定位按钮 + 去这里 + 搜索框/退出导航
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -191,41 +199,46 @@ struct ContentView: View {
                         .padding(.horizontal)
                 }
                 .padding(.vertical, 6)
+                // 定位按钮（搜索框上侧偏右）
+                locateRow
             } else {
                 goHereBar
                 searchBar
-            }
-            // 右下角定位按钮（黑色圆球）
-            HStack {
-                Spacer()
-                Button {
-                    model.centerOnUser()
-                } label: {
-                    Image(systemName: "location.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white)
-                        .padding(11)
-                        .background(.black.opacity(0.85), in: Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
-                        .shadow(radius: 2)
-                }
-                .padding(.trailing, 16)
-                .padding(.bottom, 6)
+                locateRow
             }
         }
     }
 
-    /// 搜索预览"去这里"按钮（搜索后出现）
+    /// 右下角定位按钮：放在搜索框上侧偏右
+    private var locateRow: some View {
+        HStack {
+            Spacer()
+            Button {
+                model.centerOnUser()
+            } label: {
+                Image(systemName: "location.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white)
+                    .padding(11)
+                    .background(.black.opacity(0.85), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                    .shadow(radius: 2)
+            }
+            .padding(.trailing, 16)
+            .padding(.bottom, 6)
+        }
+    }
+
+    /// 搜索预览"去这里" / 点选地点"导航到此处"按钮（绿色）
     private var goHereBar: some View {
         Group {
-            if model.searchPreview != nil {
+            if let n = goHereName {
                 Button {
-                    if let p = model.searchPreview {
-                        model.planRoute(to: model.searchPreviewName, lat: p.latitude, lon: p.longitude)
-                        model.clearPreview()
-                    }
+                    model.planRoute(to: n, lat: goHereLat, lon: goHereLon)
+                    goHereName = nil
+                    model.clearPreview()
                 } label: {
-                    Text("去这里：\(displayName(model.searchPreviewName))")
+                    Text(goHereLabel)
                         .font(.headline)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -300,6 +313,9 @@ struct ContentView: View {
                         .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
                         .onChange(of: searchText) { newValue in
                             suggestions = model.searchSuggestions(newValue).map { displayName($0) }
+                            if !suggestions.contains(NAV_ITEM) {
+                                suggestions.append(NAV_ITEM)
+                            }
                             showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
                         }
                 }
@@ -346,14 +362,17 @@ struct ContentView: View {
                                 showSuggestions = false
                                 if s == NAV_ITEM {
                                     model.toggleNavigation()
+                                } else if s.hasPrefix("🔍") {
+                                    let q = extractOnlineQuery(s)
+                                    doSearch(q)
                                 } else {
                                     searchText = s
                                     doSearch()
                                 }
                             } label: {
                                 HStack {
-                                    Image(systemName: s == NAV_ITEM ? "arrow.right.circle" : "mappin.and.ellipse")
-                                        .foregroundStyle(s == NAV_ITEM ? Color.accentColor : .secondary)
+                                    Image(systemName: s == NAV_ITEM ? "arrow.right.circle" : s.hasPrefix("🔍") ? "magnifyingglass" : "mappin.and.ellipse")
+                                        .foregroundStyle(s == NAV_ITEM ? Color.accentColor : s.hasPrefix("🔍") ? .orange : .secondary)
                                     Text(s).foregroundStyle(.primary)
                                     Spacer()
                                 }
@@ -416,7 +435,15 @@ struct ContentView: View {
 
     private let NAV_ITEM = "▶ 开始导航"
 
-    /// v1.11：搜索后地图绿色高亮定位点，等待"去这里"规划路线
+    /// 从「🔍 在线搜索「XX」」提取 XX
+    private func extractOnlineQuery(_ s: String) -> String {
+        if let start = s.firstIndex(of: "「"), let end = s.lastIndex(of: "」"), start < end {
+            return String(s[s.index(after: start)..<end])
+        }
+        return s
+    }
+
+    /// v1.12：搜索后地图绿色高亮定位点，等待"去这里"规划路线；找不到走在线模糊搜索
     private func doSearch() {
         let q = searchText.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { model.status = "请输入目的地"; return }
@@ -426,6 +453,9 @@ struct ContentView: View {
            (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
             model.addHistory("坐标目的地 \(lat),\(lon)")
             model.setPreview("坐标目的地 \(lat),\(lon)", lat: lat, lon: lon)
+            goHereLabel = "去这里：坐标目的地"
+            goHereName = "坐标目的地"
+            goHereLat = lat; goHereLon = lon
             model.status = "已定位，点「去这里」规划路线"
             return
         }
@@ -435,6 +465,9 @@ struct ContentView: View {
                 let p = hits[0]
                 model.selectedPoi = p
                 model.setPreview(p.name, lat: p.lat, lon: p.lon)
+                goHereLabel = "去这里：\(displayName(p.name))"
+                goHereName = p.name
+                goHereLat = p.lat; goHereLon = p.lon
                 model.status = "已定位到「\(p.name)」，点「去这里」规划路线"
             } else {
                 model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
@@ -442,20 +475,24 @@ struct ContentView: View {
             }
             return
         }
-        // 合肥小区/商铺：在线查询坐标后预览
+        // 合肥小区/商铺：联想命中则在线查询坐标（精确）后预览
         if model.hfPois.contains(where: { $0.localizedCaseInsensitiveContains(q) }) {
             model.status = "正在查询「\(q)」位置…"
             Task {
-                if let c = await model.findHefeiCoordinate(q) {
+                if let c = await model.findHefeiCoordinate(q, fuzzy: false) {
                     model.setPreview(q, lat: c.latitude, lon: c.longitude)
+                    goHereLabel = "去这里：\(displayName(q))"
+                    goHereName = q
+                    goHereLat = c.latitude; goHereLon = c.longitude
                     model.status = "已定位到「\(q)」，点「去这里」规划路线"
                 } else {
-                    model.status = "未找到「\(q)」的坐标，可尝试地图长按选点"
+                    model.onlineSearch(q)
                 }
             }
             return
         }
-        model.status = "未找到「\(q)」，请尝试点位名称或输入 纬度,经度"
+        // 兜底：模糊在线搜索（覆盖未收录的新小区/商铺）
+        model.onlineSearch(q)
     }
 }
 

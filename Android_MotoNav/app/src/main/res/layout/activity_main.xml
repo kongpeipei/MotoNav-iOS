@@ -17,7 +17,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <!-- 右下角：缩放按钮 + 定位黑球 -->
+        <!-- 右下角：缩放按钮 -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -51,20 +51,6 @@
                 android:textColor="@android:color/white"
                 android:textSize="22sp"
                 android:contentDescription="缩小" />
-
-            <Button
-                android:id="@+id/btnLocate"
-                android:layout_width="46dp"
-                android:layout_height="46dp"
-                android:layout_marginTop="2dp"
-                android:background="@drawable/bg_locate"
-                android:minWidth="0dp"
-                android:minHeight="0dp"
-                android:padding="0dp"
-                android:text="◎"
-                android:textColor="@android:color/white"
-                android:textSize="18sp"
-                android:contentDescription="定位到当前位置" />
         </LinearLayout>
     </FrameLayout>
 
@@ -131,65 +117,92 @@
             android:background="@drawable/bg_exitnav"
             android:visibility="gone" />
 
-        <!-- 搜索框行 -->
+        <!-- 搜索框行（导航时被退出导航按钮替代） -->
         <LinearLayout
             android:id="@+id/searchRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp">
+            android:orientation="vertical">
 
-            <AutoCompleteTextView
-                android:id="@+id/etSearch"
-                android:layout_width="0dp"
+            <!-- 定位按钮：搜索框上侧偏右 -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="@string/hint_search"
-                android:inputType="text"
-                android:imeOptions="actionSearch"
-                android:singleLine="true"
-                android:textSize="14sp"
-                android:completionThreshold="1" />
+                android:orientation="horizontal"
+                android:gravity="end"
+                android:paddingEnd="10dp">
 
-            <Button
-                android:id="@+id/btnSearch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/btn_search"
-                android:minWidth="0dp"
-                android:minHeight="40dp" />
+                <Button
+                    android:id="@+id/btnLocate"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:background="@drawable/bg_locate"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    android:text="◎"
+                    android:textColor="@android:color/white"
+                    android:textSize="18sp"
+                    android:contentDescription="定位到当前位置" />
+            </LinearLayout>
 
-            <Button
-                android:id="@+id/btnGas"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="⛽"
-                android:textSize="16sp"
-                android:minWidth="0dp"
-                android:minHeight="40dp"
-                android:contentDescription="显示市区加油站" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingBottom="6dp">
 
-            <TextView
-                android:id="@+id/tvWeather"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textSize="13sp"
-                android:textColor="#FFFFFF"
-                android:padding="6dp"
-                android:visibility="gone" />
+                <AutoCompleteTextView
+                    android:id="@+id/etSearch"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/hint_search"
+                    android:inputType="text"
+                    android:imeOptions="actionSearch"
+                    android:singleLine="true"
+                    android:textSize="14sp"
+                    android:completionThreshold="1" />
 
-            <Button
-                android:id="@+id/btnMenu"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="⋯"
-                android:textSize="20sp"
-                android:minWidth="0dp"
-                android:minHeight="40dp" />
+                <Button
+                    android:id="@+id/btnSearch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/btn_search"
+                    android:minWidth="0dp"
+                    android:minHeight="40dp" />
+
+                <Button
+                    android:id="@+id/btnGas"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⛽"
+                    android:textSize="16sp"
+                    android:minWidth="0dp"
+                    android:minHeight="40dp"
+                    android:contentDescription="显示市区加油站" />
+
+                <TextView
+                    android:id="@+id/tvWeather"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="13sp"
+                    android:textColor="#FFFFFF"
+                    android:padding="6dp"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/btnMenu"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⋯"
+                    android:textSize="20sp"
+                    android:minWidth="0dp"
+                    android:minHeight="40dp" />
+            </LinearLayout>
         </LinearLayout>
     </LinearLayout>
 

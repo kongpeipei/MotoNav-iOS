@@ -20,8 +20,12 @@ struct MapViewRepresentable: UIViewRepresentable {
     let gasStations: [CLLocationCoordinate2D]
     /// 加油站全览请求计数（+1 触发缩放显示全部加油站 + 当前位置）
     let gasTick: Int
+    /// 地图小区/商铺名称标签
+    let placeLabels: [PlaceLabel]
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
     var onPoiLongPress: ((Poi) -> Void)?
+    var onPoiSelect: ((Poi) -> Void)?
+    var onPlaceSelect: ((PlaceLabel) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -38,6 +42,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
+        context.coordinator.onPoiSelect = onPoiSelect
+        context.coordinator.onPlaceSelect = onPlaceSelect
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 蓝点方向指示 + 回中）
         if locateTick > 0 {
             context.coordinator.setRegionProgrammatically {
@@ -132,6 +138,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(GasAnnotation(id: key, coordinate: c))
             }
         }
+        // 小区/商铺名称标签
+        let wantPlaces = Set(placeLabels.map(\.id))
+        map.annotations
+            .compactMap { $0 as? PlaceAnnotation }
+            .filter { !wantPlaces.contains($0.place.id) }
+            .forEach { map.removeAnnotation($0) }
+        for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
+            map.addAnnotation(PlaceAnnotation(place: pl))
+        }
         map.removeOverlays(map.overlays)
         if route.count > 1 {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
@@ -143,6 +158,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var onPoiLongPress: ((Poi) -> Void)?
+        var onPoiSelect: ((Poi) -> Void)?
+        var onPlaceSelect: ((PlaceLabel) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 程序主动设置区域（避免被标记为用户移动）
@@ -182,6 +199,17 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
 
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            // 点击地点：高亮显示名称并回调（取消系统选中态，避免遮挡）
+            if let pa = view.annotation as? PoiAnnotation {
+                mapView.deselectAnnotation(view.annotation, animated: false)
+                onPoiSelect?(pa.poi)
+            } else if let pla = view.annotation as? PlaceAnnotation {
+                mapView.deselectAnnotation(view.annotation, animated: false)
+                onPlaceSelect?(pla.place)
+            }
+        }
+
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             if let re = annotation as? RouteEndAnnotation {
                 let id = "routeEnd"
@@ -208,6 +236,17 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.markerTintColor = .systemOrange
                 v.glyphText = "油"
                 v.titleVisibility = .hidden
+                return v
+            }
+            if let pla = annotation as? PlaceAnnotation {
+                let id = "place"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: pla, reuseIdentifier: id)
+                v.markerTintColor = .systemGray
+                v.glyphText = nil
+                v.titleVisibility = .visible // 直接显示小区/商铺名称
+                v.canShowCallout = false
+                v.displayPriority = .defaultLow
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
@@ -284,6 +323,19 @@ final class GasAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     var title: String? { "加油站" }
+}
+
+/// 小区/商铺名称标签标注
+final class PlaceAnnotation: NSObject, MKAnnotation {
+    let place: PlaceLabel
+    init(place: PlaceLabel) {
+        self.place = place
+        super.init()
+    }
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: place.lat, longitude: place.lon)
+    }
+    var title: String? { place.name }
 }
 
 extension MKPolyline {

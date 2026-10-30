@@ -42,6 +42,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var gasStations: [CLLocationCoordinate2D] = []
     /// 加油站全览请求计数
     @Published var gasTick = 0
+    /// 地图小区/商铺名称标签（带坐标）
+    @Published var placeLabels: [PlaceLabel] = []
 
     /// 合肥小区/商铺联想库（内置 + 在线刷新）
     @Published var hfPois: [String] = []
@@ -128,29 +130,101 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return names.count > 20 ? Array(names) : nil
     }
 
-    /// 按名称在线查询合肥地点坐标（用于联想命中后的规划）
-    func findHefeiCoordinate(_ name: String) async -> CLLocationCoordinate2D? {
-        let q = "[out:json][timeout:15];node[\"name\"=\"\(name)\"](31.55,116.85,32.05,117.70);out center 1;"
+    /// 按名称在线查询合肥地点坐标（用于联想命中后的规划 / 模糊兜底搜索）
+    /// fuzzy=true 时模糊匹配 node/way/relation（小区多为 way，精确匹配找不到时兜底）
+    func findHefeiCoordinate(_ name: String, fuzzy: Bool = false) async -> CLLocationCoordinate2D? {
+        let esc = name
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let q: String
+        if fuzzy {
+            q = "[out:json][timeout:20];(node[\"name\"~\"\(esc)\",i](31.55,116.85,32.05,117.70);way[\"name\"~\"\(esc)\",i](31.55,116.85,32.05,117.70);relation[\"name\"~\"\(esc)\",i](31.55,116.85,32.05,117.70););out center 15;"
+        } else {
+            q = "[out:json][timeout:15];node[\"name\"=\"\(esc)\"](31.55,116.85,32.05,117.70);out center 1;"
+        }
         guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 15
+        req.timeoutInterval = fuzzy ? 20 : 15
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
         req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
         guard let (data, _) = try? await URLSession.shared.data(for: req),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let els = root["elements"] as? [[String: Any]] else { return nil }
+        var best: CLLocationCoordinate2D?
+        var bestIsExact = false
         for e in els {
-            if let lat = e["lat"] as? Double, let lon = e["lon"] as? Double, lat != 0, lon != 0 {
-                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            var lat = e["lat"] as? Double ?? 0
+            var lon = e["lon"] as? Double ?? 0
+            if (lat == 0 || lon == 0), let c = e["center"] as? [String: Any] {
+                lat = c["lat"] as? Double ?? 0
+                lon = c["lon"] as? Double ?? 0
             }
-            if let c = e["center"] as? [String: Any],
-               let lat = c["lat"] as? Double, let lon = c["lon"] as? Double {
-                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            guard lat != 0, lon != 0 else { continue }
+            let exact: Bool
+            if let n = (e["tags"] as? [String: Any])?["name"] as? String {
+                exact = n.localizedCaseInsensitiveContains(name)
+            } else {
+                exact = false
+            }
+            if exact && !bestIsExact {
+                best = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                bestIsExact = true
+            }
+            if best == nil {
+                best = CLLocationCoordinate2D(latitude: lat, longitude: lon)
             }
         }
-        return nil
+        return best
+    }
+
+    /// 在线搜索兜底：联想库未收录的地点（如新小区），模糊查询后预览
+    func onlineSearch(_ name: String) {
+        status = "正在在线搜索「\(name)」…"
+        Task {
+            if let c = await findHefeiCoordinate(name, fuzzy: true) {
+                setPreview(name, lat: c.latitude, lon: c.longitude)
+                status = "已定位到「\(name)」，点「去这里」规划路线"
+            } else {
+                status = "未找到「\(name)」，可尝试地图长按选点或换更短的关键词"
+            }
+        }
+    }
+
+    /// 拉取地图小区/商铺名称标签（带坐标）
+    func fetchPlaceLabels() {
+        Task {
+            let q = "[out:json][timeout:30];(node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](31.55,116.85,32.05,117.70);way[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](31.55,116.85,32.05,117.70););out center 500;"
+            guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 30
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+            req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
+            guard let (data, _) = try? await URLSession.shared.data(for: req),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let els = root["elements"] as? [[String: Any]] else { return }
+            var list: [PlaceLabel] = []
+            var seen = Set<String>()
+            for e in els {
+                guard let n = ((e["tags"] as? [String: Any])?["name"] as? String)?
+                    .trimmingCharacters(in: .whitespaces), !n.isEmpty, n.count <= 12 else { continue }
+                var lat = e["lat"] as? Double ?? 0
+                var lon = e["lon"] as? Double ?? 0
+                if (lat == 0 || lon == 0), let c = e["center"] as? [String: Any] {
+                    lat = c["lat"] as? Double ?? 0
+                    lon = c["lon"] as? Double ?? 0
+                }
+                guard lat != 0, lon != 0, !seen.contains(n) else { continue }
+                seen.insert(n)
+                list.append(PlaceLabel(name: n, lat: lat, lon: lon))
+            }
+            if list.count > 30 {
+                placeLabels = Array(list.prefix(600))
+            }
+        }
     }
 
     // MARK: - 历史搜索
@@ -278,7 +352,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             lm.startUpdatingHeading()
         }
         monitoring = true
-        status = "GPS 已开启"
+        // v1.12：默认开启监控，不再提示"GPS 已开启"
     }
 
     func stopMonitoring() {
@@ -481,7 +555,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return pois.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
-    /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺（最多 10 条）
+    /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺（最多 10 条）；
+    /// 无匹配时给出"在线搜索「关键词」"入口
     func searchSuggestions(_ query: String) -> [String] {
         var pool = Set<String>()
         for p in pois { pool.insert(p.name) }
@@ -489,7 +564,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         for hf in hfPois { pool.insert(hf) }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { return Array(pool).prefix(10).map { $0 } }
-        return pool.filter { $0.localizedCaseInsensitiveContains(q) }.prefix(10).map { $0 }
+        var matched = pool.filter { $0.localizedCaseInsensitiveContains(q) }.prefix(10).map { $0 }
+        if matched.isEmpty {
+            matched = ["🔍 在线搜索「\(q)」"]
+        }
+        return matched
     }
 
     /// 右下角定位按钮：地图回中
