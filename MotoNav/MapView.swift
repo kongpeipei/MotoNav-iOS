@@ -488,8 +488,8 @@ extension MKPolyline {
 }
 
 extension MapViewRepresentable {
-    /// 当前位置图标：一体蓝色实心大头箭头（圆头+尖头整体填充，固定朝屏幕上方；
-    /// 地图随手机朝向旋转后，屏幕上方即手机朝向，箭头指向即手机朝向）
+    /// 当前位置图标：一体蓝色实心大头箭头（圆头+尖头整体填充，蓝渐变+中心白点增强辨识；
+    /// 固定朝屏幕上方；地图随手机朝向旋转后，屏幕上方即手机朝向，箭头指向即手机朝向）
     static func makeUserIcon() -> UIImage {
         let size: CGFloat = 44
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
@@ -501,14 +501,30 @@ extension MapViewRepresentable {
             let arrow = UIBezierPath()
             arrow.move(to: CGPoint(x: cx, y: cy - 22))                       // 尖端
             arrow.addQuadCurve(to: CGPoint(x: cx - 11, y: cy - 4),
-                               controlPoint: CGPoint(x: cx - 9.5, y: cy - 13)) // 左侧
+                               controlPoint: CGPoint(x: cx - 10.5, y: cy - 13)) // 左侧
             arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 6),
                          radius: 10, startAngle: .pi, endAngle: 0, clockwise: true) // 尾部圆头
             arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 22),
-                               controlPoint: CGPoint(x: cx + 9.5, y: cy - 13)) // 右侧
+                               controlPoint: CGPoint(x: cx + 10.5, y: cy - 13)) // 右侧
             arrow.close()
-            c.setFillColor(UIColor(red: 0.20, green: 0.43, blue: 1.0, alpha: 1.0).cgColor)
-            arrow.fill()
+            // 蓝渐变填充（顶部浅 → 底部深，立体感）
+            c.saveGState()
+            arrow.addClip()
+            let colors = [
+                UIColor(red: 0.36, green: 0.58, blue: 1.0, alpha: 1.0).cgColor,
+                UIColor(red: 0.10, green: 0.34, blue: 0.94, alpha: 1.0).cgColor
+            ] as CFArray
+            if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                     colors: colors, locations: [0.0, 1.0]) {
+                c.drawLinearGradient(grad,
+                                     start: CGPoint(x: cx, y: cy - 22),
+                                     end: CGPoint(x: cx, y: cy + 16),
+                                     options: [])
+            }
+            c.restoreGState()
+            // 中心白色小圆点：精确位置锚点
+            c.setFillColor(UIColor.white.cgColor)
+            c.fillEllipse(in: CGRect(x: cx - 3, y: cy - 3, width: 6, height: 6))
         }
     }
 }

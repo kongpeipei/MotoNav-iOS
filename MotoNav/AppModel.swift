@@ -75,6 +75,77 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let historyLimit = 10
     private let hfKey = "hf_pois"
 
+    // MARK: - 本地高频地标词典（离线可用：殡仪馆/车站/机场/医院/高校/公园/商圈）
+    struct SearchLandmark {
+        let name: String
+        let aliases: [String]
+        let lat: Double
+        let lon: Double
+        func matches(_ q: String) -> Bool {
+            let query = q.trimmingCharacters(in: .whitespaces)
+            guard !query.isEmpty else { return false }
+            if name.localizedCaseInsensitiveContains(query) || query.localizedCaseInsensitiveContains(name) { return true }
+            return aliases.contains { a in
+                query.localizedCaseInsensitiveContains(a) || a.localizedCaseInsensitiveContains(query)
+            }
+        }
+    }
+
+    let searchLandmarks: [SearchLandmark] = [
+        SearchLandmark(name: "合肥市殡仪馆", aliases: ["殡仪馆", "合肥殡仪馆"], lat: 31.86826, lon: 117.24841),
+        SearchLandmark(name: "合肥南站", aliases: ["高铁南站", "合肥高铁南站"], lat: 31.797955, lon: 117.290331),
+        SearchLandmark(name: "合肥站", aliases: ["合肥火车站", "火车站"], lat: 31.8831, lon: 117.3092),
+        SearchLandmark(name: "合肥新桥国际机场", aliases: ["新桥机场", "合肥机场", "机场"], lat: 31.9863, lon: 116.9765),
+        SearchLandmark(name: "合肥汽车客运总站", aliases: ["客运总站", "汽车客运总站"], lat: 31.8796, lon: 117.3103),
+        SearchLandmark(name: "合肥汽车南站", aliases: ["汽车南站"], lat: 31.8010, lon: 117.2860),
+        SearchLandmark(name: "合肥汽车西站", aliases: ["汽车西站"], lat: 31.8260, lon: 117.1820),
+        SearchLandmark(name: "安徽省立医院", aliases: ["省立医院", "中科大附一院"], lat: 31.8582, lon: 117.2603),
+        SearchLandmark(name: "安徽医科大学第一附属医院", aliases: ["安医大一附院", "安医附院"], lat: 31.8515, lon: 117.2558),
+        SearchLandmark(name: "安徽医科大学第二附属医院", aliases: ["安医大二附院", "安医二附院"], lat: 31.8224, lon: 117.2120),
+        SearchLandmark(name: "合肥市第一人民医院", aliases: ["市一院", "合肥市一院"], lat: 31.8731, lon: 117.2720),
+        SearchLandmark(name: "合肥市第二人民医院", aliases: ["市二院", "合肥市二院"], lat: 31.8712, lon: 117.3255),
+        SearchLandmark(name: "合肥市第三人民医院", aliases: ["市三院"], lat: 31.8558, lon: 117.2640),
+        SearchLandmark(name: "合肥市第四人民医院", aliases: ["市四院", "合肥四院"], lat: 31.8552, lon: 117.2450),
+        SearchLandmark(name: "合肥市口腔医院", aliases: ["口腔医院"], lat: 31.8668, lon: 117.2795),
+        SearchLandmark(name: "安徽省妇幼保健院", aliases: ["妇幼保健院", "妇幼"], lat: 31.8625, lon: 117.2730),
+        SearchLandmark(name: "安徽中医药大学第一附属医院", aliases: ["中医附院", "安徽省中医院"], lat: 31.8665, lon: 117.2700),
+        SearchLandmark(name: "中国科学技术大学", aliases: ["中科大", "中国科大"], lat: 31.8430, lon: 117.2650),
+        SearchLandmark(name: "合肥工业大学", aliases: ["合工大", "合肥工大"], lat: 31.8465, lon: 117.2925),
+        SearchLandmark(name: "安徽大学", aliases: ["安大", "安徽大学龙河校区"], lat: 31.8405, lon: 117.2770),
+        SearchLandmark(name: "安徽农业大学", aliases: ["安农大"], lat: 31.8700, lon: 117.2560),
+        SearchLandmark(name: "包公园", aliases: ["包公祠"], lat: 31.8578, lon: 117.2930),
+        SearchLandmark(name: "逍遥津公园", aliases: ["逍遥津"], lat: 31.8722, lon: 117.2828),
+        SearchLandmark(name: "合肥植物园", aliases: ["植物园"], lat: 31.8382, lon: 117.1930),
+        SearchLandmark(name: "大蜀山", aliases: ["大蜀山森林公园"], lat: 31.8345, lon: 117.1880),
+        SearchLandmark(name: "天鹅湖公园", aliases: ["天鹅湖"], lat: 31.8085, lon: 117.2230),
+        SearchLandmark(name: "罍街", aliases: ["罍街夜市"], lat: 31.8395, lon: 117.2820),
+        SearchLandmark(name: "之心城", aliases: ["三里庵之心城"], lat: 31.8580, lon: 117.2508),
+        SearchLandmark(name: "合肥万象城", aliases: ["万象城"], lat: 31.8068, lon: 117.2400),
+        SearchLandmark(name: "淮河路步行街", aliases: ["步行街", "淮河路"], lat: 31.8725, lon: 117.2780),
+        SearchLandmark(name: "合肥城隍庙", aliases: ["城隍庙"], lat: 31.8685, lon: 117.2685),
+        SearchLandmark(name: "合肥野生动物园", aliases: ["野生动物园", "合肥动物园"], lat: 31.8268, lon: 117.1758),
+        SearchLandmark(name: "合肥海洋世界", aliases: ["海洋世界"], lat: 31.8030, lon: 117.2200),
+        SearchLandmark(name: "合肥融创乐园", aliases: ["融创乐园", "万达乐园"], lat: 31.7915, lon: 117.2370),
+        SearchLandmark(name: "安徽博物院", aliases: ["省博物馆", "安徽省博物馆"], lat: 31.8150, lon: 117.2215),
+        SearchLandmark(name: "合肥体育中心", aliases: ["奥体中心"], lat: 31.8000, lon: 117.2260),
+        SearchLandmark(name: "合肥滨湖国际会展中心", aliases: ["会展中心", "滨湖会展"], lat: 31.7610, lon: 117.2770),
+        SearchLandmark(name: "渡江战役纪念馆", aliases: ["渡江纪念馆"], lat: 31.7625, lon: 117.2990),
+        SearchLandmark(name: "骆岗公园", aliases: ["合肥园博园", "骆岗中央公园"], lat: 31.7770, lon: 117.2790),
+        SearchLandmark(name: "三河古镇", aliases: ["三河"], lat: 31.5350, lon: 117.2460),
+        SearchLandmark(name: "巢湖中庙", aliases: ["中庙", "巢湖中庙景区"], lat: 31.5650, lon: 117.8580),
+        SearchLandmark(name: "合肥市政府", aliases: ["政务中心", "合肥政务中心"], lat: 31.8168, lon: 117.2270),
+        SearchLandmark(name: "四牌楼", aliases: ["四牌楼商圈"], lat: 31.8680, lon: 117.2810),
+        SearchLandmark(name: "肥东县", aliases: ["肥东"], lat: 31.8900, lon: 117.4710),
+        SearchLandmark(name: "肥西县", aliases: ["肥西"], lat: 31.7060, lon: 117.1660),
+        SearchLandmark(name: "长丰县", aliases: ["长丰"], lat: 31.6930, lon: 117.1670)
+    ]
+
+    func matchLandmark(_ q: String) -> SearchLandmark? {
+        let query = q.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return nil }
+        return searchLandmarks.first { $0.matches(query) }
+    }
+
     private override init() {
         super.init()
         lm.delegate = self
@@ -205,6 +276,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 在线搜索兜底：联想库未收录的地点（如新小区），模糊查询后预览；
     /// 多级降级：全名 → 去前缀（如"金辉锦绣云庭"→"锦绣云庭"），仍失败引导复制位置链接
     func onlineSearch(_ name: String) {
+        // 本地地标词典优先（离线可用，网络不可达也能定位）
+        if let lm = matchLandmark(name) {
+            setPreview(lm.name, lat: lm.lat, lon: lm.lon)
+            status = "已定位「\(lm.name)」（坐标为估算，可长按点位拖动校准），点「去这里」规划路线"
+            return
+        }
         status = "正在在线搜索「\(name)」…"
         Task {
             var variants = [name]
@@ -750,13 +827,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return pois.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
-    /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺（最多 10 条）；
+    /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺 + 地标词典（最多 10 条）；
     /// 无匹配时给出"在线搜索「关键词」"入口
     func searchSuggestions(_ query: String) -> [String] {
         var pool = Set<String>()
         for p in pois { pool.insert(p.name) }
         for h in searchHistory { pool.insert(h) }
         for hf in hfPois { pool.insert(hf) }
+        for lm in searchLandmarks where lm.matches(query) { pool.insert(lm.name) }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { return Array(pool).prefix(10).map { $0 } }
         var matched = pool.filter { $0.localizedCaseInsensitiveContains(q) }.prefix(10).map { $0 }

@@ -496,9 +496,6 @@ struct ContentView: View {
                 .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
                 .onChange(of: searchText) { newValue in
                     suggestions = model.searchSuggestions(newValue).map { displayName($0) }
-                    if !suggestions.contains(NAV_ITEM) {
-                        suggestions.append(NAV_ITEM)
-                    }
                     showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
                 }
             // 一键清除输入内容（有内容时显示）
@@ -569,9 +566,7 @@ struct ContentView: View {
             Button {
                 searchFocused = false
                 showSuggestions = false
-                if s == NAV_ITEM {
-                    model.toggleNavigation()
-                } else if s.hasPrefix("🔍") {
+                if s.hasPrefix("🔍") {
                     let q = extractOnlineQuery(s)
                     doSearch(q)
                 } else {
@@ -600,13 +595,11 @@ struct ContentView: View {
     }
 
     private func suggestionIcon(_ s: String) -> String {
-        if s == NAV_ITEM { return "arrow.right.circle" }
         if s.hasPrefix("🔍") { return "magnifyingglass" }
         return "mappin.and.ellipse"
     }
 
     private func suggestionIconColor(_ s: String) -> Color {
-        if s == NAV_ITEM { return .accentColor }
         if s.hasPrefix("🔍") { return .orange }
         return .secondary
     }
@@ -648,8 +641,6 @@ struct ContentView: View {
         }
         return name.replacingOccurrences(of: #"(交口|路口|交叉口)$"#, with: "", options: .regularExpression)
     }
-
-    private let NAV_ITEM = "▶ 开始导航"
 
     /// 从「🔍 在线搜索「XX」」提取 XX
     private func extractOnlineQuery(_ s: String) -> String {
@@ -697,6 +688,18 @@ struct ContentView: View {
                 model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
                 model.selectedPoi = nil
             }
+            return
+        }
+        // 本地地标词典命中：离线直接出结果（殡仪馆/车站/机场/医院/公园等）
+        if let lm = model.matchLandmark(q) {
+            showSuggestions = false
+            dismissKeyboard()
+            model.addHistory(lm.name)
+            model.setPreview(lm.name, lat: lm.lat, lon: lm.lon)
+            goHereLabel = "去这里：\(displayName(lm.name))"
+            goHereName = lm.name
+            goHereLat = lm.lat; goHereLon = lm.lon
+            model.status = "已定位「\(lm.name)」（坐标为估算），点「去这里」规划路线"
             return
         }
         // 合肥小区/商铺：联想命中则在线查询坐标（精确）后预览
