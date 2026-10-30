@@ -622,31 +622,7 @@ struct ContentView: View {
                                 model.selectedRouteIdx = idx
                                 model.applyRouteChoice(c)
                             } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("\(c.durationS / 60) 分钟")
-                                        .font(.system(size: 17, weight: .heavy))
-                                        .foregroundStyle(.primary)
-                                    Text("\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里 · 抓拍\(c.poiCount)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                    Text(c.label)
-                                        .font(.caption2.bold())
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 8)
-                                .background(model.selectedRouteIdx == idx
-                                    ? Color(red: 0.16, green: 0.38, blue: 1.0).opacity(0.15)
-                                    : .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(
-                                    model.selectedRouteIdx == idx
-                                        ? Color(red: 0.16, green: 0.38, blue: 1.0)
-                                        : .white.opacity(0.3),
-                                    lineWidth: model.selectedRouteIdx == idx ? 2 : 0.8))
+                                routeChoiceCard(c, selected: model.selectedRouteIdx == idx)
                             }
                             .buttonStyle(.plain)
                         }
@@ -656,6 +632,32 @@ struct ContentView: View {
                 .padding(.bottom, 4)
             }
         }
+    }
+
+    /// 单张高德式方案卡：大分钟 + 里程·抓拍 + 标签，选中蓝框高亮
+    private func routeChoiceCard(_ c: AppModel.RouteChoice, selected: Bool) -> some View {
+        let sel = selected
+        return VStack(alignment: .leading, spacing: 3) {
+            Text("\(c.durationS / 60) 分钟")
+                .font(.system(size: 17, weight: .heavy))
+                .foregroundStyle(.primary)
+            Text("\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里 · 抓拍\(c.poiCount)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(c.label)
+                .font(.caption2.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(sel ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0).opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(
+            sel ? Color(red: 0.16, green: 0.38, blue: 1.0) : .white.opacity(0.3),
+            lineWidth: sel ? 2 : 0.8))
     }
 
     /// 常用地点快捷按钮（家/公司并排，未设置时提示长按地图设置）
