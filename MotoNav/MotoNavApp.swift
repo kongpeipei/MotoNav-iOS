@@ -8,6 +8,9 @@ struct MotoNavApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(AppModel.shared)
+                .onOpenURL { url in
+                    AppModel.shared.handleRouteURL(url)
+                }
         }
     }
 }

@@ -93,7 +93,11 @@ struct ContentView: View {
         } message: { p in
             Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
         }
-        .onAppear { model.authorizeAndStart(); model.fetchPlaceLabels() }
+        .onAppear {
+            model.authorizeAndStart()
+            model.fetchPlaceLabels()
+            model.checkClipboard()
+        }
         // 预览点变化（含在线搜索兜底）→ 同步"去这里"按钮
         .onChange(of: model.searchPreview) { p in
             if let p = p {
@@ -153,26 +157,26 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 右上角 ⋯ 菜单（v1.13：天气+明日天气，⋯ 与加油站）
+    /// 右上角 ⋯ 菜单（v1.14：液态玻璃 + 天气/明日天气）
     private var menuOverlay: some View {
         VStack {
             HStack {
                 Spacer()
-                // 天气 + 明日天气（⋯ 左侧，纵向排列）
+                // 天气 + 明日天气（⋯ 左侧，纵向排列，液态玻璃）
                 VStack(alignment: .trailing, spacing: 4) {
                     if let w = model.weatherText {
                         Text(w)
                             .font(.subheadline)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(8)
-                            .background(.black.opacity(0.5), in: Capsule())
+                            .background(.ultraThinMaterial, in: Capsule())
                     }
                     if let t = model.tomorrowText {
                         Text(t)
                             .font(.caption)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(6)
-                            .background(.black.opacity(0.5), in: Capsule())
+                            .background(.ultraThinMaterial, in: Capsule())
                     }
                 }
                 Menu {
@@ -184,10 +188,11 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title2)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                 }
                 .padding(8)
-                .background(.black.opacity(0.5), in: Circle())
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 .padding(.trailing, 12)
                 .padding(.top, 6)
             }
@@ -195,7 +200,7 @@ struct ContentView: View {
         }
     }
 
-    /// 加油站按钮：位于 ⋯ 按钮下方（v1.13 从搜索框移到这里）
+    /// 加油站按钮：位于 ⋯ 按钮下方（液态玻璃）
     private var gasOverlay: some View {
         VStack {
             HStack {
@@ -205,9 +210,9 @@ struct ContentView: View {
                 } label: {
                     Text("⛽")
                         .font(.title3)
-                        .foregroundStyle(.white)
                         .padding(8)
-                        .background(.black.opacity(0.5), in: Circle())
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 }
                 .padding(.trailing, 12)
                 .padding(.top, 58)
@@ -216,13 +221,14 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：状态 + 类别结果 + 历史 + 定位按钮 + 去这里 + 搜索框/退出导航
+    /// 底部浮层：状态 + 类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
             statusBar
             categoryBar
             historyBar
+            locateRow
             if model.navigating {
                 // 导航中：搜索框替换为退出导航按钮
                 Button {
@@ -237,12 +243,9 @@ struct ContentView: View {
                         .padding(.horizontal)
                 }
                 .padding(.vertical, 6)
-                // 定位按钮（搜索框上侧偏右）
-                locateRow
             } else {
                 goHereBar
                 searchBar
-                locateRow
             }
         }
     }
@@ -280,23 +283,25 @@ struct ContentView: View {
         }
     }
 
-    /// 右下角定位按钮：放在搜索框上侧偏右
+    /// 当前定位按钮：高德同款（蓝色圆底白箭头），位于搜索框右上方
     private var locateRow: some View {
         HStack {
             Spacer()
             Button {
                 model.centerOnUser()
             } label: {
-                Image(systemName: "location.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                    .padding(11)
-                    .background(.black.opacity(0.85), in: Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
-                    .shadow(radius: 2)
+                ZStack {
+                    Circle().fill(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    Circle().strokeBorder(.white.opacity(0.85), lineWidth: 2)
+                    Image(systemName: "location.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 44, height: 44)
+                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
             }
             .padding(.trailing, 16)
-            .padding(.bottom, 6)
+            .padding(.vertical, 4)
         }
     }
 
@@ -322,20 +327,20 @@ struct ContentView: View {
         }
     }
 
-    /// 左上角指南针：指针指示正北
+    /// 左上角指南针：指针指示正北（液态玻璃）
     private var compassOverlay: some View {
         VStack {
             HStack {
                 ZStack {
-                    Circle().fill(.black.opacity(0.5))
-                    Circle().strokeBorder(.white.opacity(0.75), lineWidth: 2)
+                    Circle().fill(.ultraThinMaterial)
+                    Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
                     Image(systemName: "location.north.fill")
                         .font(.title3)
                         .foregroundStyle(.red)
                         .rotationEffect(.degrees(model.heading))
                     Text("N")
                         .font(.caption2.bold())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.secondary)
                         .offset(y: -22)
                 }
                 .frame(width: 54, height: 54)
@@ -381,11 +386,12 @@ struct ContentView: View {
         .background(.black.opacity(0.18))
     }
 
-    /// 搜索输入行：输入框（含一键清除 x）+ 搜索按钮
+    /// 搜索输入行：输入框（1.5cm 宽、液态玻璃、圆角、含一键清除 x）+ 搜索按钮
     private var searchInputRow: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: "magnifyingglass")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 TextField("搜索目的地", text: $searchText)
                     .font(.subheadline)
@@ -407,15 +413,17 @@ struct ContentView: View {
                         showSuggestions = false
                     } label: {
                         Image(systemName: "xmark.circle.fill")
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 12)
+            .frame(width: 90) // 1.5cm 宽
+            .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(.white, in: Capsule())
-            .overlay(Capsule().stroke(.quaternary))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 0.8))
 
             Button {
                 showSuggestions = false
@@ -427,7 +435,7 @@ struct ContentView: View {
                     .foregroundStyle(.white)
             }
             .padding(6)
-            .background(.black.opacity(0.55), in: Circle())
+            .background(.ultraThinMaterial, in: Circle())
         }
         .padding(.horizontal)
         .padding(.vertical, 6)

@@ -181,17 +181,76 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return best
     }
 
-    /// 在线搜索兜底：联想库未收录的地点（如新小区），模糊查询后预览
+    /// 在线搜索兜底：联想库未收录的地点（如新小区），模糊查询后预览；
+    /// 多级降级：全名 → 去前缀（如"金辉锦绣云庭"→"锦绣云庭"），仍失败引导复制位置链接
     func onlineSearch(_ name: String) {
         status = "正在在线搜索「\(name)」…"
         Task {
-            if let c = await findHefeiCoordinate(name, fuzzy: true) {
+            var variants = [name]
+            if name.count > 4 {
+                variants.append(String(name.dropFirst(2)))       // 去开发商前缀
+            }
+            if name.count > 6 {
+                variants.append(String(name.suffix(2)))          // 保留核心尾词
+            }
+            var found: CLLocationCoordinate2D?
+            for v in variants {
+                if let c = await findHefeiCoordinate(v, fuzzy: true) {
+                    found = c
+                    break
+                }
+            }
+            if let c = found {
                 setPreview(name, lat: c.latitude, lon: c.longitude)
-                status = "已定位到「\(name)」，点「去这里」规划路线"
+                status = "已定位到「\(name)」（坐标为估算，请实地校准），点「去这里」规划路线"
             } else {
-                status = "未找到「\(name)」，可尝试地图长按选点或换更短的关键词"
+                status = "「\(name)」暂未收录，请从微信/高德复制位置（或 纬度,经度）粘贴到搜索框"
             }
         }
+    }
+
+    // MARK: - 外部位置识别（微信/高德复制、深链）
+
+    /// 解析外部位置文本：腾讯/高德 coord= 链接、geo:、裸经纬度
+    func parseExternalLocation(_ text: String) -> CLLocationCoordinate2D? {
+        let pattern = #"([-+]?\d{1,2}\.\d{3,})\s*[,，]\s*([-+]?\d{1,3}\.\d{3,})"#
+        if let r = text.range(of: pattern, options: .regularExpression) {
+            let s = String(text[r])
+            let p = s.split(whereSeparator: { $0 == "," || $0 == "，" }).compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if p.count == 2, p[0] >= -90, p[0] <= 90, p[1] >= -180, p[1] <= 180 {
+                return CLLocationCoordinate2D(latitude: p[0], longitude: p[1])
+            }
+        }
+        return nil
+    }
+
+    /// 处理 motonav://route?lat=..&lon=..&name=.. 深链
+    func handleRouteURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "motonav" else { return }
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let items = comps.queryItems else { return }
+        var lat = 0.0, lon = 0.0
+        var name = "地图位置"
+        for it in items {
+            switch it.name {
+            case "lat": lat = Double(it.value ?? "") ?? 0
+            case "lon", "lng": lon = Double(it.value ?? "") ?? 0
+            case "name": if let v = it.value, !v.isEmpty { name = v }
+            default: break
+            }
+        }
+        guard lat != 0, lon != 0 else { return }
+        setPreview(name, lat: lat, lon: lon)
+        status = "已从链接定位到「\(name)」，点「去这里」规划路线"
+    }
+
+    /// 启动时检查剪贴板：微信/高德复制的位置文本 → 弹出"去这里"
+    func checkClipboard() {
+        guard let s = UIPasteboard.general.string,
+              let c = parseExternalLocation(s) else { return }
+        let name = s.components(separatedBy: "\n").first.map { String($0.prefix(24)) } ?? "剪贴板位置"
+        setPreview(name, lat: c.latitude, lon: c.longitude)
+        status = "检测到剪贴板位置「\(name)」，点「去这里」规划路线"
     }
 
     /// 拉取地图小区/商铺名称标签（带坐标）
