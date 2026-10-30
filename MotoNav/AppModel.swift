@@ -36,6 +36,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var zoomOutTick = 0
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
     @Published var navigateFollowTick = 0
+    /// 当前选中的路线方案下标（高德式：默认选中推荐，卡片点击切换）
+    @Published var selectedRouteIdx = 0
     /// 手机朝向（度，0=北，顺时针）
     @Published var heading: Double = 0
     /// 自定义背景图片（相册选择，v1.11 已移除入口，保留字段兼容旧数据）
@@ -358,8 +360,34 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return best
     }
 
-    /// 在线搜索兜底：联想库未收录的地点（如新小区），模糊查询后预览；
-    /// 多级降级：全名 → 去前缀（如"金辉锦绣云庭"→"锦绣云庭"），仍失败引导复制位置链接
+    /// Photon（免费、无 Key、稳定）在线地理编码：当前位置周边按名称查点，过滤合肥
+    func photonSearch(_ name: String) async -> (CLLocationCoordinate2D, String)? {
+        let c = currentLocation ?? CLLocationCoordinate2D(latitude: 31.86, longitude: 117.28)
+        guard let esc = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        let bbox = "\(c.longitude - 0.8),\(c.latitude - 0.6),\(c.longitude + 0.8),\(c.latitude + 0.6)"
+        guard let url = URL(string: "https://photon.komoot.io/api/?q=\(esc)&limit=5&bbox=\(bbox)") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12
+        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let feats = root["features"] as? [[String: Any]] else { return nil }
+        for f in feats {
+            guard let props = f["properties"] as? [String: Any],
+                  let geo = f["geometry"] as? [String: Any],
+                  let coords = geo["coordinates"] as? [Double], coords.count >= 2 else { continue }
+            let city = props["city"] as? String ?? ""
+            let state = props["state"] as? String ?? ""
+            // 限定合肥市/安徽省，避免搜到同名外地地点
+            if !city.contains("合肥") && !state.contains("安徽") { continue }
+            let n = props["name"] as? String ?? name
+            return (CLLocationCoordinate2D(latitude: coords[1], longitude: coords[0]), n)
+        }
+        return nil
+    }
+
+    /// 在线搜索兜底：联想库未收录的地点（如新小区、品牌门店），模糊查询后预览；
+    /// 双通道降级：Overpass → Photon（稳定），仍失败引导复制位置链接
     func onlineSearch(_ name: String) {
         // 本地地标词典优先（离线可用，网络不可达也能定位）
         if let lm = matchLandmark(name) {
@@ -376,16 +404,24 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if name.count > 6 {
                 variants.append(String(name.suffix(2)))          // 保留核心尾词
             }
+            if name.count > 3 {
+                variants.append(String(name.prefix(3)))          // 品牌/核心首词（如"特斯拉"）
+            }
             var found: CLLocationCoordinate2D?
+            var foundName = name
+            // 通道1：Overpass（合肥点位更全，但公共实例不稳）
             for v in variants {
-                if let c = await findHefeiCoordinate(v, fuzzy: true) {
-                    found = c
-                    break
+                if let c = await findHefeiCoordinate(v, fuzzy: true) { found = c; break }
+            }
+            // 通道2：Photon（稳定可达，地址库更全）
+            if found == nil {
+                for v in variants {
+                    if let (c, n) = await photonSearch(v) { found = c; foundName = n; break }
                 }
             }
             if let c = found {
-                setPreview(name, lat: c.latitude, lon: c.longitude)
-                status = "已定位到「\(name)」（坐标为估算，请实地校准），点「去这里」规划路线"
+                setPreview(foundName, lat: c.latitude, lon: c.longitude)
+                status = "已定位到「\(foundName)」（坐标为估算，请实地校准），点「去这里」规划路线"
             } else {
                 status = "「\(name)」暂未收录，请从微信/高德复制位置（或 纬度,经度）粘贴到搜索框"
             }
@@ -1085,20 +1121,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeDurationS = 0
                 fitTick += 1
                 status = "路线服务不可用，已显示直线到「\(name)」"
-            } else if choices.count == 1 {
-                applyRouteChoice(choices[0], name: name)
             } else {
-                routeChoices = choices.map { c in
+                // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
+                let list = choices.map { c -> RouteChoice in
                     let n = nearbyPoisOnRoute(c.points).count
                     return RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
                                        label: c.label, poiCount: n)
                 }
+                routeChoices = list
+                selectedRouteIdx = 0
+                applyRouteChoice(list[0], name: name)
             }
         }
     }
 
-    /// 应用所选路线方案（地图严格绘制该方案折线）
+    /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）
     func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
         let n = name ?? destName
         route = c.points
@@ -1109,7 +1147,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         farAnnounced.removeAll()
         let near = nearbyPoisOnRoute(c.points)
         routePois = near
-        routeChoices = []
         fitTick += 1
         status = String(
             format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",

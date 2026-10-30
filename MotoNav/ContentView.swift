@@ -552,10 +552,25 @@ struct ContentView: View {
         }
     }
 
-    /// 搜索预览"去这里" / 点选地点"导航到此处"按钮（绿色）
+    /// 搜索预览"去这里" / 方案就绪后"开始导航"按钮（绿色，高德式）
     private var goHereBar: some View {
         Group {
-            if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
+            if !model.routeChoices.isEmpty {
+                // 方案已选 → 绿色"开始导航"
+                Button {
+                    haptic()
+                    model.toggleNavigation()
+                } label: {
+                    Text("开始导航")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal)
+                }
+                .padding(.bottom, 4)
+            } else if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
                     haptic()
                     model.fetchRouteChoices(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
@@ -579,37 +594,62 @@ struct ContentView: View {
         }
     }
 
-    /// 多路线方案列表（点"去这里"后显示在搜索框上方）：优点 + 距离 + 导航用时
+    /// 高德式多路线方案：顶部"我的位置→目的地"，下方横排方案卡（大分钟+里程·抓拍+标签）
     private var routeChoiceList: some View {
         Group {
             if !model.routeChoices.isEmpty {
                 VStack(spacing: 6) {
+                    // 规划头部（高德式：出发地 → 目的地）
                     HStack {
-                        Text("选择路线方案")
+                        Text("我的位置")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Image(systemName: "arrow.right")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(model.destName)
+                            .font(.caption.bold())
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
                         Spacer()
                     }
-                    ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { _, c in
-                        Button {
-                            haptic()
-                            model.applyRouteChoice(c)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("★ \(c.label)　·　\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里")
-                                    .font(.footnote.bold())
-                                    .foregroundStyle(.primary)
-                                Text("导航用时约 \(c.durationS / 60) 分钟 · 途经抓拍 \(c.poiCount) 处 · 转向 \(c.turns.count) 处")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    // 横排方案卡（高德式并列）
+                    HStack(spacing: 8) {
+                        ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
+                            Button {
+                                haptic()
+                                model.selectedRouteIdx = idx
+                                model.applyRouteChoice(c)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("\(c.durationS / 60) 分钟")
+                                        .font(.system(size: 17, weight: .heavy))
+                                        .foregroundStyle(.primary)
+                                    Text("\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里 · 抓拍\(c.poiCount)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(c.label)
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
+                                .background(model.selectedRouteIdx == idx
+                                    ? Color(red: 0.16, green: 0.38, blue: 1.0).opacity(0.15)
+                                    : .ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(
+                                    model.selectedRouteIdx == idx
+                                        ? Color(red: 0.16, green: 0.38, blue: 1.0)
+                                        : .white.opacity(0.3),
+                                    lineWidth: model.selectedRouteIdx == idx ? 2 : 0.8))
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.35), lineWidth: 0.8))
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal)
