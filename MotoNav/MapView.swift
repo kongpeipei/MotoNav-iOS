@@ -128,7 +128,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 .forEach { map.removeAnnotation($0) }
         }
         // 搜索预览点（绿色高亮）+ 跳转到搜索结果
-        let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }        let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
+        let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
+        let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
         if previewKey != context.coordinator.lastPreviewKey {
             context.coordinator.lastPreviewKey = previewKey
             if let p = preview {
@@ -185,8 +186,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
         }
         // 当前定位点箭头随手机朝向旋转（路线规划/跟随模式与按定位按钮一致）
+        context.coordinator.userHeading = heading
         if let uv = map.view(for: map.userLocation) {
-            uv.transform = CGAffineTransform(rotationAngle: CGFloat(heading) * .pi / 180)
+            uv.transform = CGAffineTransform(rotationAngle: CGFloat(context.coordinator.userHeading) * .pi / 180)
         }
     }
 
@@ -201,6 +203,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
+        /// 手机朝向（由 updateUIView 同步，供 viewFor 旋转定位箭头）
+        var userHeading = 0.0
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
         var lastLocateTick = 0
         var lastFitTick = 0
@@ -292,7 +296,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
                 // 定位点箭头随手机朝向旋转（与按定位按钮跟随一致）
-                v?.transform = CGAffineTransform(rotationAngle: CGFloat(heading) * .pi / 180)
+                v?.transform = CGAffineTransform(rotationAngle: CGFloat(userHeading) * .pi / 180)
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
