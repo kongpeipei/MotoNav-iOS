@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">摩托导航卫士</string>
+    <string name="btn_start">开始监控</string>
+    <string name="btn_stop">停止监控</string>
+    <string name="btn_simulate">模拟测试</string>
+    <string name="btn_add_here">添加当前位置</string>
+    <string name="btn_manual">手动坐标</string>
+    <string name="btn_import">导入</string>
+    <string name="btn_export">导出</string>
+    <string name="btn_clear_route">清除路线</string>
+    <string name="btn_plan_route">导航到这里</string>
+    <string name="status_waiting">等待定位…</string>
+    <string name="gps_on">GPS 已开启</string>
+    <string name="list_title">附近点位</string>
+    <string name="notification_channel">骑行提醒</string>
+
+    <string name="hint_search">搜索目的地：点位名称 / 纬度,经度</string>
+    <string name="btn_search">搜索</string>
+    <string name="btn_navigate_start">开始导航</string>
+    <string name="btn_navigate_stop">结束导航</string>
+    <string name="menu_monitor">监控开关</string>
+    <string name="menu_simulate">模拟测试</string>
+    <string name="menu_add_here">添加当前位置</string>
+    <string name="menu_manual">手动添加坐标</string>
+    <string name="menu_enable_all">全部点位开启</string>
+    <string name="menu_disable_all">全部点位关闭</string>
+    <string name="menu_type_filter">点位类型筛选</string>
+    <string name="menu_import">导入点位</string>
+    <string name="menu_export">导出点位</string>
+    <string name="menu_clear_history">清空历史搜索</string>
+    <string name="menu_clear_route">清除路线</string>
+</resources>

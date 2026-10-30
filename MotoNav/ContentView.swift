@@ -4,33 +4,68 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
+    @State private var searchText = ""
     @State private var showManualAdd = false
     @State private var editPoi: Poi?
     @State private var showImport = false
     @State private var exportDoc: JsonFile?
     @State private var showExport = false
-    @State private var importText = ""
+    @State private var typeFilter: Set<PoiType> = Set(PoiType.allCases)
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 statusBar
+                searchBar
+                historyBar
                 MapViewRepresentable(
                     pois: model.pois,
                     userLocation: model.currentLocation,
-                    route: model.route
+                    route: model.route,
+                    routePois: model.routePois
                 )
                 .frame(maxHeight: .infinity)
-                controls
-                poiList
+                navControls
             }
             .navigationTitle("摩托导航卫士")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button(model.monitoring ? "停止监控" : "开始监控") {
+                            model.toggleMonitoring()
+                        }
+                        Button(model.simulating ? "停止模拟" : "模拟测试") {
+                            model.toggleSimulation()
+                        }
+                        Button("添加当前位置") {
+                            guard let loc = model.currentLocation else { model.status = "请先定位"; return }
+                            model.addPoi(type: .RED_LIGHT, name: "手动添加", lat: loc.latitude, lon: loc.longitude)
+                            model.status = "已添加当前位置点位"
+                        }
+                        Button("手动添加坐标") { showManualAdd = true }
+                        Divider()
+                        Button(model.allPoiEnabled ? "全部点位关闭" : "全部点位开启") {
+                            model.setAllPoiEnabled(!model.allPoiEnabled)
+                        }
+                        Menu("点位类型筛选") {
+                            ForEach(PoiType.allCases, id: \.self) { t in
+                                Button {
+                                    let on = model.enabledTypes.contains(t)
+                                    model.setTypeEnabled(t, enabled: !on)
+                                } label: {
+                                    if model.enabledTypes.contains(t) {
+                                        Label(t.label, systemImage: "checkmark")
+                                    } else {
+                                        Text(t.label)
+                                    }
+                                }
+                            }
+                        }
+                        Divider()
                         Button("导入 JSON") { showImport = true }
                         Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
-                        Button("清空路线") { model.route = [] }
+                        Button("清空历史搜索") { model.clearHistory() }
+                        Button("清空路线") { model.clearRoute() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -77,6 +112,7 @@ struct ContentView: View {
                 Text(model.monitoring ? "● 监控中" : "○ 未监控")
                     .font(.caption2).foregroundStyle(model.monitoring ? .green : .gray)
                 if model.simulating { Text("● 模拟中").font(.caption2).foregroundStyle(.orange) }
+                if model.navigating { Text("● 导航中").font(.caption2).foregroundStyle(.blue) }
                 Text("点位 \(model.pois.count)")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
@@ -87,59 +123,83 @@ struct ContentView: View {
         .background(.bar)
     }
 
-    private var controls: some View {
+    /// 目的地搜索框
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            TextField("搜索目的地：点位名称 / 纬度,经度", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .font(.subheadline)
+                .submitLabel(.search)
+                .onSubmit { doSearch() }
+            Button("搜索") { doSearch() }
+                .buttonStyle(.bordered)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+    }
+
+    /// 历史搜索记录（横滑标签）
+    private var historyBar: some View {
+        Group {
+            if !model.searchHistory.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(model.searchHistory, id: \.self) { item in
+                            Button(item) {
+                                searchText = item
+                                doSearch()
+                            }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    /// 底部：导航按钮
+    private var navControls: some View {
         HStack(spacing: 10) {
-            Button(model.monitoring ? "停止" : "开始") {
-                model.toggleMonitoring()
+            Button(model.navigating ? "结束导航" : "开始导航") {
+                model.toggleNavigation()
             }
             .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity)
 
-            Button(model.simulating ? "停止模拟" : "模拟") {
-                model.toggleSimulation()
-            }
-            .buttonStyle(.bordered)
-
-            Button("加当前位置") {
-                guard let loc = model.currentLocation else { model.status = "请先定位"; return }
-                model.addPoi(type: .RED_LIGHT, name: "手动添加", lat: loc.latitude, lon: loc.longitude)
-                model.status = "已添加当前位置点位"
-            }
-            .buttonStyle(.bordered)
-
-            Button("手动坐标") { showManualAdd = true }
+            Button("清除路线") { model.clearRoute() }
                 .buttonStyle(.bordered)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
     }
 
-    private var poiList: some View {
-        List {
-            ForEach(model.pois) { p in
-                HStack {
-                    Circle().fill(Color(p.type.color)).frame(width: 10, height: 10)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.name).font(.subheadline)
-                        Text("\(p.type.label) · 半径\(Int(p.radiusM))m\(p.note.isEmpty ? "" : " · \(p.note)")")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { p.enabled },
-                        set: { _ in model.togglePoi(id: p.id) }
-                    )).labelsHidden()
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { editPoi = p }
-                .swipeActions {
-                    Button(role: .destructive) { model.deletePoi(id: p.id) } label: {
-                        Label("删除", systemImage: "trash")
-                    }
-                }
-            }
+    private func doSearch() {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { model.status = "请输入目的地"; return }
+        // 支持 纬度,经度
+        let parts = q.split(whereSeparator: { $0 == "," || $0 == "，" }).map { $0.trimmingCharacters(in: .whitespaces) }
+        if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
+           (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+            model.planRoute(to: "坐标目的地 \(lat),\(lon)", lat: lat, lon: lon)
+            return
         }
-        .listStyle(.inset)
-        .frame(height: 260)
+        let hits = model.searchPois(q)
+        if hits.isEmpty {
+            model.status = "未找到「\(q)」，请尝试点位名称或输入 纬度,经度"
+            return
+        }
+        if hits.count == 1 {
+            let p = hits[0]
+            model.selectedPoi = p
+            model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
+        } else {
+            model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
+            model.selectedPoi = nil
+        }
     }
 }
 

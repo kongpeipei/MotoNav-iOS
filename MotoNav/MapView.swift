@@ -2,11 +2,12 @@ import SwiftUI
 import MapKit
 import UIKit
 
-/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线
+/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮
 struct MapViewRepresentable: UIViewRepresentable {
     let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
     let route: [CLLocationCoordinate2D]
+    let routePois: [Poi]
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -28,7 +29,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             .forEach { map.removeAnnotation($0) }
         for p in pois {
             if !map.annotations.contains(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) {
-                map.addAnnotation(PoiAnnotation(poi: p))
+                map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
+            } else if let a = map.annotations.first(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) as? PoiAnnotation {
+                a.onRoute = routePois.contains { $0.id == p.id }
             }
         }
         map.removeOverlays(map.overlays)
@@ -48,6 +51,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             v.markerTintColor = pa.poi.type.color
             v.titleVisibility = .adaptive
             v.glyphText = String(pa.poi.type.label.prefix(1))
+            // 沿途点位：白色描边高亮
+            if pa.onRoute {
+                v.layer.borderWidth = 2.5
+                v.layer.borderColor = UIColor.white.cgColor
+            } else {
+                v.layer.borderWidth = 0
+            }
             return v
         }
 
@@ -65,7 +75,12 @@ struct MapViewRepresentable: UIViewRepresentable {
 
 final class PoiAnnotation: NSObject, MKAnnotation {
     let poi: Poi
-    init(poi: Poi) { self.poi = poi; super.init() }
+    var onRoute: Bool
+    init(poi: Poi, onRoute: Bool = false) {
+        self.poi = poi
+        self.onRoute = onRoute
+        super.init()
+    }
     var coordinate: CLLocationCoordinate2D { poi.coordinate }
     var title: String? { poi.name }
     var subtitle: String? { poi.type.label }

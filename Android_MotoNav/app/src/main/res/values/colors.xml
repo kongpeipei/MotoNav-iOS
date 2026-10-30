@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0F1220</color>
+    <color name="surface">#1A1F33</color>
+    <color name="textPrimary">#F1F3FA</color>
+    <color name="textSecondary">#9AA3C0</color>
+    <color name="accent">#3D7BFF</color>
+    <color name="red_light">#FF5252</color>
+    <color name="restriction">#FFB300</color>
+    <color name="lane">#40C4FF</color>
+    <color name="gridLine">#232A45</color>
+</resources>
