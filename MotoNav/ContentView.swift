@@ -381,15 +381,7 @@ struct ContentView: View {
                             doSearch()
                         }
                     } label: {
-                        HStack {
-                            Image(systemName: s == NAV_ITEM ? "arrow.right.circle" : s.hasPrefix("🔍") ? "magnifyingglass" : "mappin.and.ellipse")
-                                .foregroundStyle(s == NAV_ITEM ? Color.accentColor : s.hasPrefix("🔍") ? .orange : .secondary)
-                            Text(s).foregroundStyle(.primary)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .contentShape(Rectangle())
+                        suggestionRow(s)
                     }
                     .buttonStyle(.plain)
                     Divider()
@@ -401,6 +393,31 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
         .padding(.horizontal)
+    }
+
+    /// 联想条目行（图标按条目类型区分）
+    private func suggestionRow(_ s: String) -> some View {
+        HStack {
+            Image(systemName: suggestionIcon(s))
+                .foregroundStyle(suggestionIconColor(s))
+            Text(s).foregroundStyle(.primary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    private func suggestionIcon(_ s: String) -> String {
+        if s == NAV_ITEM { return "arrow.right.circle" }
+        if s.hasPrefix("🔍") { return "magnifyingglass" }
+        return "mappin.and.ellipse"
+    }
+
+    private func suggestionIconColor(_ s: String) -> Color {
+        if s == NAV_ITEM { return .accentColor }
+        if s.hasPrefix("🔍") { return .orange }
+        return .secondary
     }
 
     /// 历史搜索记录（横滑标签，地址简化显示）
