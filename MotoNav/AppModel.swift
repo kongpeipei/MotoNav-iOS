@@ -995,7 +995,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         locateTick += 1
     }
 
-    /// 规划到任意目的地并高亮沿途抓拍点位
+    /// 规划到任意目的地并高亮沿途抓拍点位（起点/终点自动吸附到最近道路出入口）
     func planRoute(to name: String, lat: Double, lon: Double) {
         guard let start = currentLocation else {
             status = "请先定位后再规划路线"
@@ -1005,8 +1005,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         addHistory(name)
         status = "正在规划到「\(name)」…"
         let from = start
+        let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            let r = await RouteFetcher.fetch(from: from, to: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+            // 起点/终点吸附到最近可通行的道路出入口（OSRM /nearest，失败回退原坐标）
+            async let sSnap = RouteFetcher.nearest(lat: from.latitude, lon: from.longitude)
+            async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
+            let (s, e) = await (sSnap, eSnap)
+            let from2 = s ?? from
+            let end2 = e ?? rawEnd
+            let r = await RouteFetcher.fetch(from: from2, to: end2)
             if let r = r {
                 route = r.points
                 routeTurns = r.turns
@@ -1021,7 +1028,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",
                     name, Double(r.distanceM) / 1000.0, r.durationS / 60, near.count)
             } else {
-                route = [from, CLLocationCoordinate2D(latitude: lat, longitude: lon)]
+                route = [from2, end2]
                 routePois = nearbyPoisOnRoute(route)
                 routeTurns = []
                 routeDistanceM = 0
@@ -1045,7 +1052,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "已清除路线"
     }
 
-    /// "去这里/导航到这里"触发：获取多路线方案，多条时交由界面选择
+    /// "去这里/导航到这里"触发：获取多路线方案（起点/终点自动吸附到最近道路出入口）
     func fetchRouteChoices(to name: String, lat: Double, lon: Double) {
         guard let start = currentLocation else {
             status = "请先定位后再规划路线"
@@ -1055,11 +1062,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         addHistory(name)
         status = "正在规划到「\(name)」…"
         let from = start
-        let end = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            let choices = await RouteFetcher.fetchAll(from: from, to: end)
+            // 起点/终点吸附到最近可通行的道路出入口（OSRM /nearest，失败回退原坐标）
+            async let sSnap = RouteFetcher.nearest(lat: from.latitude, lon: from.longitude)
+            async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
+            let (s, e) = await (sSnap, eSnap)
+            let from2 = s ?? from
+            let end2 = e ?? rawEnd
+            let choices = await RouteFetcher.fetchAll(from: from2, to: end2)
             if choices.isEmpty {
-                route = [from, end]
+                route = [from2, end2]
                 routePois = nearbyPoisOnRoute(route)
                 routeTurns = []
                 routeDistanceM = 0
@@ -1173,8 +1186,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "路线已重新规划，请按新路线行驶"
         guard let start = currentLocation else { return }
         Task {
+            // 重规划同样吸附到最近道路出入口
+            let sSnap = await RouteFetcher.nearest(lat: start.latitude, lon: start.longitude)
+            let from2 = sSnap ?? start
             if let r = await RouteFetcher.fetch(
-                from: start,
+                from: from2,
                 to: CLLocationCoordinate2D(latitude: destLat, longitude: destLon)) {
                 route = r.points
                 routeTurns = r.turns
@@ -1192,7 +1208,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func checkNavigation(at coord: CLLocationCoordinate2D) {
         guard navigating else { return }
         rerouteIfOffTrack(at: coord)
-        let toDest = distanceM(coord, CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
+        // 到达判定用路线终点（吸附后的"最近出入口"），与路线绘制一致
+        let toDest: Double
+        if let last = route.last {
+            toDest = distanceM(coord, last)
+        } else {
+            toDest = distanceM(coord, CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
+        }
         if toDest < 100 {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"

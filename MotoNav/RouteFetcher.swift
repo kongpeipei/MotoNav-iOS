@@ -42,6 +42,26 @@ enum RouteFetcher {
         }
     }
 
+    /// 将坐标吸附到最近可通行道路上的点（"最近出入口"），OSRM /nearest 服务；
+    /// 失败返回 nil，调用方回退原坐标
+    static func nearest(lat: Double, lon: Double) async -> CLLocationCoordinate2D? {
+        guard let url = URL(string: "https://router.project-osrm.org/nearest/v1/driving/\(lon),\(lat)?number=1")
+        else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+        for _ in 0..<2 {
+            if let (data, _) = try? await URLSession.shared.data(for: req),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let wp = root["waypoints"] as? [[String: Any]],
+               let first = wp.first,
+               let loc = first["location"] as? [Double], loc.count >= 2 {
+                return CLLocationCoordinate2D(latitude: loc[1], longitude: loc[0])
+            }
+        }
+        return nil
+    }
+
     /// 获取多条路线方案（alternatives=3），按用时升序 + 分配优点标签
     /// v1.26：增加请求超时与一次重试，公共实例不稳定时降低"直线降级"概率
     static func fetchAll(
