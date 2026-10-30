@@ -20,6 +20,20 @@
                ReferencedContainer = "container:MotoNav.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A10000000000000000000025"
+               BuildableName = "MotoNavWidget.appex"
+               BlueprintName = "MotoNavWidget"
+               ReferencedContainer = "container:MotoNav.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
