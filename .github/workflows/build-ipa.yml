@@ -38,10 +38,10 @@ jobs:
         run: |
           xcodebuild \
             -project MotoNav.xcodeproj \
-            -scheme MotoNavWidget \
+            -target MotoNavWidget \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
+            SYMROOT=build_widget \
             build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
@@ -49,7 +49,7 @@ jobs:
       - name: Embed widget extension (PlugIns)
         run: |
           APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
-          WIDGET=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.appex" | head -1)
+          WIDGET=$(find build_widget/Release-iphoneos build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.appex" 2>/dev/null | head -1)
           test -n "$APP_PATH"
           test -n "$WIDGET"
           mkdir -p "$APP_PATH/PlugIns"
