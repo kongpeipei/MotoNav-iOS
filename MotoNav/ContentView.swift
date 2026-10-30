@@ -26,6 +26,8 @@ struct ContentView: View {
     @State private var goHereLat = 0.0
     @State private var goHereLon = 0.0
     @State private var goHereLabel = ""
+    /// "导航到这里"已触发标记：仅此时显示清空路线竖条
+    @State private var showClearRouteBtn = false
 
     var body: some View {
         ZStack {
@@ -198,8 +200,6 @@ struct ContentView: View {
                     }
                 }
                 Menu {
-                    Button("清空历史搜索") { model.clearHistory() }
-                    Divider()
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
                 } label: {
@@ -241,22 +241,6 @@ struct ContentView: View {
                 goHereBar
                 searchBar
             }
-            // 已规划路线时：搜索框下方中间显示"清空路线"
-            if !model.navigating && model.route != nil && goHereName == nil {
-                Button {
-                    model.clearRoute()
-                    model.status = "路线已清空"
-                } label: {
-                    Text("清空路线")
-                        .font(.footnote.bold())
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().stroke(.white.opacity(0.35), lineWidth: 0.8))
-                }
-                .padding(.bottom, 6)
-            }
         }
     }
 
@@ -293,26 +277,50 @@ struct ContentView: View {
         }
     }
 
-    /// 当前定位按钮：界面中间右侧（白色圆底 + 圆圈中心点）
+    /// 当前定位按钮（中间右侧）+ 其正下方的"清空路线"竖长条（仅"导航到这里"触发后显示）
     private var locateOverlay: some View {
         VStack {
             Spacer()
             HStack {
                 Spacer()
-                Button {
-                    model.centerOnUser()
-                } label: {
-                    ZStack {
-                        Circle().fill(.white)
-                        Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
-                        Image(systemName: "scope")
-                            .font(.title3)
-                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                VStack(spacing: 8) {
+                    // 定位按钮：白底圆圈中心点
+                    Button {
+                        model.centerOnUser()
+                    } label: {
+                        ZStack {
+                            Circle().fill(.white)
+                            Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                            Image(systemName: "scope")
+                                .font(.title3)
+                                .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                        }
+                        .frame(width: 44, height: 44)
+                        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
-                    .frame(width: 44, height: 44)
-                    .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    // 清空路线：竖形长条（宽同定位按钮，长为 3 倍）
+                    if showClearRouteBtn && model.route != nil {
+                        Button {
+                            model.clearRoute()
+                            showClearRouteBtn = false
+                        } label: {
+                            VStack(spacing: 4) {
+                                Text("清")
+                                Text("空")
+                                Text("路")
+                                Text("线")
+                            }
+                            .font(.footnote.bold())
+                            .foregroundStyle(.primary)
+                            .frame(width: 44, height: 132)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.35), lineWidth: 0.8))
+                        }
+                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                    }
                 }
-                .padding(.trailing, 16)
+                .padding(.trailing, 18) // 与搜索胶囊内"搜索"按钮居中对齐
+                .offset(y: -57) // 相对中间位置向上提高 2cm
             }
             Spacer()
         }
@@ -324,6 +332,8 @@ struct ContentView: View {
             if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
                     model.planRoute(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
+                    // "导航到这里"触发 → 允许显示清空路线竖条
+                    showClearRouteBtn = true
                     goHereName = nil
                     goHereLat = 0
                     goHereLon = 0

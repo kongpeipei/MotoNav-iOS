@@ -9,7 +9,21 @@ final class PoiRepository {
     init() { _ = load() }
 
     func load() -> [Poi] {
-        pois = readFromDocuments() ?? readFromBundle()
+        // 内置点位版本机制：Documents 点位 + 用户自定义点（id≥1000）合并，保留用户数据
+        let savedVer = UserDefaults.standard.integer(forKey: "poiAppVersion")
+        let currentVer = 119
+        if let docs = readFromDocuments(), savedVer >= currentVer {
+            pois = docs
+        } else {
+            var merged = readFromBundle()
+            if let docs = readFromDocuments() {
+                let userPois = docs.filter { $0.id >= 1000 }
+                if !userPois.isEmpty { merged.append(contentsOf: userPois) }
+            }
+            pois = merged
+            persist()
+            UserDefaults.standard.set(currentVer, forKey: "poiAppVersion")
+        }
         nextId = (pois.map(\.id).max() ?? 0) + 1
         return pois
     }

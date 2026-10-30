@@ -128,8 +128,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 .forEach { map.removeAnnotation($0) }
         }
         // 搜索预览点（绿色高亮）+ 跳转到搜索结果
-        let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
-        let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
+        let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }        let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
         if previewKey != context.coordinator.lastPreviewKey {
             context.coordinator.lastPreviewKey = previewKey
             if let p = preview {
@@ -184,6 +183,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         map.removeOverlays(map.overlays)
         if route.count > 1 {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
+        }
+        // 当前定位点箭头随手机朝向旋转（路线规划/跟随模式与按定位按钮一致）
+        if let uv = map.view(for: map.userLocation) {
+            uv.transform = CGAffineTransform(rotationAngle: CGFloat(heading) * .pi / 180)
         }
     }
 
@@ -285,9 +288,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                     v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
                 }
                 v?.image = MapViewRepresentable.makeUserIcon()
-                v?.frame = CGRect(x: 0, y: 0, width: 34, height: 34)
+                v?.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
+                // 定位点箭头随手机朝向旋转（与按定位按钮跟随一致）
+                v?.transform = CGAffineTransform(rotationAngle: CGFloat(heading) * .pi / 180)
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
@@ -455,20 +460,20 @@ extension MKPolyline {
 }
 
 extension MapViewRepresentable {
-    /// 当前位置图标：高德样式（蓝色点 + 浅蓝外圈 + 圆圈外侧白色方向箭头）
+    /// 当前位置图标：高德样式（蓝色实心点不变 + 浅蓝外圈 + 圆圈外侧红色方向箭头×3）
     static func makeUserIcon() -> UIImage {
-        let size: CGFloat = 34
+        let size: CGFloat = 44
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             let c = ctx.cgContext
-            let center = CGPoint(x: size / 2, y: size / 2)
-            let r: CGFloat = 11
-            // 圆圈外侧白色方向箭头（朝上）
-            c.setFillColor(UIColor.white.cgColor)
+            let center = CGPoint(x: size / 2, y: 26)
+            let r: CGFloat = 10
+            // 圆圈外侧红色方向箭头（3 倍大小，朝上）
+            c.setFillColor(UIColor.systemRed.cgColor)
             let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: center.x, y: center.y - r - 6))
-            arrow.addLine(to: CGPoint(x: center.x - 4.5, y: center.y - r + 1))
-            arrow.addLine(to: CGPoint(x: center.x + 4.5, y: center.y - r + 1))
+            arrow.move(to: CGPoint(x: center.x, y: center.y - r - 16))
+            arrow.addLine(to: CGPoint(x: center.x - 13.5, y: center.y - r + 5))
+            arrow.addLine(to: CGPoint(x: center.x + 13.5, y: center.y - r + 5))
             arrow.close()
             arrow.fill()
             // 浅蓝半透明外圈
@@ -478,7 +483,7 @@ extension MapViewRepresentable {
             c.setStrokeColor(UIColor.systemBlue.withAlphaComponent(0.55).cgColor)
             c.setLineWidth(1.5)
             c.strokeEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
-            // 中心蓝色实心点
+            // 中心蓝色实心点（大小不变）
             c.setFillColor(UIColor.systemBlue.cgColor)
             c.fillEllipse(in: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10))
         }
