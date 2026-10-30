@@ -287,8 +287,12 @@ struct ContentView: View {
             HStack {
                 Spacer()
                 VStack(spacing: 8) {
-                    // 定位按钮：白底圆圈中心点
+                    // 定位按钮：白底圆圈中心点（点击后收起"导航到这里"并回中跟随）
                     Button {
+                        goHereName = nil
+                        goHereLat = 0
+                        goHereLon = 0
+                        model.clearPreview()
                         model.centerOnUser()
                     } label: {
                         ZStack {
