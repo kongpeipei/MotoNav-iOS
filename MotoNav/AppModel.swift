@@ -29,6 +29,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var locateTick = 0
     /// 路线全览请求计数（规划完成后 +1，驱动地图缩放全览）
     @Published var fitTick = 0
+    /// 手机朝向（度，0=北，顺时针）
+    @Published var heading: Double = 0
     /// 自定义背景图片（相册选择）
     @Published var bgImage: UIImage?
 

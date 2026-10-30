@@ -33,96 +33,11 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .opacity(0.35)
             }
-            // 地图全屏（高德式布局：地图在上，搜索框下置）
-            MapViewRepresentable(
-                pois: model.pois,
-                userLocation: model.currentLocation,
-                route: model.route,
-                routePois: model.routePois,
-                locateTick: model.locateTick,
-                fitTick: model.fitTick,
-                heading: model.heading,
-                onLongPress: { coord in
-                    longPressCoord = coord
-                    showLongPressMenu = true
-                }
-            )
-            .ignoresSafeArea()
-            .contentShape(Rectangle())
-            .onTapGesture { dismissKeyboard() }
-
+            mapLayer
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
-
-            // 右上角 ⋯ 菜单
-            VStack {
-                HStack {
-                    Spacer()
-                    Menu {
-                        Button(model.monitoring ? "停止监控" : "开始监控") {
-                            model.toggleMonitoring()
-                        }
-                        Button(model.simulating ? "停止模拟" : "模拟测试") {
-                            model.toggleSimulation()
-                        }
-                        Button(model.navigating ? "结束导航" : "开始导航") {
-                            model.toggleNavigation()
-                        }
-                        Button("添加当前位置") {
-                            guard let loc = model.currentLocation else { model.status = "请先定位"; return }
-                            model.addPoi(type: .RED_LIGHT, name: "手动添加", lat: loc.latitude, lon: loc.longitude)
-                            model.status = "已添加当前位置点位"
-                        }
-                        Button("手动添加坐标") { showManualAdd = true }
-                        Divider()
-                        Button(model.allPoiEnabled ? "全部点位关闭" : "全部点位开启") {
-                            model.setAllPoiEnabled(!model.allPoiEnabled)
-                        }
-                        Menu("点位类型筛选") {
-                            ForEach(PoiType.allCases, id: \.self) { t in
-                                Button {
-                                    let on = model.enabledTypes.contains(t)
-                                    model.setTypeEnabled(t, enabled: !on)
-                                } label: {
-                                    if model.enabledTypes.contains(t) {
-                                        Label(t.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(t.label)
-                                    }
-                                }
-                            }
-                        }
-                        Divider()
-                        Button("导入 JSON") { showImport = true }
-                        Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
-                        Divider()
-                        PhotosPicker(selection: $pickerItem, matching: .images) {
-                            Label("更换背景（相册）", systemImage: "photo")
-                        }
-                        Button("恢复默认背景") { model.clearBackground() }
-                        Divider()
-                        Button("清空历史搜索") { model.clearHistory() }
-                        Button("清空路线") { model.clearRoute() }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.title2)
-                            .foregroundStyle(.white)
-                    }
-                    .padding(8)
-                    .background(.black.opacity(0.5), in: Circle())
-                    .padding(.trailing, 12)
-                    .padding(.top, 6)
-                }
-                Spacer()
-            }
-
-            // 底部浮层：状态 + 历史 + 搜索框
-            VStack(spacing: 0) {
-                Spacer()
-                statusBar
-                historyBar
-                searchBar
-            }
+            menuOverlay
+            bottomOverlay
         }
         .sheet(isPresented: $showManualAdd) {
             PoiEditSheet(mode: .add, poi: nil) { type, name, lat, lon, r in
@@ -178,6 +93,117 @@ struct ContentView: View {
                     model.saveBackground(data: data)
                     model.status = "背景已更换（可在 ⋯ 菜单恢复默认）"
                 }
+            }
+        }
+    }
+
+    /// 地图全屏层（高德式：地图在上，搜索框下置）
+    private var mapLayer: some View {
+        MapViewRepresentable(
+            pois: model.pois,
+            userLocation: model.currentLocation,
+            route: model.route,
+            routePois: model.routePois,
+            locateTick: model.locateTick,
+            fitTick: model.fitTick,
+            heading: model.heading,
+            onLongPress: { coord in
+                longPressCoord = coord
+                showLongPressMenu = true
+            }
+        )
+        .ignoresSafeArea()
+        .contentShape(Rectangle())
+        .onTapGesture { dismissKeyboard() }
+    }
+
+    /// 右上角 ⋯ 菜单
+    private var menuOverlay: some View {
+        VStack {
+            HStack {
+                Spacer()
+                Menu {
+                    Button(model.monitoring ? "停止监控" : "开始监控") {
+                        model.toggleMonitoring()
+                    }
+                    Button(model.simulating ? "停止模拟" : "模拟测试") {
+                        model.toggleSimulation()
+                    }
+                    Button(model.navigating ? "结束导航" : "开始导航") {
+                        model.toggleNavigation()
+                    }
+                    Button("添加当前位置") {
+                        guard let loc = model.currentLocation else { model.status = "请先定位"; return }
+                        model.addPoi(type: .RED_LIGHT, name: "手动添加", lat: loc.latitude, lon: loc.longitude)
+                        model.status = "已添加当前位置点位"
+                    }
+                    Button("手动添加坐标") { showManualAdd = true }
+                    Divider()
+                    Button(model.allPoiEnabled ? "全部点位关闭" : "全部点位开启") {
+                        model.setAllPoiEnabled(!model.allPoiEnabled)
+                    }
+                    Menu("点位类型筛选") {
+                        ForEach(PoiType.allCases, id: \.self) { t in
+                            Button {
+                                let on = model.enabledTypes.contains(t)
+                                model.setTypeEnabled(t, enabled: !on)
+                            } label: {
+                                if model.enabledTypes.contains(t) {
+                                    Label(t.label, systemImage: "checkmark")
+                                } else {
+                                    Text(t.label)
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("导入 JSON") { showImport = true }
+                    Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
+                    Divider()
+                    PhotosPicker(selection: $pickerItem, matching: .images) {
+                        Label("更换背景（相册）", systemImage: "photo")
+                    }
+                    Button("恢复默认背景") { model.clearBackground() }
+                    Divider()
+                    Button("清空历史搜索") { model.clearHistory() }
+                    Button("清空路线") { model.clearRoute() }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title2)
+                        .foregroundStyle(.white)
+                }
+                .padding(8)
+                .background(.black.opacity(0.5), in: Circle())
+                .padding(.trailing, 12)
+                .padding(.top, 6)
+            }
+            Spacer()
+        }
+    }
+
+    /// 底部浮层：状态 + 历史 + 搜索框 + 定位按钮
+    private var bottomOverlay: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            statusBar
+            historyBar
+            searchBar
+            // 右下角定位按钮（黑色圆球）
+            HStack {
+                Spacer()
+                Button {
+                    model.centerOnUser()
+                } label: {
+                    Image(systemName: "location.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                        .padding(11)
+                        .background(.black.opacity(0.85), in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                        .shadow(radius: 2)
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 6)
             }
         }
     }
