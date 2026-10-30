@@ -185,12 +185,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         if route.count > 1 {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
         }
-        // 当前定位点箭头随手机朝向旋转（始终跟随）
-        context.coordinator.userHeading = heading
-        if let uv = map.view(for: map.userLocation) {
-            uv.transform = CGAffineTransform(rotationAngle: CGFloat(context.coordinator.userHeading) * .pi / 180)
-        }
-        // 地图自适应旋转：始终与手机朝向一致
+        // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
         map.camera.heading = CLLocationDirection(heading)
     }
 
@@ -205,8 +200,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
-        /// 手机朝向（由 updateUIView 同步，供 viewFor 旋转定位箭头）
-        var userHeading = 0.0
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
         var lastLocateTick = 0
         var lastFitTick = 0
@@ -297,8 +290,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v?.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
-                // 定位点箭头随手机朝向旋转（与按定位按钮跟随一致）
-                v?.transform = CGAffineTransform(rotationAngle: CGFloat(userHeading) * .pi / 180)
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
@@ -466,37 +457,27 @@ extension MKPolyline {
 }
 
 extension MapViewRepresentable {
-    /// 当前位置图标：高德样式（蓝色实心圆 + 浅蓝外圈 + 白色箭头，尖端朝上=朝向）
+    /// 当前位置图标：一体蓝色实心大头箭头（圆头+尖头整体填充，固定朝屏幕上方；
+    /// 地图随手机朝向旋转后，屏幕上方即手机朝向，箭头指向即手机朝向）
     static func makeUserIcon() -> UIImage {
         let size: CGFloat = 44
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             let c = ctx.cgContext
             let cx = size / 2
-            let cy: CGFloat = 26
-            let r: CGFloat = 9
-            // 浅蓝半透明外圈
-            c.setFillColor(UIColor(red: 0.24, green: 0.48, blue: 1.0, alpha: 0.18).cgColor)
-            c.fillEllipse(in: CGRect(x: cx - r - 4, y: cy - r - 4, width: (r + 4) * 2, height: (r + 4) * 2))
-            // 白色箭头（尖端朝上，高德风格）：白填充 + 深蓝描边
+            let cy: CGFloat = 22
+            // 一体蓝色实心箭头：尾部圆头 + 尖端
             let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: cx, y: cy - r - 17))
-            arrow.addLine(to: CGPoint(x: cx - 8, y: cy - r + 3))
-            arrow.addLine(to: CGPoint(x: cx + 8, y: cy - r + 3))
+            arrow.move(to: CGPoint(x: cx, y: cy - 22))                       // 尖端
+            arrow.addQuadCurve(to: CGPoint(x: cx - 11, y: cy - 4),
+                               controlPoint: CGPoint(x: cx - 9.5, y: cy - 13)) // 左侧
+            arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 6),
+                         radius: 10, startAngle: .pi, endAngle: 0, clockwise: true) // 尾部圆头
+            arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 22),
+                               controlPoint: CGPoint(x: cx + 9.5, y: cy - 13)) // 右侧
             arrow.close()
-            c.setFillColor(UIColor.white.cgColor)
+            c.setFillColor(UIColor(red: 0.20, green: 0.43, blue: 1.0, alpha: 1.0).cgColor)
             arrow.fill()
-            c.setStrokeColor(UIColor(red: 0.12, green: 0.30, blue: 0.85, alpha: 1.0).cgColor)
-            c.setLineWidth(1.6)
-            c.setLineJoin(.round)
-            arrow.stroke()
-            // 外圈描边
-            c.setStrokeColor(UIColor(red: 0.24, green: 0.48, blue: 1.0, alpha: 0.55).cgColor)
-            c.setLineWidth(1.5)
-            c.strokeEllipse(in: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
-            // 中心蓝色实心圆
-            c.setFillColor(UIColor(red: 0.24, green: 0.48, blue: 1.0, alpha: 1.0).cgColor)
-            c.fillEllipse(in: CGRect(x: cx - 5.5, y: cy - 5.5, width: 11, height: 11))
         }
     }
 }
