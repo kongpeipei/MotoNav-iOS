@@ -448,7 +448,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
-                if poly === context.coordinator.underPolyline {
+                if poly === self.underPolyline {
                     r.strokeColor = .white
                     r.lineWidth = 9
                 } else {
