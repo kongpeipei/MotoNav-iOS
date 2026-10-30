@@ -1287,7 +1287,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let act = liveActivity else { return }
         liveActivity = nil
         Task {
-            await act.end(.immediate)
+            await act.end(using: nil, dismissalPolicy: .immediate)
         }
     }
 
