@@ -26,6 +26,11 @@ struct MapViewRepresentable: UIViewRepresentable {
     let categoryResults: [AppModel.CategoryResult]
     /// 类别结果刷新计数
     let categoryTick: Int
+    /// 导航中（3D 俯仰视角）
+    let navigating: Bool
+    /// 地图缩放按钮计数
+    let zoomInTick: Int
+    let zoomOutTick: Int
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
     var onPoiLongPress: ((Poi) -> Void)?
     var onPoiMoved: ((Poi, Double, Double) -> Void)?
@@ -39,6 +44,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         let map = MKMapView()
         map.showsUserLocation = true
         map.showsCompass = false // 使用自绘指南针（左上角）
+        map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
+        map.isRotateEnabled = true  // 双指旋转地图
         map.delegate = context.coordinator
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
@@ -185,10 +192,45 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         map.removeOverlays(map.overlays)
         if route.count > 1 {
-            map.addOverlay(MKPolyline(coordinates: route, count: route.count))
+            // 高德式双层路线：白色描边底层 + 蓝色主层
+            map.addOverlay(UnderlayPolyline(coordinates: route, count: route.count))
+            map.addOverlay(RoutePolyline(coordinates: route, count: route.count))
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
         map.camera.heading = CLLocationDirection(heading)
+        // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
+        let isNav = navigating
+        if isNav != context.coordinator.lastPitchState {
+            context.coordinator.lastPitchState = isNav
+            map.camera.pitch = isNav ? 55 : 0
+        }
+        // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
+        if zoomInTick != context.coordinator.lastZoomInTick {
+            context.coordinator.lastZoomInTick = zoomInTick
+            if zoomInTick > 0 {
+                let reg = map.region
+                context.coordinator.setRegionProgrammatically {
+                    map.setRegion(MKCoordinateRegion(
+                        center: reg.center,
+                        span: MKCoordinateSpan(latitudeDelta: reg.span.latitudeDelta * 0.5,
+                                               longitudeDelta: reg.span.longitudeDelta * 0.5)),
+                        animated: true)
+                }
+            }
+        }
+        if zoomOutTick != context.coordinator.lastZoomOutTick {
+            context.coordinator.lastZoomOutTick = zoomOutTick
+            if zoomOutTick > 0 {
+                let reg = map.region
+                context.coordinator.setRegionProgrammatically {
+                    map.setRegion(MKCoordinateRegion(
+                        center: reg.center,
+                        span: MKCoordinateSpan(latitudeDelta: reg.span.latitudeDelta * 2.0,
+                                               longitudeDelta: reg.span.longitudeDelta * 2.0)),
+                        animated: true)
+                }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -211,7 +253,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastLocateTick = 0
         var lastFitTick = 0
         var lastGasTick = 0
+        var lastZoomInTick = 0
+        var lastZoomOutTick = 0
         var lastPreviewKey = ""
+        /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
+        var lastPitchState: Bool?
         /// 程序主动设置区域（避免被标记为用户移动）
         private var programmaticMove = false
 
@@ -393,15 +439,31 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let poly = overlay as? MKPolyline {
-                let r = MKPolylineRenderer(polyline: poly)
+            if let u = overlay as? UnderlayPolyline {
+                let r = MKPolylineRenderer(polyline: u)
+                r.strokeColor = .white
+                r.lineWidth = 9
+                r.lineCap = .round
+                return r
+            }
+            if let o = overlay as? RoutePolyline {
+                let r = MKPolylineRenderer(polyline: o)
                 r.strokeColor = .systemBlue
-                r.lineWidth = 5
+                r.lineWidth = 5.5
+                r.lineCap = .round
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)
         }
     }
+}
+
+/// 高德式双层路线：白色描边底层 + 蓝色主层
+final class UnderlayPolyline: MKPolyline {
+    required init?(coder aDecoder: NSCoder) { fatalError("not supported") }
+}
+final class RoutePolyline: MKPolyline {
+    required init?(coder aDecoder: NSCoder) { fatalError("not supported") }
 }
 
 /// 路线起点/终点标记

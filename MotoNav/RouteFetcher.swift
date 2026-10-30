@@ -1,12 +1,13 @@
 import Foundation
 import CoreLocation
 
-/// 转向步骤：距起点里程(米) + 动作 + 方向修饰 + 转入道路名 + 位置
+/// 转向步骤：距起点里程(米) + 动作 + 方向修饰 + 转入道路名 + 车道指引 + 位置
 struct RouteTurn {
     let fromStartM: Int
     let action: String
     let modifier: String
     let roadName: String
+    let lanes: [String]
     let coordinate: CLLocationCoordinate2D
 }
 
@@ -18,13 +19,14 @@ struct RouteResult {
     let turns: [RouteTurn]
 }
 
-/// 路线方案：折线 + 距离 + 用时 + 优点标签（供方案选择列表展示）
+/// 路线方案：折线 + 距离 + 用时 + 优点标签 + 途经抓拍点数（供方案选择列表展示）
 struct RouteChoice {
     let points: [CLLocationCoordinate2D]
     let distanceM: Int
     let durationS: Int
     let turns: [RouteTurn]
     let label: String
+    let poiCount: Int
 }
 
 /// 免费骑行/驾车路径规划（OSRM 公共服务，无需 API Key），
@@ -93,9 +95,17 @@ enum RouteFetcher {
                         }
                         acc += step["distance"] as? Int ?? 0
                         let roadName = step["name"] as? String ?? ""
+                        var lanes: [String] = []
+                        if let laneArr = step["lanes"] as? [[String: Any]] {
+                            for lane in laneArr {
+                                if let inds = lane["indications"] as? [String], let first = inds.first {
+                                    lanes.append(first)
+                                }
+                            }
+                        }
                         turns.append(RouteTurn(
                             fromStartM: acc, action: action, modifier: modifier,
-                            roadName: roadName,
+                            roadName: roadName, lanes: lanes,
                             coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
                     }
                 }
@@ -106,27 +116,25 @@ enum RouteFetcher {
                 durationS: r["duration"] as? Int ?? 0,
                 turns: turns))
         }
-        // 按用时升序 + 分配优点标签
+        // 按用时升序 + 高德式标签：【推荐】【距离最短】【少红绿灯】【不走高速】
         list.sort { $0.durationS < $1.durationS }
         let minDist = list.map(\.distanceM).min() ?? 0
-        var flaggedFast = false
         var out: [RouteChoice] = []
-        for rr in list {
+        for (i, rr) in list.enumerated() {
             let label: String
-            if rr.distanceM == minDist {
-                label = "路线距离最短"
-            } else if !flaggedFast {
-                flaggedFast = true
-                label = "红绿灯少"
-            } else {
-                label = "道路宽敞"
+            switch i {
+            case 0: label = "推荐"
+            case 1 where rr.distanceM == minDist: label = "距离最短"
+            case 1: label = "少红绿灯"
+            default: label = "不走高速"
             }
             out.append(RouteChoice(points: rr.points, distanceM: rr.distanceM,
-                                   durationS: rr.durationS, turns: rr.turns, label: label))
+                                   durationS: rr.durationS, turns: rr.turns, label: label, poiCount: 0))
         }
         if out.count == 1 {
             out[0] = RouteChoice(points: out[0].points, distanceM: out[0].distanceM,
-                                 durationS: out[0].durationS, turns: out[0].turns, label: "路线距离最短")
+                                 durationS: out[0].durationS, turns: out[0].turns,
+                                 label: "推荐", poiCount: 0)
         }
         return out
     }
@@ -160,9 +168,17 @@ enum RouteFetcher {
                     }
                     acc += step["distance"] as? Int ?? 0
                     let roadName = step["name"] as? String ?? ""
+                    var lanes: [String] = []
+                    if let laneArr = step["lanes"] as? [[String: Any]] {
+                        for lane in laneArr {
+                            if let inds = lane["indications"] as? [String], let first = inds.first {
+                                lanes.append(first)
+                            }
+                        }
+                    }
                     turns.append(RouteTurn(
                         fromStartM: acc, action: action, modifier: modifier,
-                        roadName: roadName,
+                        roadName: roadName, lanes: lanes,
                         coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
                 }
             }

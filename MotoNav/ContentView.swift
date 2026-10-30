@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -10,6 +11,8 @@ struct ContentView: View {
     @State private var showSuggestions = false
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
+    /// 点位详情气泡（点击点位弹出：距离/收藏/分享/导航）
+    @State private var poiDetail: Poi?
     @State private var editPoi: Poi?
     @State private var showImport = false
     @State private var exportDoc: JsonFile?
@@ -38,10 +41,23 @@ struct ContentView: View {
             topOverlay
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
-            menuOverlay
-            // 当前定位按钮：界面中间右侧
-            locateOverlay
+            if !model.navigating {
+                menuOverlay
+            }
+            // 当前定位按钮：界面中间右侧（导航中隐藏，地图已跟随）
+            locateOverlay.opacity(model.navigating ? 0 : 1)
+            // 常用地点（家/公司）快捷按钮
+            homeWorkOverlay
+            // 地图缩放 + / - 按钮
+            zoomOverlay
+            // 导航中悬浮退出按钮
+            exitNavOverlay
             bottomOverlay
+        }
+        .sheet(item: $poiDetail) { p in
+            PoiDetailSheet(poi: p, model: model) { close in
+                poiDetail = nil
+            }
         }
         .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
@@ -74,6 +90,18 @@ struct ContentView: View {
             Button("导航到这里") {
                 model.planRoute(to: "地图选点", lat: coord.latitude, lon: coord.longitude)
             }
+            Button("设为家") {
+                let p = Poi(id: 999_991, type: .SPEED, name: "家", lat: coord.latitude, lon: coord.longitude,
+                            radiusM: 50, enabled: true, note: "常用地点-家")
+                model.setHome(p)
+                model.status = "已将当前位置设为家（长按点位可改）"
+            }
+            Button("设为公司") {
+                let p = Poi(id: 999_992, type: .SPEED, name: "公司", lat: coord.latitude, lon: coord.longitude,
+                            radiusM: 50, enabled: true, note: "常用地点-公司")
+                model.setWork(p)
+                model.status = "已将当前位置设为公司（长按点位可改）"
+            }
             Button("取消", role: .cancel) {}
         } message: { coord in
             Text(String(format: "纬度 %.5f\n经度 %.5f", coord.latitude, coord.longitude))
@@ -92,6 +120,12 @@ struct ContentView: View {
             Button("导航到这里") {
                 model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
             }
+            Button(model.isFavorite(p) ? "取消收藏" : "收藏点位") {
+                model.toggleFavorite(p)
+                model.status = model.isFavorite(p) ? "已收藏：\(p.name)" : "已取消收藏：\(p.name)"
+            }
+            Button("设为家") { model.setHome(p); model.status = "已将「\(p.name)」设为家" }
+            Button("设为公司") { model.setWork(p); model.status = "已将「\(p.name)」设为公司" }
             Button("编辑该点位") { editPoi = p }
             Button("删除该点位", role: .destructive) {
                 model.deletePoi(id: p.id)
@@ -110,6 +144,20 @@ struct ContentView: View {
         .onChange(of: scenePhase) { phase in
             if phase == .active {
                 model.checkClipboard()
+            }
+        }
+        // 行程总结（到达/退出导航时弹出，高德式行程卡）
+        .alert("本次行程", isPresented: Binding(
+            get: { model.tripSummary != nil },
+            set: { if !$0 { model.tripSummary = nil } }
+        )) {
+            Button("好", role: .cancel) { model.tripSummary = nil }
+        } message: {
+            if let s = model.tripSummary {
+                Text("目的地：\(s.destName)\n"
+                    + "里程：\(String(format: "%.1f", Double(s.distanceM) / 1000.0)) 公里\n"
+                    + "用时：\(s.durationS / 60) 分钟 \(s.durationS % 60) 秒\n"
+                    + "沿途抓拍点位：\(s.snapCount) 处")
             }
         }
         // 预览点变化（含在线搜索兜底）→ 同步"导航去此处"按钮
@@ -139,6 +187,9 @@ struct ContentView: View {
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
             categoryTick: model.categoryTick,
+            navigating: model.navigating,
+            zoomInTick: model.zoomInTick,
+            zoomOutTick: model.zoomOutTick,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -150,12 +201,8 @@ struct ContentView: View {
                 model.updatePoi(id: p.id, type: p.type, name: p.name, lat: nLat, lon: nLon, radiusM: p.radiusM)
             },
             onPoiSelect: { p in
-                model.selectedPoi = p
-                goHereLabel = "导航去此处"
-                goHereName = p.name
-                goHereLat = p.lat
-                goHereLon = p.lon
-                model.clearPreview()
+                haptic()
+                poiDetail = p
             },
             onPlaceSelect: { pl in
                 goHereLabel = "导航去此处"
@@ -226,64 +273,65 @@ struct ContentView: View {
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
-            categoryBar
-            historyBar
-            if model.navigating {
-                navInfoCard
-                // 导航中：搜索框替换为退出导航按钮
-                Button {
-                    model.toggleNavigation()
-                } label: {
-                    Text("退出导航")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.red, in: RoundedRectangle(cornerRadius: 10))
-                        .padding(.horizontal)
-                }
-                .padding(.vertical, 6)
-            } else {
+            if !model.navigating {
+                // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
+                categoryBar
+                historyBar
                 routeChoiceList
                 goHereBar
                 searchBar
+            } else {
+                navInfoCard
+                snapAlertCard
             }
         }
     }
 
-    /// 高德式导航信息卡：下一转向（图标+距离+路名）+ 剩余里程/时间 + 实时速度
+    /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 剩余里程/时间 + 实时速度
     private var navInfoCard: some View {
         Group {
             if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
                 HStack(spacing: 12) {
-                    // 左：下一转向
-                    VStack(alignment: .leading, spacing: 2) {
+                    // 左：下一转向（大图标 + 大字路名，高德导航主视觉）
+                    VStack(alignment: .leading, spacing: 4) {
                         if let t = ns.nextTurn {
-                            HStack(spacing: 6) {
+                            HStack(spacing: 8) {
                                 Image(systemName: navTurnIcon(t.modifier))
-                                    .font(.title2)
+                                    .font(.system(size: 34, weight: .bold))
                                     .foregroundStyle(.white)
-                                Text("前方\(navDist(ns.distToTurnM))\(navTurnText(t))")
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.white)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("前方\(navDist(ns.distToTurnM))\(navTurnText(t))")
+                                        .font(.title3.bold())
+                                        .foregroundStyle(.white)
+                                    if !t.roadName.isEmpty {
+                                        Text(t.roadName)
+                                            .font(.subheadline.bold())
+                                            .foregroundStyle(.white.opacity(0.92))
+                                    }
+                                }
                             }
-                            if !t.roadName.isEmpty {
-                                Text(t.roadName)
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.85))
+                            // 车道指引（高德导航侧边车道箭头）
+                            if !t.lanes.isEmpty {
+                                HStack(spacing: 3) {
+                                    ForEach(t.lanes, id: \.self) { lane in
+                                        Image(systemName: navLaneIcon(lane))
+                                            .font(.footnote.bold())
+                                            .foregroundStyle(.white.opacity(0.9))
+                                    }
+                                }
                             }
                         } else {
                             Text("沿当前道路直行")
-                                .font(.subheadline.bold())
+                                .font(.title3.bold())
                                 .foregroundStyle(.white)
                         }
                     }
                     Spacer()
-                    // 中：剩余里程/时间
+                    // 中：剩余里程/时间（大字分层）
                     VStack(alignment: .trailing, spacing: 2) {
                         HStack(alignment: .firstTextBaseline, spacing: 3) {
                             Text(String(format: "%.1f", Double(ns.remainM) / 1000.0))
-                                .font(.title3.bold())
+                                .font(.system(size: 30, weight: .heavy))
                                 .foregroundStyle(.white)
                             Text("公里")
                                 .font(.caption)
@@ -291,14 +339,14 @@ struct ContentView: View {
                         }
                         if ns.remainS > 0 {
                             Text("剩余 \(ns.remainS / 60) 分钟")
-                                .font(.footnote)
-                                .foregroundStyle(.white.opacity(0.9))
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white.opacity(0.95))
                         }
                     }
                     // 右：实时速度
                     VStack(alignment: .trailing, spacing: 0) {
                         Text("\(Int(ns.speedKph))")
-                            .font(.title.bold())
+                            .font(.system(size: 34, weight: .heavy))
                             .foregroundStyle(.white)
                         Text("km/h")
                             .font(.caption2)
@@ -311,6 +359,54 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 4)
             }
+        }
+    }
+
+    /// 导航中抓拍预警条（最近路线点位 + 类型图标 + 距离）
+    private var snapAlertCard: some View {
+        Group {
+            if !model.routePois.isEmpty, let loc = model.currentLocation {
+                let nearest = model.routePois.min {
+                    model.distance(to: $0, from: loc) < model.distance(to: $1, from: loc)
+                }
+                if let n = nearest {
+                    let d = model.distance(to: n, from: loc)
+                    if d < 900 {
+                        HStack(spacing: 6) {
+                            Image(systemName: n.type == .RED_LIGHT ? "stopwatch" : "camera")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.yellow)
+                            Text("前方\(Int(d))米 \(n.type.voicePrefix) · \(n.name)")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(red: 0.9, green: 0.3, blue: 0.2).opacity(0.85),
+                                    in: RoundedRectangle(cornerRadius: 8))
+                        .padding(.horizontal)
+                        .padding(.bottom, 6)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 车道箭头图标（lane indication）
+    private func navLaneIcon(_ lane: String) -> String {
+        switch lane {
+        case "left": return "arrow.left"
+        case "slight left": return "arrow.up.left"
+        case "sharp left": return "arrow.left"
+        case "right": return "arrow.right"
+        case "slight right": return "arrow.up.right"
+        case "sharp right": return "arrow.right"
+        case "uturn": return "arrow.uturn.backward"
+        case "straight": return "arrow.up"
+        case "none": return "minus"
+        default: return "arrow.up"
         }
     }
 
@@ -387,6 +483,7 @@ struct ContentView: View {
                 VStack(spacing: 8) {
                     // 定位按钮：白底圆圈中心点（点击后收起"导航到这里"并回中跟随）
                     Button {
+                        haptic()
                         goHereName = nil
                         goHereLat = 0
                         goHereLon = 0
@@ -436,6 +533,7 @@ struct ContentView: View {
         Group {
             if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
+                    haptic()
                     model.fetchRouteChoices(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
                     // "导航到这里"触发 → 允许显示清空路线竖条
                     showClearRouteBtn = true
@@ -470,13 +568,14 @@ struct ContentView: View {
                     }
                     ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { _, c in
                         Button {
+                            haptic()
                             model.applyRouteChoice(c)
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("★ \(c.label)　·　\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里")
                                     .font(.footnote.bold())
                                     .foregroundStyle(.primary)
-                                Text("导航用时约 \(c.durationS / 60) 分钟")
+                                Text("导航用时约 \(c.durationS / 60) 分钟 · 途经抓拍 \(c.poiCount) 处 · 路口约 \(c.turns.count) 个")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -492,6 +591,135 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 4)
             }
+        }
+    }
+
+    /// 常用地点快捷按钮（家/公司，未设置时提示长按地图设置）
+    private var homeWorkOverlay: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                VStack(spacing: 8) {
+                    Button {
+                        haptic()
+                        if let h = model.homePlace {
+                            model.fetchRouteChoices(to: h.name, lat: h.lat, lon: h.lon)
+                        } else {
+                            model.status = "请长按地图选点后「设为家」"
+                        }
+                    } label: {
+                        Text("家")
+                            .font(.headline)
+                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                            .frame(width: 44, height: 44)
+                            .background(Color.white, in: Circle())
+                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    }
+                    Button {
+                        haptic()
+                        if let w = model.workPlace {
+                            model.fetchRouteChoices(to: w.name, lat: w.lat, lon: w.lon)
+                        } else {
+                            model.status = "请长按地图选点后「设为公司」"
+                        }
+                    } label: {
+                        Text("公司")
+                            .font(.headline)
+                            .foregroundStyle(.orange)
+                            .frame(width: 44, height: 44)
+                            .background(Color.white, in: Circle())
+                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    }
+                }
+                .padding(.trailing, 18)
+                .offset(y: -150)
+                .opacity(model.navigating ? 0 : 1)
+            }
+            Spacer()
+        }
+    }
+
+    /// 地图缩放 + / - 按钮（右下角，高德式）
+    private var zoomOverlay: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                VStack(spacing: 6) {
+                    Button {
+                        haptic()
+                        model.zoomInTick += 1
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.title3.bold())
+                            .foregroundStyle(.primary)
+                            .frame(width: 44, height: 44)
+                            .background(Color.white, in: Circle())
+                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    }
+                    Button {
+                        haptic()
+                        model.zoomOutTick += 1
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.title3.bold())
+                            .foregroundStyle(.primary)
+                            .frame(width: 44, height: 44)
+                            .background(Color.white, in: Circle())
+                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    }
+                }
+                .padding(.trailing, 18)
+                .padding(.bottom, 150)
+            }
+        }
+    }
+
+    /// 导航中悬浮退出按钮（右上角红色胶囊，高德导航式）
+    private var exitNavOverlay: some View {
+        VStack {
+            HStack {
+                Spacer()
+                if model.navigating {
+                    Button {
+                        haptic()
+                        model.toggleNavigation()
+                    } label: {
+                        Text("退出导航")
+                            .font(.footnote.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.red, in: Capsule())
+                            .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
+                    }
+                }
+            }
+            .padding(.trailing, 12)
+            .padding(.top, 8)
+            Spacer()
+        }
+    }
+
+    /// 触感反馈（iOS Haptic）
+    private func haptic() {
+        let g = UIImpactFeedbackGenerator(style: .medium)
+        g.impactOccurred()
+    }
+
+    /// 分享点位（motonav:// 深链，供好友点击直达）
+    private func sharePoi(_ p: Poi) {
+        let link = "motonav://\(p.name)@\(p.lat),\(p.lon)"
+        let text = "摩卫士违法拍照点位：\(p.name)（\(p.type.label)）\n坐标 \(String(format: "%.5f,%.5f", p.lat, p.lon))\n打开链接直接导航：\(link)"
+        let avc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let root = scene.windows.first?.rootViewController {
+            root.present(avc, animated: true)
         }
     }
 
@@ -878,5 +1106,116 @@ struct JsonFile: FileDocument {
     }
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: Data(text.utf8))
+    }
+}
+
+/// 点位详情气泡（高德式地点卡片）：名称/类型/距我/收藏/分享/导航/设为常用
+struct PoiDetailSheet: View {
+    let poi: Poi
+    @ObservedObject var model: AppModel
+    let onClose: (Bool) -> Void
+    @State private var favorite = false
+    @State private var distText = ""
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("点位详情")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    onClose(true)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            VStack(spacing: 4) {
+                Text(poi.name)
+                    .font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                Text("\(poi.type.label) · \(distText)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text(String(format: "纬度 %.5f  经度 %.5f", poi.lat, poi.lon))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            HStack(spacing: 10) {
+                Button {
+                    favorite.toggle()
+                    model.toggleFavorite(poi)
+                } label: {
+                    Label(favorite ? "已收藏" : "收藏", systemImage: favorite ? "star.fill" : "star")
+                        .font(.footnote.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(favorite ? Color.yellow.opacity(0.25) : Color.gray.opacity(0.12),
+                                    in: RoundedRectangle(cornerRadius: 8))
+                }
+                Button {
+                    let link = "motonav://\(poi.name)@\(poi.lat),\(poi.lon)"
+                    let text = "摩卫士违法拍照点位：\(poi.name)（\(poi.type.label)）\n坐标 \(String(format: "%.5f,%.5f", poi.lat, poi.lon))\n打开链接直接导航：\(link)"
+                    let avc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let root = scene.windows.first?.rootViewController {
+                        root.present(avc, animated: true)
+                    }
+                } label: {
+                    Label("分享", systemImage: "square.and.arrow.up")
+                        .font(.footnote.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            HStack(spacing: 10) {
+                Button {
+                    model.setHome(poi)
+                    model.status = "已将「\(poi.name)」设为家"
+                } label: {
+                    Text("设为家")
+                        .font(.footnote.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                Button {
+                    model.setWork(poi)
+                    model.status = "已将「\(poi.name)」设为公司"
+                } label: {
+                    Text("设为公司")
+                        .font(.footnote.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            Button {
+                model.fetchRouteChoices(to: poi.name, lat: poi.lat, lon: poi.lon)
+                onClose(true)
+            } label: {
+                Text("导航去此处")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(20)
+        .presentationDetents([.height(320)])
+        .onAppear {
+            favorite = model.isFavorite(poi)
+            if let loc = model.currentLocation {
+                let d = model.distance(to: poi, from: loc)
+                distText = d >= 1000
+                    ? String(format: "距我 %.1f 公里", d / 1000.0)
+                    : String(format: "距我 %d 米", Int(d))
+            } else {
+                distText = "尚未定位"
+            }
+        }
     }
 }

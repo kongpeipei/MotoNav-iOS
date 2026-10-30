@@ -31,6 +31,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var locateTick = 0
     /// 路线全览请求计数（规划完成后 +1，驱动地图缩放全览）
     @Published var fitTick = 0
+    /// 地图缩放按钮计数（+1 放大 / 缩小，MapView 响应）
+    @Published var zoomInTick = 0
+    @Published var zoomOutTick = 0
     /// 手机朝向（度，0=北，顺时针）
     @Published var heading: Double = 0
     /// 自定义背景图片（相册选择，v1.11 已移除入口，保留字段兼容旧数据）
@@ -63,6 +66,27 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var simTimer: Timer?
     private var simStep = 0
     private var lastTrigger: [Int64: Date] = [:]
+    /// 预警分档播报状态：0=未播 1=500m档 2=300m档（按点位）
+    private var alertStage: [Int64: Int] = [:]
+    /// 偏离路线检测
+    private var offRouteCount = 0
+    private var lastReroute = Date(timeIntervalSince1970: 0)
+    /// 导航开始时间（行程总结用）
+    private var navStart: Date?
+    /// 收藏点位（key: "lat,lon"）
+    @Published var favorites: [String: String] = [:]
+    /// 常用地点（家/公司）
+    struct SavedPlace: Codable { var name: String; var lat: Double; var lon: Double }
+    @Published var homePlace: SavedPlace?
+    @Published var workPlace: SavedPlace?
+    /// 行程总结（到达或退出导航时生成）
+    struct TripSummary {
+        let destName: String
+        let distanceM: Int
+        let durationS: Int
+        let snapCount: Int
+    }
+    @Published var tripSummary: TripSummary?
 
     /// 导航状态
     private var destLat = 0.0
@@ -160,9 +184,59 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         pois = repo.load()
         loadHistory()
         loadHefeiPois()
+        loadFavorites()
+        loadHomeWork()
         NotificationCenter.default.addObserver(
             self, selector: #selector(authorizeAndStart),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    // MARK: - 收藏 / 家 / 公司（v1.29）
+
+    private let favKey = "fav_pois"
+    private let homeKey = "home_place"
+    private let workKey = "work_place"
+
+    private func loadFavorites() {
+        if let d = UserDefaults.standard.dictionary(forKey: favKey) as? [String: String] {
+            favorites = d
+        }
+    }
+
+    private func loadHomeWork() {
+        let ud = UserDefaults.standard
+        if let d = ud.data(forKey: homeKey), let p = try? JSONDecoder().decode(SavedPlace.self, from: d) {
+            homePlace = p
+        }
+        if let d = ud.data(forKey: workKey), let p = try? JSONDecoder().decode(SavedPlace.self, from: d) {
+            workPlace = p
+        }
+    }
+
+    func isFavorite(_ p: Poi) -> Bool {
+        favorites["\(p.latitude),\(p.longitude)"] != nil
+    }
+
+    func toggleFavorite(_ p: Poi) {
+        let key = "\(p.latitude),\(p.longitude)"
+        if favorites[key] != nil {
+            favorites.removeValue(forKey: key)
+        } else {
+            favorites[key] = p.name
+        }
+        UserDefaults.standard.set(favorites, forKey: favKey)
+    }
+
+    func setHome(_ p: Poi) {
+        homePlace = SavedPlace(name: p.name, lat: p.latitude, lon: p.longitude)
+        let ud = UserDefaults.standard
+        if let d = try? JSONEncoder().encode(homePlace) { ud.set(d, forKey: homeKey) }
+    }
+
+    func setWork(_ p: Poi) {
+        workPlace = SavedPlace(name: p.name, lat: p.latitude, lon: p.longitude)
+        let ud = UserDefaults.standard
+        if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
     }
 
     // MARK: - 网络查询工具（v1.26：统一超时 + 备用镜像 + 动态搜索范围）
@@ -685,7 +759,25 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let now = Date()
         for p in pois where p.enabled && allPoiEnabled && enabledTypes.contains(p.type) {
             let d = distanceM(coord, p.coordinate)
-            if d <= p.radiusM {
+            let onRoute = navigating && routePois.contains { $0.id == p.id }
+            if onRoute {
+                // 导航中：500m/300m/进入 三档播报
+                let stage = alertStage[p.id] ?? 0
+                if d <= 500 && stage < 1 {
+                    alertStage[p.id] = 1
+                    status = "前方约\(Int(d))米\(p.type.voicePrefix)，\(p.name)，请注意"
+                    speak("前方约\(Int(d))米\(p.type.voicePrefix)，\(p.name)，请注意")
+                } else if d <= 300 && stage < 2 {
+                    alertStage[p.id] = 2
+                    status = "接近\(p.type.voicePrefix)点位：\(p.name)，请减速"
+                    speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速")
+                } else if d <= p.radiusM && stage < 3 {
+                    alertStage[p.id] = 3
+                    triggerAlert(p, distance: d)
+                } else if d > 500 {
+                    alertStage[p.id] = 0
+                }
+            } else if d <= p.radiusM {
                 if let last = lastTrigger[p.id], now.timeIntervalSince(last) < 90 { continue }
                 lastTrigger[p.id] = now
                 triggerAlert(p, distance: d)
@@ -707,6 +799,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func distanceM(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
         CLLocation(latitude: a.latitude, longitude: a.longitude)
             .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+    }
+
+    /// 当前定位到点位的直线距离（UI 用）
+    func distance(to p: Poi, from coord: CLLocationCoordinate2D) -> Double {
+        distanceM(coord, p.coordinate)
     }
 
     // MARK: - 语音
@@ -832,7 +929,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 按名称在点位库中搜索；返回匹配列表（含类型标签）
     func searchPois(_ query: String) -> [Poi] {
         guard !query.isEmpty else { return [] }
-        return pois.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        return pois.filter { fuzzyMatch($0.name, query) }
+    }
+
+    // MARK: - 拼音/错别字模糊匹配（v1.29）
+    private func pinyinOf(_ s: String) -> (full: String, initials: String) {
+        let m = NSMutableString(string: s)
+        CFStringTransform(m, nil, kCFStringTransformToLatin, false)
+        CFStringTransform(m, nil, kCFStringTransformStripDiacritics, false)
+        let spaced = (m as String).lowercased()
+        let full = spaced.replacingOccurrences(of: " ", with: "")
+        let initials = spaced.split(separator: " ").compactMap { $0.first }.map(String.init).joined()
+        return (full, initials)
+    }
+
+    private func fuzzyMatch(_ s: String, _ q: String) -> Bool {
+        if s.localizedCaseInsensitiveContains(q) { return true }
+        let (pf, pi) = pinyinOf(s)
+        let (qf, _) = pinyinOf(q)
+        if !qf.isEmpty {
+            if pf.contains(qf) || qf.contains(pf) || pf == qf { return true }
+            if pi.hasPrefix(qf) { return true }
+        }
+        return false
     }
 
     /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺 + 地标词典（最多 10 条）；
@@ -845,7 +964,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         for lm in searchLandmarks where lm.matches(query) { pool.insert(lm.name) }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { return Array(pool).prefix(10).map { $0 } }
-        var matched = pool.filter { $0.localizedCaseInsensitiveContains(q) }.prefix(10).map { $0 }
+        var matched = pool.filter { fuzzyMatch($0, q) }.prefix(10).map { $0 }
         if matched.isEmpty {
             matched = ["🔍 在线搜索「\(q)」"]
         }
@@ -931,7 +1050,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             } else if choices.count == 1 {
                 applyRouteChoice(choices[0], name: name)
             } else {
-                routeChoices = choices
+                routeChoices = choices.map { c in
+                    let n = nearbyPoisOnRoute(c.points).count
+                    return RouteChoice(points: c.points, distanceM: c.distanceM,
+                                       durationS: c.durationS, turns: c.turns,
+                                       label: c.label, poiCount: n)
+                }
             }
         }
     }
@@ -987,24 +1111,74 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func toggleNavigation() {
         if navigating {
             navigating = false
+            finishTrip()
             speak("导航结束")
             status = "导航已结束"
         } else {
             guard route.count >= 2 else { status = "请先搜索目的地并规划路线"; return }
             navigating = true
+            navStart = Date()
+            alertStage = [:]
+            offRouteCount = 0
             startMonitoring()
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
         }
     }
 
+    /// 行程总结（到达或退出导航时生成）
+    private func finishTrip() {
+        guard let start = navStart else { return }
+        let dur = Int(Date().timeIntervalSince(start))
+        tripSummary = TripSummary(
+            destName: destName,
+            distanceM: routeDistanceM,
+            durationS: dur,
+            snapCount: routePois.count)
+        navStart = nil
+    }
+
+    /// 偏离路线检测：距路线折线 >80m 连续 3 次且距上次重规划 >25s → 自动重规划并播报
+    private func rerouteIfOffTrack(at coord: CLLocationCoordinate2D) {
+        guard navigating, route.count >= 2 else { offRouteCount = 0; return }
+        var minD = Double.greatestFiniteMagnitude
+        for i in 0..<(route.count - 1) {
+            let d = distToSegment(coord, route[i], route[i + 1])
+            if d < minD { minD = d }
+        }
+        offRouteCount = (minD > 80) ? offRouteCount + 1 : 0
+        guard offRouteCount >= 3, Date().timeIntervalSince(lastReroute) > 25 else { return }
+        offRouteCount = 0
+        lastReroute = Date()
+        speak("路线已重新规划，请按新路线行驶")
+        status = "路线已重新规划，请按新路线行驶"
+        guard let start = currentLocation else { return }
+        Task {
+            if let r = await RouteFetcher.fetch(
+                from: start,
+                to: CLLocationCoordinate2D(latitude: destLat, longitude: destLon)) {
+                route = r.points
+                routeTurns = r.turns
+                routeDistanceM = r.distanceM
+                routeDurationS = r.durationS
+                routePois = nearbyPoisOnRoute(r.points)
+                lastTurnSpoken = -1
+                farAnnounced.removeAll()
+                alertStage = [:]
+                fitTick += 1
+            }
+        }
+    }
+
     private func checkNavigation(at coord: CLLocationCoordinate2D) {
         guard navigating else { return }
+        rerouteIfOffTrack(at: coord)
         let toDest = distanceM(coord, CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
         if toDest < 100 {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"
             navigating = false
+            finishTrip()
             routePois = []
             return
         }
