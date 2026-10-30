@@ -40,6 +40,7 @@ enum RouteFetcher {
     }
 
     /// 获取多条路线方案（alternatives=3），按用时升序 + 分配优点标签
+    /// v1.26：增加请求超时与一次重试，公共实例不稳定时降低"直线降级"概率
     static func fetchAll(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D
@@ -49,12 +50,16 @@ enum RouteFetcher {
             "https://router.project-osrm.org/route/v1/driving/\(coord)"
             + "?overview=full&geometries=geojson&steps=true&alternatives=3"
         ) else { return [] }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return parseAll(data)
-        } catch {
-            return []
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+        for _ in 0..<2 {
+            if let (data, _) = try? await URLSession.shared.data(for: req) {
+                let parsed = parseAll(data)
+                if !parsed.isEmpty { return parsed }
+            }
         }
+        return []
     }
 
     private static func parseAll(_ data: Data) -> [RouteChoice] {
