@@ -35,7 +35,6 @@ struct ContentView: View {
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
             menuOverlay
-            gasOverlay
             bottomOverlay
         }
         .sheet(item: $editPoi) { p in
@@ -208,27 +207,6 @@ struct ContentView: View {
         }
     }
 
-    /// 加油站按钮：位于 ⋯ 按钮下方（液态玻璃）
-    private var gasOverlay: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Button {
-                    model.fetchGasStations()
-                } label: {
-                    Text("⛽")
-                        .font(.title3)
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                }
-                .padding(.trailing, 12)
-                .padding(.top, 92)
-            }
-            Spacer()
-        }
-    }
-
     /// 底部浮层：类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
@@ -306,7 +284,7 @@ struct ContentView: View {
         }
     }
 
-    /// 当前定位按钮：高德同款（蓝色圆底白箭头），位于搜索框右上方
+    /// 当前定位按钮：高德同款（白色圆底 + 圆圈中心点），位于搜索框右上方
     private var locateRow: some View {
         HStack {
             Spacer()
@@ -314,11 +292,11 @@ struct ContentView: View {
                 model.centerOnUser()
             } label: {
                 ZStack {
-                    Circle().fill(Color(red: 0.16, green: 0.38, blue: 1.0))
-                    Circle().strokeBorder(.white.opacity(0.85), lineWidth: 2)
-                    Image(systemName: "location.fill")
+                    Circle().fill(.white)
+                    Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                    Image(systemName: "scope")
                         .font(.title3)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                 }
                 .frame(width: 44, height: 44)
                 .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
@@ -417,57 +395,57 @@ struct ContentView: View {
         .background(.black.opacity(0.18))
     }
 
-    /// 搜索输入行：输入框（与手机等宽、加高、液态玻璃、圆角、含一键清除 x）+ 搜索按钮
+    /// 搜索输入行：高德样式通栏圆角胶囊（放大镜 + 输入 + ✕ + 搜索按钮为一体）
     private var searchInputRow: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                TextField("搜索目的地", text: $searchText)
-                    .font(.subheadline)
-                    .focused($searchFocused)
-                    .submitLabel(.search)
-                    .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
-                    .onChange(of: searchText) { newValue in
-                        suggestions = model.searchSuggestions(newValue).map { displayName($0) }
-                        if !suggestions.contains(NAV_ITEM) {
-                            suggestions.append(NAV_ITEM)
-                        }
-                        showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextField("搜索目的地", text: $searchText)
+                .font(.subheadline)
+                .focused($searchFocused)
+                .submitLabel(.search)
+                .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
+                .onChange(of: searchText) { newValue in
+                    suggestions = model.searchSuggestions(newValue).map { displayName($0) }
+                    if !suggestions.contains(NAV_ITEM) {
+                        suggestions.append(NAV_ITEM)
                     }
-                // 一键清除输入内容（有内容时显示）
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                        suggestions = []
-                        showSuggestions = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                    showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
                 }
+            // 一键清除输入内容（有内容时显示）
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    suggestions = []
+                    showSuggestions = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            .frame(maxWidth: .infinity) // 与手机同宽
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12) // 加高，方便点击输入
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 0.8))
-
+            // 搜索按钮（与输入框同一胶囊内，右侧）
             Button {
                 showSuggestions = false
                 dismissKeyboard()
                 doSearch()
             } label: {
-                Image(systemName: "arrow.right.circle.fill")
-                    .font(.title2)
+                Text("搜索")
+                    .font(.subheadline.bold())
                     .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
             }
-            .padding(6)
-            .background(.ultraThinMaterial, in: Circle())
+            .buttonStyle(.plain)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 0.8))
         .padding(.horizontal)
         .padding(.vertical, 6)
     }
