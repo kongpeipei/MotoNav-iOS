@@ -855,13 +855,37 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         distanceM(coord, p.coordinate)
     }
 
-    // MARK: - 语音
+    // MARK: - 语音（四川甜妹：高音调普通话女声 + 四川语气词，系统 TTS 无四川话方言）
 
     func speak(_ text: String) {
-        let u = AVSpeechUtterance(string: text)
+        let u = AVSpeechUtterance(string: sweetSichuan(text))
         u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-        u.rate = 0.5
+        u.rate = 0.48          // 稍慢，更柔
+        u.pitchMultiplier = 1.18 // 音调偏高，更甜
         speech.speak(u)
+    }
+
+    /// 川味语气词化（先长短语后短词，避免嵌套替换错乱）
+    private func sweetSichuan(_ text: String) -> String {
+        var s = text
+        let map: [(String, String)] = [
+            ("前方即将到达目的地", "马上就到咯"),
+            ("路线已重新规划", "路线重新规划咯"),
+            ("导航结束", "导航结束咯"),
+            ("请提前减速", "提前减速哦"),
+            ("前方", "前头"),
+            ("米右转", "米右转咯"),
+            ("米左转", "米左转咯"),
+            ("右转", "右转咯"),
+            ("左转", "左转咯"),
+            ("请注意", "注意哦"),
+            ("请减速", "减速嘛"),
+            ("到达", "到咯"),
+        ]
+        for (k, v) in map {
+            s = s.replacingOccurrences(of: k, with: v)
+        }
+        return s
     }
 
     // MARK: - 本地通知

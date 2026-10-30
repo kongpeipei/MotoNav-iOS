@@ -184,6 +184,8 @@ struct ContentView: View {
             pois: model.pois,
             userLocation: model.currentLocation,
             route: model.route,
+            choiceRoutes: model.routeChoices.map(\.points),
+            selectedRouteIdx: model.selectedRouteIdx,
             routePois: model.routePois,
             locateTick: model.locateTick,
             fitTick: model.fitTick,

@@ -7,6 +7,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
     let route: [CLLocationCoordinate2D]
+    /// 全部路线方案折线（规划态同时显示：推荐草绿 + 备选浅绿，高德式）
+    let choiceRoutes: [[CLLocationCoordinate2D]]
+    /// 当前选中方案下标（高德式：选中草绿实线，其余浅绿虚线）
+    let selectedRouteIdx: Int
     let routePois: [Poi]
     /// 定位请求计数（点击定位按钮 +1，触发地图回中）
     let locateTick: Int
@@ -85,12 +89,14 @@ struct MapViewRepresentable: UIViewRepresentable {
                     animated: false)
             }
         }
-        // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回）
+        // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回；包含全部方案路线）
         if fitTick != context.coordinator.lastFitTick && route.count > 1 {
             context.coordinator.lastFitTick = fitTick
             context.coordinator.setRegionProgrammatically {
                 var rect = MKMapRect.null
-                for c in route {
+                var pts = route
+                for r in choiceRoutes { pts.append(contentsOf: r) }
+                for c in pts {
                     let p = MKMapPoint(c)
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
@@ -194,14 +200,32 @@ struct MapViewRepresentable: UIViewRepresentable {
             map.addAnnotation(CategoryAnnotation(result: r))
         }
         map.removeOverlays(map.overlays)
+        context.coordinator.underPolyline = nil
+        context.coordinator.mainPolyline = nil
+        context.coordinator.alternatePolylines = []
         if route.count > 1 {
-            // 高德式双层路线：白色描边底层 + 蓝色主层（以引用区分，避免子类化便利构造问题）
-            let under = MKPolyline(coordinates: route, count: route.count)
-            context.coordinator.underPolyline = under
-            map.addOverlay(under)
-            map.addOverlay(MKPolyline(coordinates: route, count: route.count))
-        } else {
-            context.coordinator.underPolyline = nil
+            if navigating {
+                // 导航中只画当前路线（草绿双层，高德导航推荐色）
+                let under = MKPolyline(coordinates: route, count: route.count)
+                context.coordinator.underPolyline = under
+                let main = MKPolyline(coordinates: route, count: route.count)
+                context.coordinator.mainPolyline = main
+                map.addOverlay(under)
+                map.addOverlay(main)
+            } else {
+                // 规划态：备选方案浅绿虚线 + 当前方案草绿双层（高德式同屏多路线）
+                for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
+                    let alt = MKPolyline(coordinates: pts, count: pts.count)
+                    context.coordinator.alternatePolylines.append(alt)
+                    map.addOverlay(alt)
+                }
+                let under = MKPolyline(coordinates: route, count: route.count)
+                context.coordinator.underPolyline = under
+                let main = MKPolyline(coordinates: route, count: route.count)
+                context.coordinator.mainPolyline = main
+                map.addOverlay(under)
+                map.addOverlay(main)
+            }
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
         // 用户手动拖动/旋转地图后暂停跟随（高德式：点定位按钮恢复）
@@ -295,6 +319,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPitchState: Bool?
         /// 路线白色描边底层引用（renderer 区分双层）
         var underPolyline: MKPolyline?
+        /// 当前方案主层（草绿色，renderer 区分）
+        var mainPolyline: MKPolyline?
+        /// 备选方案折线（浅绿色虚线，renderer 区分）
+        var alternatePolylines: [MKPolyline] = []
         /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
         var userMoved = false
         /// 导航跟随触发记忆
@@ -489,11 +517,21 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
                 if poly === self.underPolyline {
+                    // 白色描边底层（细，路线更贴合道路）
                     r.strokeColor = .white
-                    r.lineWidth = 9
+                    r.lineWidth = 7
+                } else if poly === self.mainPolyline {
+                    // 推荐路线：草绿色（高德推荐色）
+                    r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
+                    r.lineWidth = 4
+                } else if self.alternatePolylines.contains(where: { $0 === poly }) {
+                    // 备选路线：浅绿色虚线
+                    r.strokeColor = UIColor(red: 0.60, green: 0.85, blue: 0.62, alpha: 0.95)
+                    r.lineWidth = 4
+                    r.lineDashPattern = [6, 6]
                 } else {
-                    r.strokeColor = .systemBlue
-                    r.lineWidth = 5.5
+                    r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
+                    r.lineWidth = 4
                 }
                 return r
             }
