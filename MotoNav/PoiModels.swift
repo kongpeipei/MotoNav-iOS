@@ -7,12 +7,14 @@ enum PoiType: String, Codable, CaseIterable {
     case RED_LIGHT
     case RESTRICTION
     case LANE
+    case SPEED
 
     var label: String {
         switch self {
         case .RED_LIGHT: return "闯红灯拍照"
         case .RESTRICTION: return "限行/禁摩"
-        case .LANE: return "车道拍照"
+        case .LANE: return "压线拍照"
+        case .SPEED: return "超速拍照"
         }
     }
 
@@ -20,7 +22,8 @@ enum PoiType: String, Codable, CaseIterable {
         switch self {
         case .RED_LIGHT: return "闯红灯拍照"
         case .RESTRICTION: return "限行禁摩路段"
-        case .LANE: return "车道违章拍照"
+        case .LANE: return "压线违章拍照"
+        case .SPEED: return "超速拍照"
         }
     }
 
@@ -29,6 +32,7 @@ enum PoiType: String, Codable, CaseIterable {
         case .RED_LIGHT: return .systemRed
         case .RESTRICTION: return .systemOrange
         case .LANE: return .systemCyan
+        case .SPEED: return .systemOrange.withAlphaComponent(0.85)
         }
     }
 }

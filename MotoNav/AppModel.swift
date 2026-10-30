@@ -25,6 +25,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var selectedPoi: Poi?
     @Published var navigating = false
     @Published var searchHistory: [String] = []
+    /// 定位按钮点击计数（驱动地图回中）
+    @Published var locateTick = 0
 
     /// 类型筛选（默认全部启用）
     var enabledTypes: Set<PoiType> = Set(PoiType.allCases)
@@ -287,6 +289,21 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func searchPois(_ query: String) -> [Poi] {
         guard !query.isEmpty else { return [] }
         return pois.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
+    /// 搜索智能联想：点位名称 + 历史目的地（最多 10 条）
+    func searchSuggestions(_ query: String) -> [String] {
+        var pool = Set<String>()
+        for p in pois { pool.insert(p.name) }
+        for h in searchHistory { pool.insert(h) }
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty { return Array(pool).prefix(10).map { $0 } }
+        return pool.filter { $0.localizedCaseInsensitiveContains(q) }.prefix(10).map { $0 }
+    }
+
+    /// 右下角定位按钮：地图回中
+    func centerOnUser() {
+        locateTick += 1
     }
 
     /// 规划到任意目的地并高亮沿途抓拍点位

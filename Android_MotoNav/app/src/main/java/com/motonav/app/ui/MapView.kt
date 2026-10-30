@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import com.motonav.app.data.Poi
@@ -13,7 +14,7 @@ import com.motonav.app.data.Poi
 /**
  * 轻量本地地图视图：
  * 以用户位置为中心，用等距圆柱投影把经纬度转成屏幕坐标，
- * 画网格、当前位置、点位（按类型着色），支持点击选中点位。
+ * 画网格、当前位置、点位（按类型着色），支持点击选中点位、长按选点。
  */
 class MapView @JvmOverloads constructor(
     context: Context,
@@ -49,9 +50,32 @@ class MapView @JvmOverloads constructor(
     /** 点选回调 */
     var onPoiClick: ((Poi) -> Unit)? = null
 
+    /** 长按回调（纬度, 经度） */
+    var onLongPress: ((Double, Double) -> Unit)? = null
+
+    private val gestureDetector = GestureDetector(
+        context,
+        object : GestureDetector.SimpleOnGestureListener() {
+            override fun onLongPress(e: MotionEvent) {
+                val lat = userLat + (e.y - height / 2f) * metersPerPx / 110540.0
+                val lon = userLon + (e.x - width / 2f) * metersPerPx / (111320.0 * kotlin.math.cos(Math.toRadians(userLat)))
+                onLongPress?.invoke(lat, lon)
+                // 长按后置空选中，避免误触
+                selectedId = null
+                postInvalidate()
+            }
+        }
+    )
+
     fun setUser(lat: Double, lon: Double) {
         userLat = lat
         userLon = lon
+        postInvalidate()
+    }
+
+    /** 回到用户位置并重置缩放级别 */
+    fun centerOnUser() {
+        metersPerPx = 1.8f
         postInvalidate()
     }
 
@@ -172,6 +196,7 @@ class MapView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        gestureDetector.onTouchEvent(event)
         if (event.action == MotionEvent.ACTION_UP) {
             val x = event.x
             val y = event.y

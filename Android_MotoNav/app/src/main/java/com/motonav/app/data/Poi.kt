@@ -6,7 +6,8 @@ import org.json.JSONObject
 enum class PoiType(val label: String, val color: Int, val voicePrefix: String) {
     RED_LIGHT("闯红灯拍照", 0xFFFF5252.toInt(), "闯红灯拍照"),
     RESTRICTION("限行/禁摩", 0xFFFFB300.toInt(), "限行禁摩路段"),
-    LANE("车道拍照", 0xFF40C4FF.toInt(), "车道违章拍照");
+    LANE("压线拍照", 0xFF40C4FF.toInt(), "压线违章拍照"),
+    SPEED("超速拍照", 0xFFFF7043.toInt(), "超速拍照");
 
     companion object {
         fun from(name: String?): PoiType =

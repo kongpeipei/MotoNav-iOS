@@ -16,6 +16,7 @@ import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.MenuItem
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.PopupMenu
@@ -135,6 +136,16 @@ class MainActivity : AppCompatActivity(), LocationListener {
 
         binding.mapView.setPois(visiblePois())
 
+        // 搜索框智能联想：点位名称 + 历史目的地
+        val suggestionItems = (repo.all().map { it.name } + history.map { it.first })
+            .distinct().take(30).toTypedArray()
+        binding.etSearch.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, suggestionItems)
+        )
+        binding.etSearch.setOnItemClickListener { _, _, pos, _ ->
+            val name = binding.etSearch.adapter.getItem(pos) as String
+            doSearch(name)
+        }
         binding.btnSearch.setOnClickListener { doSearch(binding.etSearch.text.toString()) }
         binding.etSearch.setOnEditorActionListener { _, _, _ ->
             doSearch(binding.etSearch.text.toString())
@@ -143,6 +154,13 @@ class MainActivity : AppCompatActivity(), LocationListener {
         binding.btnMenu.setOnClickListener { showMenu() }
         binding.btnNavigate.setOnClickListener { toggleNavigation() }
         binding.btnClearRoute.setOnClickListener { clearRoute() }
+        binding.btnLocate.setOnClickListener {
+            binding.mapView.setUser(lastLat, lastLon)
+            binding.mapView.centerOnUser()
+            showToast("已回到当前位置")
+        }
+        // 长按地图选点：添加违法拍照 / 导航到这里
+        binding.mapView.onLongPress = { lat, lon -> showMapLongPressMenu(lat, lon) }
 
         createNotificationChannel()
         ensurePermissions()
@@ -554,6 +572,37 @@ class MainActivity : AppCompatActivity(), LocationListener {
                 repo.add(type, name, lastLat, lastLon)
                 refreshPois()
                 showToast("已添加：$name")
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 长按地图选点后的操作菜单 */
+    private fun showMapLongPressMenu(lat: Double, lon: Double) {
+        AlertDialog.Builder(this)
+            .setTitle("地图选点")
+            .setMessage(String.format(Locale.CHINA, "纬度 %.5f\n经度 %.5f", lat, lon))
+            .setItems(arrayOf("添加违法拍照", "导航到这里")) { _, which ->
+                when (which) {
+                    0 -> showAddPoiTypeDialog(lat, lon)
+                    1 -> planRouteTo(lat, lon, "地图选点")
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 在地图选点处选择违法拍照类型并添加 */
+    private fun showAddPoiTypeDialog(lat: Double, lon: Double) {
+        val types = PoiType.values()
+        AlertDialog.Builder(this)
+            .setTitle("选择违法拍照类型")
+            .setItems(types.map { it.label }.toTypedArray()) { _, which ->
+                val type = types[which]
+                val name = "地图新增${type.label}点"
+                repo.add(type, name, lat, lon)
+                refreshPois()
+                showToast("已添加：$name（长按校准可编辑）")
             }
             .setNegativeButton("取消", null)
             .show()

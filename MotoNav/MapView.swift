@@ -2,25 +2,36 @@ import SwiftUI
 import MapKit
 import UIKit
 
-/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮
+/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点
 struct MapViewRepresentable: UIViewRepresentable {
     let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
     let route: [CLLocationCoordinate2D]
     let routePois: [Poi]
+    /// 定位请求计数（点击定位按钮 +1，触发地图回中）
+    let locateTick: Int
+    var onLongPress: ((CLLocationCoordinate2D) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.showsUserLocation = true
         map.delegate = context.coordinator
+        let longPress = UILongPressGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.6
+        map.addGestureRecognizer(longPress)
         return map
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        context.coordinator.onLongPress = onLongPress
         if let loc = userLocation {
-            map.setRegion(
-                MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
-                animated: true)
+            // locateTick 变化时强制回中；否则仅在初始/首次定位时设置区域
+            if locateTick > 0 || map.region.span.latitudeDelta > 0.5 {
+                map.setRegion(
+                    MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
+                    animated: true)
+            }
         }
         let ids = Set(pois.map(\.id))
         map.annotations
@@ -43,6 +54,16 @@ struct MapViewRepresentable: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var onLongPress: ((CLLocationCoordinate2D) -> Void)?
+
+        @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began,
+                  let map = gesture.view as? MKMapView else { return }
+            let pt = gesture.location(in: map)
+            let coord = map.convert(pt, toCoordinateFrom: map)
+            onLongPress?(coord)
+        }
+
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard let pa = annotation as? PoiAnnotation else { return nil }
             let id = "poi"

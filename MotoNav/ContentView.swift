@@ -5,6 +5,10 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var searchText = ""
+    @State private var suggestions: [String] = []
+    @State private var showSuggestions = false
+    @State private var longPressCoord: CLLocationCoordinate2D?
+    @State private var showLongPressMenu = false
     @State private var showManualAdd = false
     @State private var editPoi: Poi?
     @State private var showImport = false
@@ -18,13 +22,33 @@ struct ContentView: View {
                 statusBar
                 searchBar
                 historyBar
-                MapViewRepresentable(
-                    pois: model.pois,
-                    userLocation: model.currentLocation,
-                    route: model.route,
-                    routePois: model.routePois
-                )
-                .frame(maxHeight: .infinity)
+                ZStack(alignment: .bottomTrailing) {
+                    MapViewRepresentable(
+                        pois: model.pois,
+                        userLocation: model.currentLocation,
+                        route: model.route,
+                        routePois: model.routePois,
+                        locateTick: model.locateTick,
+                        onLongPress: { coord in
+                            longPressCoord = coord
+                            showLongPressMenu = true
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    // 右下角定位按钮
+                    Button {
+                        model.centerOnUser()
+                    } label: {
+                        Image(systemName: "location.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .padding(12)
+                            .background(.blue.opacity(0.9), in: Circle())
+                            .shadow(radius: 3)
+                    }
+                    .padding(16)
+                }
                 navControls
             }
             .navigationTitle("摩托导航卫士")
@@ -99,8 +123,36 @@ struct ContentView: View {
                 contentType: .json,
                 defaultFilename: "pois"
             ) { _ in }
+            .confirmationDialog("地图选点", isPresented: $showLongPressMenu, presenting: longPressCoord) { coord in
+                Button("添加违法拍照") {
+                    pendingCoord = coord
+                    showTypePicker = true
+                }
+                Button("导航到这里") {
+                    model.planRoute(to: "地图选点", lat: coord.latitude, lon: coord.longitude)
+                }
+                Button("取消", role: .cancel) {}
+            } message: { coord in
+                Text(String(format: "纬度 %.5f\n经度 %.5f", coord.latitude, coord.longitude))
+            }
+            .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
+                ForEach(PoiType.allCases, id: \.self) { t in
+                    Button(t.label) { addPoiAtPending(type: t) }
+                }
+                Button("取消", role: .cancel) {}
+            }
             .onAppear { model.authorizeAndStart() }
         }
+    }
+
+    @State private var pendingCoord: CLLocationCoordinate2D?
+    @State private var showTypePicker = false
+
+    private func addPoiAtPending(type: PoiType) {
+        guard let c = pendingCoord else { return }
+        model.addPoi(type: type, name: "地图新增\(type.label)点", lat: c.latitude, lon: c.longitude)
+        model.status = "已添加：地图新增\(type.label)点"
+        pendingCoord = nil
     }
 
     private var statusBar: some View {
@@ -123,19 +175,57 @@ struct ContentView: View {
         .background(.bar)
     }
 
-    /// 目的地搜索框
+    /// 目的地搜索框（输入时智能联想）
     private var searchBar: some View {
-        HStack(spacing: 8) {
-            TextField("搜索目的地：点位名称 / 纬度,经度", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .font(.subheadline)
-                .submitLabel(.search)
-                .onSubmit { doSearch() }
-            Button("搜索") { doSearch() }
-                .buttonStyle(.bordered)
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                TextField("搜索目的地：点位名称 / 纬度,经度", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
+                    .submitLabel(.search)
+                    .onSubmit { showSuggestions = false; doSearch() }
+                    .onChange(of: searchText) { newValue in
+                        suggestions = model.searchSuggestions(newValue)
+                        showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+                    }
+                Button("搜索") { showSuggestions = false; doSearch() }
+                    .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
+
+            // 联想下拉
+            if showSuggestions && !suggestions.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(suggestions, id: \.self) { s in
+                            Button {
+                                searchText = s
+                                showSuggestions = false
+                                doSearch()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "mappin.and.ellipse")
+                                        .foregroundStyle(.secondary)
+                                    Text(s).foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+                .background(.bar)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                .padding(.horizontal)
+            }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 6)
     }
 
     /// 历史搜索记录（横滑标签）
