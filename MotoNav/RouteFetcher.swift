@@ -74,7 +74,7 @@ enum RouteFetcher {
             + "?overview=full&geometries=geojson&steps=true&alternatives=3"
         ) else { return [] }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 15
+        req.timeoutInterval = 10
         req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
         for _ in 0..<2 {
             if let (data, _) = try? await URLSession.shared.data(for: req) {

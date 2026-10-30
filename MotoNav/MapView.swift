@@ -124,12 +124,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 a.onRoute = routePois.contains { $0.id == p.id }
             }
         }
-        // 起终点标记
+        // 终点标记（高德式：起点=当前定位蓝箭头，不再画"起"标记；终点保留"终"）
+        map.annotations
+            .compactMap { $0 as? RouteEndAnnotation }
+            .filter { $0.kind == "start" }
+            .forEach { map.removeAnnotation($0) }
         let ends = Set(map.annotations.compactMap { ($0 as? RouteEndAnnotation)?.kind })
-        let startPresent = ends.contains("start"), endPresent = ends.contains("end")
-        if let first = route.first, !startPresent {
-            map.addAnnotation(RouteEndAnnotation(kind: "start", coordinate: first))
-        }
+        let endPresent = ends.contains("end")
         if let last = route.last, !endPresent {
             map.addAnnotation(RouteEndAnnotation(kind: "end", coordinate: last))
         }
@@ -585,43 +586,53 @@ extension MKPolyline {
 }
 
 extension MapViewRepresentable {
-    /// 当前位置图标：一体蓝色实心大头箭头（圆头+尖头整体填充，蓝渐变+中心白点增强辨识；
-    /// 固定朝屏幕上方；地图随手机朝向旋转后，屏幕上方即手机朝向，箭头指向即手机朝向）
+    /// 当前位置图标：高德同款蓝色实心箭头（宽胖箭头 + 圆尾，纯蓝渐变填充，无中心点；
+    /// 白色细描边 + 底部轻投影保证深色地图上的辨识度；固定朝屏幕上方，地图随手机朝向旋转）
     static func makeUserIcon() -> UIImage {
-        let size: CGFloat = 44
+        let size: CGFloat = 42
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             let c = ctx.cgContext
             let cx = size / 2
-            let cy: CGFloat = 22
-            // 一体蓝色实心箭头：尾部圆头 + 尖端
+            let cy: CGFloat = 21
+            // 高德式箭头：宽胖主体 + 圆弧尾
             let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: cx, y: cy - 22))                       // 尖端
-            arrow.addQuadCurve(to: CGPoint(x: cx - 11, y: cy - 4),
-                               controlPoint: CGPoint(x: cx - 10.5, y: cy - 13)) // 左侧
-            arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 6),
-                         radius: 10, startAngle: .pi, endAngle: 0, clockwise: true) // 尾部圆头
-            arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 22),
-                               controlPoint: CGPoint(x: cx + 10.5, y: cy - 13)) // 右侧
+            arrow.move(to: CGPoint(x: cx, y: cy - 21))                        // 尖端
+            arrow.addQuadCurve(to: CGPoint(x: cx - 13, y: cy - 3),
+                               controlPoint: CGPoint(x: cx - 12.5, y: cy - 12.5)) // 左侧
+            arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 8),
+                         radius: 11, startAngle: .pi, endAngle: 0, clockwise: true) // 圆尾
+            arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 21),
+                               controlPoint: CGPoint(x: cx + 12.5, y: cy - 12.5)) // 右侧
             arrow.close()
-            // 蓝渐变填充（顶部浅 → 底部深，立体感）
+            // 底部轻投影（高德箭头立体感）
+            c.saveGState()
+            c.setShadow(offset: CGSize(width: 0, height: 2.5), blur: 4,
+                        color: UIColor.black.withAlphaComponent(0.35).cgColor)
+            UIColor(red: 0.12, green: 0.36, blue: 0.95, alpha: 1.0).setFill()
+            arrow.fill()
+            c.restoreGState()
+            // 蓝色渐变填充（顶部浅 → 底部深）
             c.saveGState()
             arrow.addClip()
             let colors = [
-                UIColor(red: 0.36, green: 0.58, blue: 1.0, alpha: 1.0).cgColor,
-                UIColor(red: 0.10, green: 0.34, blue: 0.94, alpha: 1.0).cgColor
+                UIColor(red: 0.38, green: 0.60, blue: 1.0, alpha: 1.0).cgColor,
+                UIColor(red: 0.08, green: 0.32, blue: 0.95, alpha: 1.0).cgColor
             ] as CFArray
             if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                      colors: colors, locations: [0.0, 1.0]) {
                 c.drawLinearGradient(grad,
-                                     start: CGPoint(x: cx, y: cy - 22),
-                                     end: CGPoint(x: cx, y: cy + 16),
+                                     start: CGPoint(x: cx, y: cy - 21),
+                                     end: CGPoint(x: cx, y: cy + 19),
                                      options: [])
             }
             c.restoreGState()
-            // 中心白色小圆点：精确位置锚点
-            c.setFillColor(UIColor.white.cgColor)
-            c.fillEllipse(in: CGRect(x: cx - 3, y: cy - 3, width: 6, height: 6))
+            // 白色细描边（高德箭头描边效果，深色底图上清晰）
+            c.setStrokeColor(UIColor.white.withAlphaComponent(0.92).cgColor)
+            c.setLineWidth(1.6)
+            c.setLineJoin(.round)
+            c.addPath(arrow.cgPath)
+            c.strokePath()
         }
     }
 }

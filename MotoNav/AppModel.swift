@@ -1047,11 +1047,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let from = start
         let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            // 起点/终点吸附到最近可通行的道路出入口（OSRM /nearest，失败回退原坐标）
-            async let sSnap = RouteFetcher.nearest(lat: from.latitude, lon: from.longitude)
+            // 起点=当前定位点（蓝箭头，不吸附，避免起点偏移）；终点吸附到最近可通行出入口（失败回退原坐标）
             async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
-            let (s, e) = await (sSnap, eSnap)
-            let from2 = s ?? from
+            let e = await eSnap
+            let from2 = from
             let end2 = e ?? rawEnd
             let r = await RouteFetcher.fetch(from: from2, to: end2)
             if let r = r {
@@ -1068,14 +1067,38 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",
                     name, Double(r.distanceM) / 1000.0, r.durationS / 60, near.count)
             } else {
-                route = [from2, end2]
-                routePois = nearbyPoisOnRoute(route)
-                routeTurns = []
-                routeDistanceM = 0
-                routeDurationS = 0
-                fitTick += 1
-                status = "路线服务不可用，已显示直线到「\(name)」"
+                fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             }
+        }
+    }
+
+    /// 路线服务不可用时的兜底：画直线示意 + 明确提示（可能横穿禁行区） + 3秒后自动重试
+    private func fallbackStraightLine(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D,
+                                      name: String, lat: Double, lon: Double) {
+        route = [from, to]
+        routePois = nearbyPoisOnRoute(route)
+        routeTurns = []
+        routeDistanceM = 0
+        routeDurationS = 0
+        routeChoices = []
+        fitTick += 1
+        status = "路线服务不可用，直线仅为示意（可能横穿不可通行区域），正在自动重试…"
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            // 目的地未变才替换（用户可能已改目标）
+            guard self.destName == name, self.destLat == lat, self.destLon == lon else { return }
+            let retry = await RouteFetcher.fetchAll(from: from, to: to)
+            if retry.isEmpty { return }
+            let list = retry.map { c -> RouteChoice in
+                let n = nearbyPoisOnRoute(c.points).count
+                return RouteChoice(points: c.points, distanceM: c.distanceM,
+                                   durationS: c.durationS, turns: c.turns,
+                                   label: c.label, poiCount: n)
+            }
+            routeChoices = list
+            selectedRouteIdx = 0
+            applyRouteChoice(list[0], name: name)
+            status = "路线已恢复，请选择方案或开始导航"
         }
     }
 
@@ -1094,7 +1117,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "已清除路线"
     }
 
-    /// "去这里/导航到这里"触发：获取多路线方案（起点/终点自动吸附到最近道路出入口）
+    /// "去这里/导航到这里"触发：获取多路线方案（起点=当前定位点，终点吸附到最近道路出入口）
     func fetchRouteChoices(to name: String, lat: Double, lon: Double) {
         guard let start = currentLocation else {
             status = "请先定位后再规划路线"
@@ -1106,21 +1129,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let from = start
         let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            // 起点/终点吸附到最近可通行的道路出入口（OSRM /nearest，失败回退原坐标）
-            async let sSnap = RouteFetcher.nearest(lat: from.latitude, lon: from.longitude)
+            // 起点=当前定位点（蓝箭头，不吸附，避免起点偏移）；终点吸附到最近可通行出入口（失败回退原坐标）
             async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
-            let (s, e) = await (sSnap, eSnap)
-            let from2 = s ?? from
+            let e = await eSnap
+            let from2 = from
             let end2 = e ?? rawEnd
             let choices = await RouteFetcher.fetchAll(from: from2, to: end2)
             if choices.isEmpty {
-                route = [from2, end2]
-                routePois = nearbyPoisOnRoute(route)
-                routeTurns = []
-                routeDistanceM = 0
-                routeDurationS = 0
-                fitTick += 1
-                status = "路线服务不可用，已显示直线到「\(name)」"
+                fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             } else {
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
                 let list = choices.map { c -> RouteChoice in
@@ -1234,12 +1250,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "路线已重新规划，请按新路线行驶"
         guard let start = currentLocation else { return }
         Task {
-            // 重规划同样吸附到最近道路出入口
-            let sSnap = await RouteFetcher.nearest(lat: start.latitude, lon: start.longitude)
-            let from2 = sSnap ?? start
+            // 重规划起点=当前定位点（蓝箭头），终点仍吸附最近出入口
+            let from2 = start
+            let end2 = await RouteFetcher.nearest(lat: destLat, lon: destLon) ??
+                CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
             if let r = await RouteFetcher.fetch(
                 from: from2,
-                to: CLLocationCoordinate2D(latitude: destLat, longitude: destLon)) {
+                to: end2) {
                 route = r.points
                 routeTurns = r.turns
                 routeDistanceM = r.distanceM
