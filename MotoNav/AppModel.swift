@@ -207,12 +207,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func startMonitoring() {
         guard !monitoring else { return }
         lm.startUpdatingLocation()
+        if CLLocationManager.headingAvailable() {
+            lm.startUpdatingHeading()
+        }
         monitoring = true
         status = "GPS 已开启"
     }
 
     func stopMonitoring() {
         lm.stopUpdatingLocation()
+        lm.stopUpdatingHeading()
         monitoring = false
         status = "等待定位…"
     }
@@ -229,9 +233,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let coord = loc.coordinate
         Task { @MainActor in
             currentLocation = coord
-            status = String(format: "纬度%.5f 经度%.5f", coord.latitude, coord.longitude)
             checkAlerts(at: coord)
             checkNavigation(at: coord)
+        }
+    }
+
+    nonisolated func locationManager(
+        _ manager: CLLocationManager,
+        didUpdateHeading newHeading: CLHeading
+    ) {
+        let h = newHeading.trueHeading
+        Task { @MainActor in
+            heading = h
         }
     }
 

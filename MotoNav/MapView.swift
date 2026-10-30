@@ -12,11 +12,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     let locateTick: Int
     /// 路线全览请求计数（规划完成 +1，触发地图缩放全览）
     let fitTick: Int
+    /// 手机朝向（度），驱动地图跟随旋转
+    let heading: Double
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.showsUserLocation = true
+        map.showsCompass = false // 使用自绘指南针（左上角）
         map.delegate = context.coordinator
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
@@ -27,16 +30,20 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
-        // 定位按钮：强制回中；首次定位：设置初始区域
-        if let loc = userLocation {
-            if locateTick > 0 {
-                context.coordinator.setRegionProgrammatically {
+        // 定位按钮：跟随手机朝向模式（地图自动旋转 + 蓝点方向指示 + 回中）
+        if locateTick > 0 {
+            context.coordinator.setRegionProgrammatically {
+                map.userTrackingMode = .followWithHeading
+                if let loc = userLocation {
                     map.setRegion(
                         MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
                         animated: true)
                 }
-            } else if !context.coordinator.hasCentered && map.region.span.latitudeDelta > 0.5 {
-                context.coordinator.hasCentered = true
+            }
+        } else if !context.coordinator.hasCentered, let loc = userLocation {
+            // 首次定位：设置初始区域
+            context.coordinator.hasCentered = true
+            context.coordinator.setRegionProgrammatically {
                 map.setRegion(
                     MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
                     animated: false)

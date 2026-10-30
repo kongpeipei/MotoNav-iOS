@@ -17,61 +17,56 @@ struct ContentView: View {
     @State private var showExport = false
     @State private var typeFilter: Set<PoiType> = Set(PoiType.allCases)
 
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                // 自定义背景（相册选择）
-                if let img = model.bgImage {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .ignoresSafeArea()
-                        .opacity(0.35)
-                }
-                VStack(spacing: 0) {
-                    statusBar
-                    searchBar
-                    historyBar
-                    ZStack(alignment: .bottomTrailing) {
-                        MapViewRepresentable(
-                            pois: model.pois,
-                            userLocation: model.currentLocation,
-                            route: model.route,
-                            routePois: model.routePois,
-                            locateTick: model.locateTick,
-                            fitTick: model.fitTick,
-                            onLongPress: { coord in
-                                longPressCoord = coord
-                                showLongPressMenu = true
-                            }
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    @FocusState private var searchFocused: Bool
+    @State private var pendingCoord: CLLocationCoordinate2D?
+    @State private var showTypePicker = false
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var headingNeedleTick = 0
 
-                        // 右下角定位按钮
-                        Button {
-                            model.centerOnUser()
-                        } label: {
-                            Image(systemName: "location.fill")
-                                .font(.title3)
-                                .foregroundStyle(.white)
-                                .padding(12)
-                                .background(.blue.opacity(0.9), in: Circle())
-                                .shadow(radius: 3)
-                        }
-                        .padding(16)
-                    }
-                    navControls
-                }
+    var body: some View {
+        ZStack {
+            // 自定义背景（相册选择）
+            if let img = model.bgImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .ignoresSafeArea()
+                    .opacity(0.35)
             }
-            .navigationTitle("摩托导航卫士")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+            // 地图全屏（高德式布局：地图在上，搜索框下置）
+            MapViewRepresentable(
+                pois: model.pois,
+                userLocation: model.currentLocation,
+                route: model.route,
+                routePois: model.routePois,
+                locateTick: model.locateTick,
+                fitTick: model.fitTick,
+                heading: model.heading,
+                onLongPress: { coord in
+                    longPressCoord = coord
+                    showLongPressMenu = true
+                }
+            )
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { dismissKeyboard() }
+
+            // 左上角指南针（手机朝向即指针指向）
+            compassOverlay
+
+            // 右上角 ⋯ 菜单
+            VStack {
+                HStack {
+                    Spacer()
                     Menu {
                         Button(model.monitoring ? "停止监控" : "开始监控") {
                             model.toggleMonitoring()
                         }
                         Button(model.simulating ? "停止模拟" : "模拟测试") {
                             model.toggleSimulation()
+                        }
+                        Button(model.navigating ? "结束导航" : "开始导航") {
+                            model.toggleNavigation()
                         }
                         Button("添加当前位置") {
                             guard let loc = model.currentLocation else { model.status = "请先定位"; return }
@@ -110,71 +105,112 @@ struct ContentView: View {
                         Button("清空路线") { model.clearRoute() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
+                            .font(.title2)
+                            .foregroundStyle(.white)
                     }
+                    .padding(8)
+                    .background(.black.opacity(0.5), in: Circle())
+                    .padding(.trailing, 12)
+                    .padding(.top, 6)
                 }
+                Spacer()
             }
-            .sheet(isPresented: $showManualAdd) {
-                PoiEditSheet(mode: .add, poi: nil) { type, name, lat, lon, r in
-                    model.addPoi(type: type, name: name, lat: lat, lon: lon, radiusM: r)
-                }
+
+            // 底部浮层：状态 + 历史 + 搜索框
+            VStack(spacing: 0) {
+                Spacer()
+                statusBar
+                historyBar
+                searchBar
             }
-            .sheet(item: $editPoi) { p in
-                PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
-                    model.updatePoi(id: p.id, type: type, name: name, lat: lat, lon: lon, radiusM: r)
-                }
+        }
+        .sheet(isPresented: $showManualAdd) {
+            PoiEditSheet(mode: .add, poi: nil) { type, name, lat, lon, r in
+                model.addPoi(type: type, name: name, lat: lat, lon: lon, radiusM: r)
             }
-            .fileImporter(
-                isPresented: $showImport, allowedContentTypes: [.json]
-            ) { result in
-                if case .success(let url) = result,
-                   let data = try? Data(contentsOf: url),
-                   let text = String(data: data, encoding: .utf8) {
-                    let n = model.importPois(text)
-                    model.status = "导入成功，新增 \(n) 个点位"
-                } else {
-                    model.status = "导入失败：JSON 格式不对"
-                }
+        }
+        .sheet(item: $editPoi) { p in
+            PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
+                model.updatePoi(id: p.id, type: type, name: name, lat: lat, lon: lon, radiusM: r)
             }
-            .fileExporter(
-                isPresented: $showExport,
-                document: exportDoc ?? JsonFile(text: "[]"),
-                contentType: .json,
-                defaultFilename: "pois"
-            ) { _ in }
-            .confirmationDialog("地图选点", isPresented: $showLongPressMenu, presenting: longPressCoord) { coord in
-                Button("添加违法拍照") {
-                    pendingCoord = coord
-                    showTypePicker = true
-                }
-                Button("导航到这里") {
-                    model.planRoute(to: "地图选点", lat: coord.latitude, lon: coord.longitude)
-                }
-                Button("取消", role: .cancel) {}
-            } message: { coord in
-                Text(String(format: "纬度 %.5f\n经度 %.5f", coord.latitude, coord.longitude))
+        }
+        .fileImporter(
+            isPresented: $showImport, allowedContentTypes: [.json]
+        ) { result in
+            if case .success(let url) = result,
+               let data = try? Data(contentsOf: url),
+               let text = String(data: data, encoding: .utf8) {
+                let n = model.importPois(text)
+                model.status = "导入成功，新增 \(n) 个点位"
+            } else {
+                model.status = "导入失败：JSON 格式不对"
             }
-            .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
-                ForEach(PoiType.allCases, id: \.self) { t in
-                    Button(t.label) { addPoiAtPending(type: t) }
-                }
-                Button("取消", role: .cancel) {}
+        }
+        .fileExporter(
+            isPresented: $showExport,
+            document: exportDoc ?? JsonFile(text: "[]"),
+            contentType: .json,
+            defaultFilename: "pois"
+        ) { _ in }
+        .confirmationDialog("地图选点", isPresented: $showLongPressMenu, presenting: longPressCoord) { coord in
+            Button("添加违法拍照") {
+                pendingCoord = coord
+                showTypePicker = true
             }
-            .onAppear { model.authorizeAndStart() }
-            .onChange(of: pickerItem) { item in
-                guard let item else { return }
-                Task {
-                    if let data = try? await item.loadTransferable(type: Data.self) {
-                        model.saveBackground(data: data)
-                        model.status = "背景已更换（可在 ⋯ 菜单恢复默认）"
-                    }
+            Button("导航到这里") {
+                model.planRoute(to: "地图选点", lat: coord.latitude, lon: coord.longitude)
+            }
+            Button("取消", role: .cancel) {}
+        } message: { coord in
+            Text(String(format: "纬度 %.5f\n经度 %.5f", coord.latitude, coord.longitude))
+        }
+        .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
+            ForEach(PoiType.allCases, id: \.self) { t in
+                Button(t.label) { addPoiAtPending(type: t) }
+            }
+            Button("取消", role: .cancel) {}
+        }
+        .onAppear { model.authorizeAndStart() }
+        .onChange(of: pickerItem) { item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    model.saveBackground(data: data)
+                    model.status = "背景已更换（可在 ⋯ 菜单恢复默认）"
                 }
             }
         }
     }
 
-    @State private var pendingCoord: CLLocationCoordinate2D?
-    @State private var showTypePicker = false
-    @State private var pickerItem: PhotosPickerItem?
+    /// 左上角指南针：指针指示正北
+    private var compassOverlay: some View {
+        VStack {
+            HStack {
+                ZStack {
+                    Circle().fill(.black.opacity(0.5))
+                    Circle().strokeBorder(.white.opacity(0.75), lineWidth: 2)
+                    Image(systemName: "location.north.fill")
+                        .font(.title3)
+                        .foregroundStyle(.red)
+                        .rotationEffect(.degrees(model.heading))
+                    Text("N")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .offset(y: -22)
+                }
+                .frame(width: 54, height: 54)
+                .padding(.leading, 12)
+                .padding(.top, 6)
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+
+    private func dismissKeyboard() {
+        searchFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
 
     private func addPoiAtPending(type: PoiType) {
         guard let c = pendingCoord else { return }
@@ -184,40 +220,49 @@ struct ContentView: View {
     }
 
     private var statusBar: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(model.status)
-                .font(.footnote).foregroundStyle(.secondary)
-                .lineLimit(2)
-            HStack {
-                Text(model.monitoring ? "● 监控中" : "○ 未监控")
-                    .font(.caption2).foregroundStyle(model.monitoring ? .green : .gray)
-                if model.simulating { Text("● 模拟中").font(.caption2).foregroundStyle(.orange) }
-                if model.navigating { Text("● 导航中").font(.caption2).foregroundStyle(.blue) }
-                Text("点位 \(model.pois.count)")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 6)
-        .background(.bar)
+        Text(model.status)
+            .font(.footnote)
+            .foregroundStyle(.white)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.45))
     }
 
-    /// 目的地搜索框（输入时智能联想）
+    /// 目的地搜索框（输入时智能联想，高德式底部胶囊）
     private var searchBar: some View {
         VStack(spacing: 4) {
             HStack(spacing: 8) {
-                TextField("搜索目的地：点位名称 / 纬度,经度", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.subheadline)
-                    .submitLabel(.search)
-                    .onSubmit { showSuggestions = false; doSearch() }
-                    .onChange(of: searchText) { newValue in
-                        suggestions = model.searchSuggestions(newValue)
-                        showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
-                    }
-                Button("搜索") { showSuggestions = false; doSearch() }
-                    .buttonStyle(.bordered)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("搜索目的地", text: $searchText)
+                        .font(.subheadline)
+                        .focused($searchFocused)
+                        .submitLabel(.search)
+                        .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
+                        .onChange(of: searchText) { newValue in
+                            suggestions = model.searchSuggestions(newValue).map { displayName($0) }
+                            showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+                        }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.white, in: Capsule())
+                .overlay(Capsule().stroke(.quaternary))
+
+                Button {
+                    showSuggestions = false
+                    dismissKeyboard()
+                    doSearch()
+                } label: {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white)
+                }
+                .padding(6)
+                .background(.black.opacity(0.55), in: Circle())
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
@@ -226,15 +271,20 @@ struct ContentView: View {
             if showSuggestions && !suggestions.isEmpty {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(suggestions, id: \.self) { s in
+                        ForEach(Array(suggestions.enumerated()), id: \.offset) { idx, s in
                             Button {
-                                searchText = s
+                                searchFocused = false
                                 showSuggestions = false
-                                doSearch()
+                                if s == NAV_ITEM {
+                                    model.toggleNavigation()
+                                } else {
+                                    searchText = s
+                                    doSearch()
+                                }
                             } label: {
                                 HStack {
-                                    Image(systemName: "mappin.and.ellipse")
-                                        .foregroundStyle(.secondary)
+                                    Image(systemName: s == NAV_ITEM ? "arrow.right.circle" : "mappin.and.ellipse")
+                                        .foregroundStyle(s == NAV_ITEM ? Color.accentColor : .secondary)
                                     Text(s).foregroundStyle(.primary)
                                     Spacer()
                                 }
@@ -247,28 +297,33 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 180)
+                .frame(maxHeight: 200)
                 .background(.bar)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
                 .padding(.horizontal)
             }
         }
+        .background(.black.opacity(0.18))
     }
 
-    /// 历史搜索记录（横滑标签）
+    /// 历史搜索记录（横滑标签，地址简化显示）
     private var historyBar: some View {
         Group {
             if !model.searchHistory.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(model.searchHistory, id: \.self) { item in
-                            Button(item) {
+                            Button(displayName(item)) {
                                 searchText = item
+                                showSuggestions = false
+                                dismissKeyboard()
                                 doSearch()
                             }
                             .font(.caption)
+                            .foregroundStyle(.white)
                             .buttonStyle(.bordered)
+                            .tint(.white)
                             .controlSize(.small)
                         }
                     }
@@ -279,21 +334,18 @@ struct ContentView: View {
         }
     }
 
-    /// 底部：导航按钮
-    private var navControls: some View {
-        HStack(spacing: 10) {
-            Button(model.navigating ? "结束导航" : "开始导航") {
-                model.toggleNavigation()
-            }
-            .buttonStyle(.borderedProminent)
-            .frame(maxWidth: .infinity)
-
-            Button("清除路线") { model.clearRoute() }
-                .buttonStyle(.bordered)
+    /// 联想展示简化：去掉"与XX路交口"，只显示地址名称（导航目标不变）
+    private func displayName(_ name: String) -> String {
+        let full = #"^(.*?(大道|路|街|巷|线|口))与.*(交口|路口|交叉口)$"#
+        if let regex = try? NSRegularExpression(pattern: full),
+           let m = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+           let r = Range(m.range(at: 1), in: name) {
+            return String(name[r])
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
+        return name.replacingOccurrences(of: #"(交口|路口|交叉口)$"#, with: "", options: .regularExpression)
     }
+
+    private let NAV_ITEM = "▶ 开始导航"
 
     private func doSearch() {
         let q = searchText.trimmingCharacters(in: .whitespaces)

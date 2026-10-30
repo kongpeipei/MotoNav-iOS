@@ -3,18 +3,21 @@ package com.motonav.app.ui
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.RectF
+import android.graphics.Path
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import com.motonav.app.data.Poi
 
 /**
  * 轻量本地地图视图：
  * 以用户位置为中心，用等距圆柱投影把经纬度转成屏幕坐标，
- * 画网格、当前位置、点位（按类型着色），支持点击选中点位、长按选点。
+ * 画网格、当前位置、点位（按类型着色），支持点击选中点位、长按选点、
+ * 双指缩放、单指拖动，并按手机朝向旋转地图（指南针指示正北）。
  */
 class MapView @JvmOverloads constructor(
     context: Context,
@@ -30,15 +33,28 @@ class MapView @JvmOverloads constructor(
         color = Color.parseColor("#3D7BFF"); style = Paint.Style.STROKE
         strokeWidth = 6f; isAntiAlias = true
     }
-    private val routeEndPaint = Paint().apply {
-        color = Color.WHITE; style = Paint.Style.FILL
-    }
     private val textPaint = Paint().apply { color = Color.WHITE; textSize = 26f }
     private val labelPaint = Paint().apply { color = Color.parseColor("#F1F3FA"); textSize = 24f }
+    private val compassRing = Paint().apply {
+        color = Color.parseColor("#CCFFFFFF"); style = Paint.Style.STROKE; strokeWidth = 2f; isAntiAlias = true
+    }
+    private val compassBg = Paint().apply {
+        color = Color.parseColor("#CC0F1220"); style = Paint.Style.FILL; isAntiAlias = true
+    }
+    private val compassNeedleN = Paint().apply {
+        color = Color.parseColor("#E74C3C"); style = Paint.Style.FILL; isAntiAlias = true
+    }
+    private val compassNeedleS = Paint().apply {
+        color = Color.parseColor("#DDDDDD"); style = Paint.Style.FILL; isAntiAlias = true
+    }
 
     /** 每像素对应米数；数值越小越放大 */
     var metersPerPx = 1.8f
         private set
+
+    /** 手机朝向（度，0=北，顺时针），地图随之旋转 */
+    private var headingDeg = 0f
+    private var hasHeading = false
 
     private var userLat = 31.8120
     private var userLon = 117.2250
@@ -47,12 +63,16 @@ class MapView @JvmOverloads constructor(
     private var selectedId: Long? = null
     private var route: List<Pair<Double, Double>> = emptyList()
 
-    /** 视图平移偏移（像素），用户拖动地图后保留，不被定位拉回 */
+    /** 视图平移偏移（像素，地图层坐标系），用户拖动地图后保留，不被定位拉回 */
     private var panX = 0f
     private var panY = 0f
     private var downX = 0f
     private var downY = 0f
     private var dragging = false
+
+    /** 当前绘制矩阵（含朝向旋转），用于触摸坐标逆变换 */
+    private val viewMatrix = Matrix()
+    private val invMatrix = Matrix()
 
     /** 点选回调 */
     var onPoiClick: ((Poi) -> Unit)? = null
@@ -64,11 +84,24 @@ class MapView @JvmOverloads constructor(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onLongPress(e: MotionEvent) {
-                val lat = userLat + (e.y - height / 2f - panY) * metersPerPx / 110540.0
-                val lon = userLon + (e.x - width / 2f - panX) * metersPerPx / (111320.0 * kotlin.math.cos(Math.toRadians(userLat)))
+                val s = screenToMap(e.x, e.y)
+                val lat = userLat + (s[1] - height / 2f - panY) * metersPerPx / 110540.0
+                val lon = userLon + (s[0] - width / 2f - panX) * metersPerPx / (111320.0 * kotlin.math.cos(Math.toRadians(userLat)))
                 onLongPress?.invoke(lat, lon)
                 selectedId = null
                 postInvalidate()
+            }
+        }
+    )
+
+    private val scaleDetector = ScaleGestureDetector(
+        context,
+        object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                val f = d.scaleFactor
+                metersPerPx = (metersPerPx / f).coerceIn(0.3f, 40f)
+                postInvalidate()
+                return true
             }
         }
     )
@@ -78,6 +111,15 @@ class MapView @JvmOverloads constructor(
         userLon = lon
         postInvalidate()
     }
+
+    /** 设置手机朝向（度），驱动地图旋转与指南针 */
+    fun setHeading(deg: Float) {
+        headingDeg = deg
+        hasHeading = true
+        postInvalidate()
+    }
+
+    fun resetHeading() { hasHeading = false; headingDeg = 0f; postInvalidate() }
 
     /** 回到用户位置并重置缩放与平移 */
     fun centerOnUser() {
@@ -104,7 +146,7 @@ class MapView @JvmOverloads constructor(
         val h = (height - 100).coerceAtLeast(200).toDouble()
         val reqLat = spanMetersLat / h
         val reqLon = spanMetersLon / w
-        metersPerPx = kotlin.math.max(reqLat, reqLon).toFloat().coerceIn(0.3f, 30f)
+        metersPerPx = kotlin.math.max(reqLat, reqLon).toFloat().coerceIn(0.3f, 40f)
         // 中心对准路线包围盒中点
         val midLat = (minLat + maxLat) / 2
         val midLon = (minLon + maxLon) / 2
@@ -146,19 +188,43 @@ class MapView @JvmOverloads constructor(
         return floatArrayOf(cx + dLon.toFloat(), cy - dLat.toFloat())
     }
 
+    /** 屏幕坐标 → 地图层坐标（抵消朝向旋转） */
+    private fun screenToMap(x: Float, y: Float): FloatArray {
+        val pts = floatArrayOf(x, y)
+        viewMatrix.invert(invMatrix)
+        invMatrix.mapPoints(pts)
+        return pts
+    }
+
+    /** 屏幕增量 → 地图层增量（仅旋转部分，不含平移） */
+    private fun rotateDelta(dx: Float, dy: Float): FloatArray {
+        val h = Math.toRadians(headingDeg.toDouble())
+        val c = Math.cos(h); val s = Math.sin(h)
+        return floatArrayOf((dx * c + dy * s).toFloat(), (-dx * s + dy * c).toFloat())
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(Color.parseColor("#0F1220"))
+        // 地图层：随手机朝向旋转（高德式：前进方向朝上）
+        canvas.save()
+        if (hasHeading) {
+            canvas.rotate(headingDeg, width / 2f, height / 2f)
+        }
+        canvas.getMatrix(viewMatrix)
         drawGrid(canvas)
         drawRoads(canvas)
         drawRoute(canvas)
         pois.forEach { drawPoi(canvas, it) }
         drawUser(canvas)
+        canvas.restore()
+        // 叠加层：左上角指南针（屏幕固定）
+        drawCompass(canvas)
     }
 
     private fun drawRoute(canvas: Canvas) {
         if (route.size < 2) return
-        val path = android.graphics.Path()
+        val path = Path()
         route.forEachIndexed { i, (lat, lon) ->
             val s = toScreen(lat, lon)
             if (i == 0) path.moveTo(s[0], s[1]) else path.lineTo(s[0], s[1])
@@ -221,7 +287,6 @@ class MapView @JvmOverloads constructor(
             canvas.drawCircle(s[0], s[1], 19f, hl)
         }
         canvas.drawCircle(s[0], s[1], 14f, ring)
-        textPaint.color = p.type.color
         // 类型图标（首字）
         val c = p.type.label.first().toString()
         canvas.drawText(c, s[0] - textPaint.measureText(c) / 2, s[1] + 8f, Paint().apply {
@@ -231,18 +296,62 @@ class MapView @JvmOverloads constructor(
         canvas.drawText(p.name, s[0] + 20f, s[1] - 16f, labelPaint)
     }
 
+    /** 当前位置：箭头指向手机朝向（地图已旋转，箭头画朝北，屏幕显示朝手机方向） */
     private fun drawUser(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
-        canvas.drawCircle(cx, cy, 26f, userRingPaint)
-        canvas.drawCircle(cx, cy, 10f, userPaint)
-        canvas.drawText("我", cx - 7f, cy + 6f, Paint().apply {
-            color = Color.WHITE; textSize = 22f; isFakeBoldText = true
+        // 半透明精度圈
+        val prec = Paint().apply { color = Color.parseColor("#3D7BFF"); style = Paint.Style.FILL; alpha = 22 }
+        canvas.drawCircle(cx, cy, 34f, prec)
+        canvas.drawCircle(cx, cy, 28f, userRingPaint)
+        // 箭头
+        val arrow = Path()
+        arrow.moveTo(cx, cy - 22f)        // 尖（北）
+        arrow.lineTo(cx - 10f, cy + 8f)   // 左尾
+        arrow.lineTo(cx, cy + 2f)         // 尾凹
+        arrow.lineTo(cx + 10f, cy + 8f)   // 右尾
+        arrow.close()
+        canvas.drawPath(arrow, userPaint)
+        canvas.drawCircle(cx, cy, 5f, Paint().apply {
+            color = Color.WHITE; style = Paint.Style.FILL
+        })
+    }
+
+    /** 左上角指南针：指针指示正北（手机朝向上方时指针指向上） */
+    private fun drawCompass(canvas: Canvas) {
+        val r = 42f
+        val cx = r + 18f
+        val cy = r + 18f
+        canvas.drawCircle(cx, cy, r, compassBg)
+        canvas.drawCircle(cx, cy, r, compassRing)
+        canvas.save()
+        canvas.rotate(headingDeg, cx, cy)
+        // 红色指北针 + 白色指南针
+        val north = Path()
+        north.moveTo(cx, cy - r + 10f)
+        north.lineTo(cx - 9f, cy + 6f)
+        north.lineTo(cx, cy - 2f)
+        north.lineTo(cx + 9f, cy + 6f)
+        north.close()
+        canvas.drawPath(north, compassNeedleN)
+        val south = Path()
+        south.moveTo(cx, cy + r - 10f)
+        south.lineTo(cx - 7f, cy - 4f)
+        south.lineTo(cx, cy + 2f)
+        south.lineTo(cx + 7f, cy - 4f)
+        south.close()
+        canvas.drawPath(south, compassNeedleS)
+        canvas.restore()
+        // 中心 + N 标
+        canvas.drawCircle(cx, cy, 3f, Paint().apply { color = Color.WHITE; style = Paint.Style.FILL })
+        canvas.drawText("N", cx - 8f, cy - r + 8f, Paint().apply {
+            color = Color.WHITE; textSize = 20f; isFakeBoldText = true
         })
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         gestureDetector.onTouchEvent(event)
+        scaleDetector.onTouchEvent(event)
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x; downY = event.y
@@ -252,23 +361,24 @@ class MapView @JvmOverloads constructor(
             MotionEvent.ACTION_MOVE -> {
                 val dx = event.x - downX
                 val dy = event.y - downY
+                if (scaleDetector.isInProgress) { downX = event.x; downY = event.y; return true }
                 if (kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > 8.0) dragging = true
                 if (dragging) {
-                    panX += dx; panY += dy
+                    val d = rotateDelta(dx, dy)
+                    panX += d[0]; panY += d[1]
                     downX = event.x; downY = event.y
                     postInvalidate()
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                if (dragging) { dragging = false; return true }
-                val x = event.x
-                val y = event.y
+                if (dragging || scaleDetector.isInProgress) { dragging = false; return true }
+                val s = screenToMap(event.x, event.y)
                 var best: Poi? = null
                 var bestDist = Float.MAX_VALUE
                 for (p in pois) {
-                    val s = toScreen(p.lat, p.lon)
-                    val d = kotlin.math.hypot(x - s[0], y - s[1])
+                    val ps = toScreen(p.lat, p.lon)
+                    val d = kotlin.math.hypot(s[0] - ps[0], s[1] - ps[1])
                     if (d < 60f && d < bestDist) { bestDist = d; best = p }
                 }
                 if (best != null) {
@@ -284,5 +394,5 @@ class MapView @JvmOverloads constructor(
 
     /** 缩放（保留给未来手势） */
     fun zoomIn() { metersPerPx = (metersPerPx * 0.6f).coerceAtLeast(0.3f); postInvalidate() }
-    fun zoomOut() { metersPerPx = (metersPerPx * 1.6f).coerceAtMost(20f); postInvalidate() }
+    fun zoomOut() { metersPerPx = (metersPerPx * 1.6f).coerceAtMost(40f); postInvalidate() }
 }

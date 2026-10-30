@@ -4,8 +4,14 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Rect
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -13,9 +19,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.InputType
 import android.view.Gravity
 import android.view.MenuItem
+import android.view.MotionEvent
 import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -41,7 +49,7 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 
-class MainActivity : AppCompatActivity(), LocationListener {
+class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var repo: PoiRepository
@@ -50,6 +58,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
     private val handler = Handler(Looper.getMainLooper())
 
     private var locationManager: LocationManager? = null
+    private var sensorManager: SensorManager? = null
     private var monitoring = false
     private var simulating = false
     private var navigating = false
@@ -125,9 +134,10 @@ class MainActivity : AppCompatActivity(), LocationListener {
             }
         }
 
-    /** 相册选图作为软件背景 */
+    /** 相册选图作为软件背景（直接打开系统相册） */
     private val bgLauncher =
-        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data
             if (uri != null) {
                 try {
                     val input = contentResolver.openInputStream(uri) ?: return@registerForActivityResult
@@ -201,10 +211,23 @@ class MainActivity : AppCompatActivity(), LocationListener {
 
     private fun refreshSuggestions() {
         val items = (repo.all().map { it.name } + history.map { it.first } + hfPois)
-            .distinct().take(60).toTypedArray()
+            .distinct().map { displayName(it) }.take(60).toMutableList()
+        items.add(NAV_ITEM)
         binding.etSearch.setAdapter(
             ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, items)
         )
+    }
+
+    /** 联想展示简化：去掉"与XX路交口"，只显示地址名称（导航目标不变） */
+    private fun displayName(name: String): String {
+        if (!name.contains("交口") && !name.contains("路口") && !name.contains("交叉口")) return name
+        val m = Regex("^(.*?(大道|路|街|巷|线|口))与.*(交口|路口|交叉口)$").find(name)
+        if (m != null) return m.groupValues[1]
+        return name.replace(Regex("(交口|路口|交叉口)$"), "")
+    }
+
+    companion object {
+        private const val NAV_ITEM = "▶ 开始导航"
     }
 
     /** 应用自定义背景 */
@@ -237,12 +260,17 @@ class MainActivity : AppCompatActivity(), LocationListener {
 
         binding.mapView.setPois(visiblePois())
 
-        // 搜索框智能联想：点位名称 + 历史目的地 + 合肥小区/商铺
+        // 搜索框智能联想：点位名称 + 历史目的地 + 合肥小区/商铺 + 尾部开始导航
         loadHefeiPois()
         refreshSuggestions()
         binding.etSearch.setOnItemClickListener { _, _, pos, _ ->
             val name = binding.etSearch.adapter.getItem(pos) as String
-            doSearch(name)
+            if (name == NAV_ITEM) {
+                hideKeyboard()
+                toggleNavigation()
+            } else {
+                doSearch(name)
+            }
         }
         binding.btnSearch.setOnClickListener { doSearch(binding.etSearch.text.toString()) }
         binding.etSearch.setOnEditorActionListener { _, _, _ ->
@@ -250,8 +278,6 @@ class MainActivity : AppCompatActivity(), LocationListener {
             true
         }
         binding.btnMenu.setOnClickListener { showMenu() }
-        binding.btnNavigate.setOnClickListener { toggleNavigation() }
-        binding.btnClearRoute.setOnClickListener { clearRoute() }
         binding.btnLocate.setOnClickListener {
             binding.mapView.setUser(lastLat, lastLon)
             binding.mapView.centerOnUser()
@@ -259,6 +285,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
         }
         // 长按地图选点：添加违法拍照 / 导航到这里
         binding.mapView.onLongPress = { lat, lon -> showMapLongPressMenu(lat, lon) }
+        // 手机朝向传感器：驱动地图旋转 + 指南针
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
+            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
         // 恢复自定义背景
         applyBackground()
 
@@ -266,9 +297,53 @@ class MainActivity : AppCompatActivity(), LocationListener {
         ensurePermissions()
     }
 
+    /** 点击搜索框以外任意位置收起键盘 */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.action == MotionEvent.ACTION_DOWN) {
+            val v = currentFocus
+            if (v is EditText) {
+                val out = Rect()
+                v.getGlobalVisibleRect(out)
+                if (!out.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                    hideKeyboard()
+                    v.clearFocus()
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun hideKeyboard() {
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+            .hideSoftInputFromWindow(binding.rootLayout.windowToken, 0)
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR && event.values.size >= 3) {
+            val rot = FloatArray(9)
+            SensorManager.getRotationMatrixFromVector(rot, event.values)
+            val remap = FloatArray(9)
+            SensorManager.remapCoordinateSystem(rot, SensorManager.AXIS_X, SensorManager.AXIS_Y, remap)
+            val orient = FloatArray(3)
+            SensorManager.getOrientation(remap, orient)
+            val deg = (Math.toDegrees(orient[0].toDouble()) + 360.0) % 360.0
+            binding.mapView.setHeading(deg.toFloat())
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
     override fun onResume() {
         super.onResume()
         binding.mapView.setUser(lastLat, lastLon)
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
+            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager?.unregisterListener(this)
     }
 
     // ==================== 权限 / 监控 ====================
@@ -504,7 +579,6 @@ class MainActivity : AppCompatActivity(), LocationListener {
 
     private fun clearRoute() {
         navigating = false
-        binding.btnNavigate.text = getString(R.string.btn_navigate_start)
         binding.mapView.setRoute(emptyList())
         binding.mapView.setRoutePois(emptyList())
         routeTurns = emptyList()
@@ -517,13 +591,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
         if (routeTurns.isEmpty() && binding.mapView.hasRoute().not()) { showToast("请先搜索目的地并规划路线"); return }
         if (navigating) {
             navigating = false
-            binding.btnNavigate.text = getString(R.string.btn_navigate_start)
             voice.speak("导航结束")
             showToast("导航已结束")
         } else {
             navigating = true
             startMonitoring()
-            binding.btnNavigate.text = getString(R.string.btn_navigate_stop)
             voice.speak("开始导航到$destName，全程${binding.tvStatus.text}")
             showToast("开始导航：沿路线行驶，到达自动播报")
         }
@@ -536,7 +608,6 @@ class MainActivity : AppCompatActivity(), LocationListener {
             voice.speak("已到达目的地，$destName，导航结束")
             showToast("已到达：$destName")
             navigating = false
-            binding.btnNavigate.text = getString(R.string.btn_navigate_start)
             clearRoutePoisOnly()
             return
         }
@@ -629,7 +700,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
         binding.historyRow.visibility = android.view.View.VISIBLE
         history.forEach { (name, lat, lon) ->
             val chip = TextView(this).apply {
-                text = name
+                text = displayName(name)
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundResource(android.R.drawable.editbox_background)
                 textSize = 13f
@@ -688,7 +759,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
             6 -> { showTypeFilter(); true }
             7 -> { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")); true }
             8 -> { exportLauncher.launch("motonav_pois.json"); true }
-            11 -> { bgLauncher.launch("image/*"); true }
+            11 -> {
+                val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+                bgLauncher.launch(intent)
+                true
+            }
             12 -> {
                 prefs.edit().remove("bg_image").apply()
                 java.io.File(filesDir, "background.jpg").delete()
