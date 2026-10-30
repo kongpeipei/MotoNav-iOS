@@ -112,10 +112,10 @@ struct ContentView: View {
                 model.checkClipboard()
             }
         }
-        // 预览点变化（含在线搜索兜底）→ 同步"去这里"按钮
+        // 预览点变化（含在线搜索兜底）→ 同步"导航去此处"按钮
         .onChange(of: model.searchPreview) { p in
             if let p = p {
-                goHereLabel = "去这里：\(displayName(model.searchPreviewName))"
+                goHereLabel = "导航去此处"
                 goHereName = model.searchPreviewName
                 goHereLat = p.latitude
                 goHereLon = p.longitude
@@ -151,14 +151,14 @@ struct ContentView: View {
             },
             onPoiSelect: { p in
                 model.selectedPoi = p
-                goHereLabel = "导航到此处：\(displayName(p.name))"
+                goHereLabel = "导航去此处"
                 goHereName = p.name
                 goHereLat = p.lat
                 goHereLon = p.lon
                 model.clearPreview()
             },
             onPlaceSelect: { pl in
-                goHereLabel = "导航到此处：\(displayName(pl.name))"
+                goHereLabel = "导航去此处"
                 goHereName = pl.name
                 goHereLat = pl.lat
                 goHereLon = pl.lon
@@ -170,7 +170,7 @@ struct ContentView: View {
             },
             onMapTap: { coord in
                 // 轻点地图空白：该位置下方显示"导航到这里"
-                goHereLabel = "导航到这里"
+                goHereLabel = "导航去此处"
                 goHereName = nil
                 goHereLat = coord.latitude
                 goHereLon = coord.longitude
@@ -676,18 +676,14 @@ struct ContentView: View {
         }
         let hits = model.searchPois(q)
         if !hits.isEmpty {
-            if hits.count == 1 {
-                let p = hits[0]
-                model.selectedPoi = p
-                model.setPreview(p.name, lat: p.lat, lon: p.lon)
-                goHereLabel = "去这里：\(displayName(p.name))"
-                goHereName = p.name
-                goHereLat = p.lat; goHereLon = p.lon
-                model.status = "已定位到「\(p.name)」，点「去这里」规划路线"
-            } else {
-                model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
-                model.selectedPoi = nil
-            }
+            // 点击联想的地图内地点名称 → 直接跳转并显示绿色"导航去此处"（多命中优先完全同名）
+            let p = hits.first(where: { $0.name == q }) ?? hits[0]
+            model.selectedPoi = p
+            model.setPreview(p.name, lat: p.lat, lon: p.lon)
+            goHereLabel = "导航去此处"
+            goHereName = p.name
+            goHereLat = p.lat; goHereLon = p.lon
+            model.status = "已定位到「\(displayName(p.name))」，点「导航去此处」规划路线"
             return
         }
         // 本地地标词典命中：离线直接出结果（殡仪馆/车站/机场/医院/公园等）
