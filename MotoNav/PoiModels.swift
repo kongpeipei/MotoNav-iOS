@@ -47,6 +47,8 @@ struct Poi: Codable, Identifiable, Equatable {
     var radiusM: Double
     var enabled: Bool
     var note: String
+    /// 是否为用户自定义/移动过的点位（true=橙色描边、可删除；false=内置原始库点位，不可删除）
+    var isCustom: Bool = false
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lon)

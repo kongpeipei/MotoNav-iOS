@@ -118,9 +118,14 @@ struct ContentView: View {
                 model.status = model.isFavorite(p) ? "已收藏：\(p.name)" : "已取消收藏：\(p.name)"
             }
             Button("编辑该点位") { editPoi = p }
-            Button("删除该点位", role: .destructive) {
-                model.deletePoi(id: p.id)
-                model.status = "已删除：\(p.name)"
+            if p.isCustom {
+                Button("删除该点位", role: .destructive) {
+                    model.deletePoi(id: p.id)
+                    model.status = "已删除：\(p.name)"
+                }
+            } else {
+                Button("内置点位，长按图标可拖动自定义位置", systemImage: "info.circle") {}
+                    .disabled(true)
             }
             Button("取消", role: .cancel) {}
         } message: { p in
@@ -197,6 +202,7 @@ struct ContentView: View {
             },
             onPoiMoved: { p, nLat, nLon in
                 model.updatePoi(id: p.id, type: p.type, name: p.name, lat: nLat, lon: nLon, radiusM: p.radiusM)
+                model.status = "已移动「\(p.name)」到新位置（橙色=自定义点位）"
             },
             onPoiSelect: { p in
                 haptic()

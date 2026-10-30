@@ -9,16 +9,20 @@ final class PoiRepository {
     init() { _ = load() }
 
     func load() -> [Poi] {
-        // 内置点位版本机制：Documents 点位 + 用户自定义点（id≥1000）合并，保留用户数据
+        // 内置点位版本机制：Documents 点位 + 用户自定义点（id≥1000 或 isCustom，含被拖动过的内置点）合并，保留用户数据
         let savedVer = UserDefaults.standard.integer(forKey: "poiAppVersion")
-        let currentVer = 141
+        let currentVer = 142
         if let docs = readFromDocuments(), savedVer >= currentVer {
             pois = docs
         } else {
             var merged = readFromBundle()
             if let docs = readFromDocuments() {
-                let userPois = docs.filter { $0.id >= 1000 }
-                if !userPois.isEmpty { merged.append(contentsOf: userPois) }
+                let userPois = docs.filter { $0.id >= 1000 || $0.isCustom }
+                if !userPois.isEmpty {
+                    // 去重：先移除内置库中与被用户移动/自定义过的点位同 id 的点，再追加用户版（保住用户改过的位置）
+                    merged.removeAll { b in userPois.contains { $0.id == b.id } }
+                    merged.append(contentsOf: userPois)
+                }
             }
             pois = merged
             persist()
@@ -33,7 +37,7 @@ final class PoiRepository {
     @discardableResult
     func add(type: PoiType, name: String, lat: Double, lon: Double, radiusM: Double = 150) -> Poi {
         let p = Poi(id: nextId, type: type, name: name, lat: lat, lon: lon,
-                    radiusM: radiusM, enabled: true, note: "")
+                    radiusM: radiusM, enabled: true, note: "", isCustom: true)
         nextId += 1
         pois.append(p)
         persist()
@@ -42,8 +46,10 @@ final class PoiRepository {
 
     func update(id: Int64, type: PoiType, name: String, lat: Double, lon: Double, radiusM: Double) {
         guard let idx = pois.firstIndex(where: { $0.id == id }) else { return }
+        // 用户拖动/编辑过 → 标记为自定义点位（版本升级时保留其位置）
+        let old = pois[idx]
         pois[idx] = Poi(id: id, type: type, name: name, lat: lat, lon: lon,
-                        radiusM: radiusM, enabled: pois[idx].enabled, note: pois[idx].note)
+                        radiusM: radiusM, enabled: old.enabled, note: old.note, isCustom: true)
         persist()
     }
 
@@ -64,6 +70,7 @@ final class PoiRepository {
         var added = 0
         for var p in list {
             p.id = nextId
+            p.isCustom = true
             nextId += 1
             pois.append(p)
             added += 1

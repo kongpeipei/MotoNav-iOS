@@ -127,7 +127,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             if !map.annotations.contains(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) {
                 map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
             } else if let a = map.annotations.first(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) as? PoiAnnotation {
-                a.onRoute = routePois.contains { $0.id == p.id }
+                if a.poi.coordinate != p.coordinate || a.poi.isCustom != p.isCustom {
+                    // 坐标/自定义标记变化（拖动或编辑后）：移除重建以刷新 marker 视图（新位置 + 橙色描边）
+                    map.removeAnnotation(a)
+                    map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
+                } else {
+                    a.poi = p
+                    a.onRoute = routePois.contains { $0.id == p.id }
+                }
             }
         }
         // 终点标记（高德式：起点=当前定位蓝箭头，不再画"起"标记；终点保留"终"）
@@ -371,7 +378,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             case .changed:
                 if let ann = dragAnnotation {
-                    ann.dragCoordinate = map.convert(pt, toCoordinateFrom: map)
+                    let newCoord = map.convert(pt, toCoordinateFrom: map)
+                    ann.dragCoordinate = newCoord
+                    // 地图跟随平移（高德拖拽标记行为）：标注始终保持在手指下，可拖出屏幕范围继续移动
+                    let ap = map.convert(ann.coordinate, toPointTo: map)
+                    let dx = pt.x - ap.x
+                    let dy = pt.y - ap.y
+                    if abs(dx) > 1 || abs(dy) > 1 {
+                        let center = map.convert(
+                            CGPoint(x: map.bounds.midX + dx, y: map.bounds.midY + dy),
+                            toCoordinateFrom: map)
+                        setRegionProgrammatically {
+                            map.setCenter(center, animated: false)
+                        }
+                    }
                 }
             case .ended, .cancelled:
                 guard let ann = dragAnnotation, let poi = dragStartCoord != nil ? ann.poi : nil else { return }
@@ -509,10 +529,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             v.markerTintColor = pa.poi.type.color
             v.titleVisibility = .adaptive
             v.glyphText = String(pa.poi.type.label.prefix(1))
-            // 沿途点位：白色描边高亮
+            // 沿途点位：白色描边高亮（优先）；用户自定义/移动过的点位：橙色描边（可与内置点位区分）
             if pa.onRoute {
                 v.layer.borderWidth = 2.5
                 v.layer.borderColor = UIColor.white.cgColor
+            } else if pa.poi.isCustom {
+                v.layer.borderWidth = 2
+                v.layer.borderColor = UIColor.orange.cgColor
             } else {
                 v.layer.borderWidth = 0
             }
@@ -560,7 +583,7 @@ final class RouteEndAnnotation: NSObject, MKAnnotation {
 }
 
 final class PoiAnnotation: NSObject, MKAnnotation {
-    let poi: Poi
+    var poi: Poi
     var onRoute: Bool
     /// 拖动校准中的临时坐标（nil = 使用点位原始坐标）
     var dragCoordinate: CLLocationCoordinate2D?
