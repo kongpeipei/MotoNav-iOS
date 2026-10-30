@@ -47,6 +47,13 @@ class MapView @JvmOverloads constructor(
     private var selectedId: Long? = null
     private var route: List<Pair<Double, Double>> = emptyList()
 
+    /** 视图平移偏移（像素），用户拖动地图后保留，不被定位拉回 */
+    private var panX = 0f
+    private var panY = 0f
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
+
     /** 点选回调 */
     var onPoiClick: ((Poi) -> Unit)? = null
 
@@ -57,10 +64,9 @@ class MapView @JvmOverloads constructor(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
             override fun onLongPress(e: MotionEvent) {
-                val lat = userLat + (e.y - height / 2f) * metersPerPx / 110540.0
-                val lon = userLon + (e.x - width / 2f) * metersPerPx / (111320.0 * kotlin.math.cos(Math.toRadians(userLat)))
+                val lat = userLat + (e.y - height / 2f - panY) * metersPerPx / 110540.0
+                val lon = userLon + (e.x - width / 2f - panX) * metersPerPx / (111320.0 * kotlin.math.cos(Math.toRadians(userLat)))
                 onLongPress?.invoke(lat, lon)
-                // 长按后置空选中，避免误触
                 selectedId = null
                 postInvalidate()
             }
@@ -73,9 +79,37 @@ class MapView @JvmOverloads constructor(
         postInvalidate()
     }
 
-    /** 回到用户位置并重置缩放级别 */
+    /** 回到用户位置并重置缩放与平移 */
     fun centerOnUser() {
         metersPerPx = 1.8f
+        panX = 0f; panY = 0f
+        postInvalidate()
+    }
+
+    /** 自动缩放使整条路线全览（同时重置平移偏移） */
+    fun fitRoute(points: List<Pair<Double, Double>>) {
+        if (points.size < 2) return
+        var minLat = points[0].first; var maxLat = points[0].first
+        var minLon = points[0].second; var maxLon = points[0].second
+        for (p in points) {
+            if (p.first < minLat) minLat = p.first
+            if (p.first > maxLat) maxLat = p.first
+            if (p.second < minLon) minLon = p.second
+            if (p.second > maxLon) maxLon = p.second
+        }
+        val cosLat = kotlin.math.cos(Math.toRadians((minLat + maxLat) / 2))
+        val spanMetersLat = (maxLat - minLat) * 110540.0
+        val spanMetersLon = (maxLon - minLon) * 111320.0 * cosLat
+        val w = (width - 60).coerceAtLeast(200).toDouble()
+        val h = (height - 100).coerceAtLeast(200).toDouble()
+        val reqLat = spanMetersLat / h
+        val reqLon = spanMetersLon / w
+        metersPerPx = kotlin.math.max(reqLat, reqLon).toFloat().coerceIn(0.3f, 30f)
+        // 中心对准路线包围盒中点
+        val midLat = (minLat + maxLat) / 2
+        val midLon = (minLon + maxLon) / 2
+        panX = (-(midLon - userLon) * 111320.0 * cosLat / metersPerPx).toFloat()
+        panY = ((midLat - userLat) * 110540.0 / metersPerPx).toFloat()
         postInvalidate()
     }
 
@@ -105,8 +139,8 @@ class MapView @JvmOverloads constructor(
     }
 
     private fun toScreen(lat: Double, lon: Double): FloatArray {
-        val cx = width / 2f
-        val cy = height / 2f
+        val cx = width / 2f + panX
+        val cy = height / 2f + panY
         val dLon = (lon - userLon) * 111320.0 / metersPerPx
         val dLat = (lat - userLat) * 110540.0 / metersPerPx
         return floatArrayOf(cx + dLon.toFloat(), cy - dLat.toFloat())
@@ -130,13 +164,25 @@ class MapView @JvmOverloads constructor(
             if (i == 0) path.moveTo(s[0], s[1]) else path.lineTo(s[0], s[1])
         }
         canvas.drawPath(path, routePaint)
+        // 起点（绿）终点（红）标记
+        val startPaint = Paint().apply { color = Color.parseColor("#2ECC71"); style = Paint.Style.FILL }
+        val endPaint = Paint().apply { color = Color.parseColor("#E74C3C"); style = Paint.Style.FILL }
+        val ring = Paint().apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 2f }
         route.firstOrNull()?.let { (lat, lon) ->
             val s = toScreen(lat, lon)
-            canvas.drawCircle(s[0], s[1], 8f, routeEndPaint)
+            canvas.drawCircle(s[0], s[1], 9f, startPaint)
+            canvas.drawCircle(s[0], s[1], 9f, ring)
+            canvas.drawText("起", s[0] - 7f, s[1] + 7f, Paint().apply {
+                color = Color.WHITE; textSize = 20f; isFakeBoldText = true
+            })
         }
         route.lastOrNull()?.let { (lat, lon) ->
             val s = toScreen(lat, lon)
-            canvas.drawCircle(s[0], s[1], 8f, routeEndPaint)
+            canvas.drawCircle(s[0], s[1], 9f, endPaint)
+            canvas.drawCircle(s[0], s[1], 9f, ring)
+            canvas.drawText("终", s[0] - 7f, s[1] + 7f, Paint().apply {
+                color = Color.WHITE; textSize = 20f; isFakeBoldText = true
+            })
         }
     }
 
@@ -197,21 +243,40 @@ class MapView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         gestureDetector.onTouchEvent(event)
-        if (event.action == MotionEvent.ACTION_UP) {
-            val x = event.x
-            val y = event.y
-            var best: Poi? = null
-            var bestDist = Float.MAX_VALUE
-            for (p in pois) {
-                val s = toScreen(p.lat, p.lon)
-                val d = kotlin.math.hypot(x - s[0], y - s[1])
-                if (d < 60f && d < bestDist) { bestDist = d; best = p }
-            }
-            if (best != null) {
-                selectedId = best.id
-                onPoiClick?.invoke(best)
-                postInvalidate()
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y
+                dragging = false
                 return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.x - downX
+                val dy = event.y - downY
+                if (kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > 8.0) dragging = true
+                if (dragging) {
+                    panX += dx; panY += dy
+                    downX = event.x; downY = event.y
+                    postInvalidate()
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (dragging) { dragging = false; return true }
+                val x = event.x
+                val y = event.y
+                var best: Poi? = null
+                var bestDist = Float.MAX_VALUE
+                for (p in pois) {
+                    val s = toScreen(p.lat, p.lon)
+                    val d = kotlin.math.hypot(x - s[0], y - s[1])
+                    if (d < 60f && d < bestDist) { bestDist = d; best = p }
+                }
+                if (best != null) {
+                    selectedId = best.id
+                    onPoiClick?.invoke(best)
+                    postInvalidate()
+                    return true
+                }
             }
         }
         return super.onTouchEvent(event)

@@ -27,6 +27,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var searchHistory: [String] = []
     /// 定位按钮点击计数（驱动地图回中）
     @Published var locateTick = 0
+    /// 路线全览请求计数（规划完成后 +1，驱动地图缩放全览）
+    @Published var fitTick = 0
+    /// 自定义背景图片（相册选择）
+    @Published var bgImage: UIImage?
+
+    /// 合肥小区/商铺联想库（内置 + 在线刷新）
+    @Published var hfPois: [String] = []
 
     /// 类型筛选（默认全部启用）
     var enabledTypes: Set<PoiType> = Set(PoiType.allCases)
@@ -49,6 +56,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let historyKey = "search_history"
     private let historyLimit = 10
+    private let hfKey = "hf_pois"
 
     private override init() {
         super.init()
@@ -56,9 +64,110 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         pois = repo.load()
         loadHistory()
+        loadHefeiPois()
+        loadBackground()
         NotificationCenter.default.addObserver(
             self, selector: #selector(authorizeAndStart),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    // MARK: - 合肥小区/商铺联想
+
+    private func loadHefeiPois() {
+        // 1) 本地缓存
+        if let cached = UserDefaults.standard.stringArray(forKey: hfKey), !cached.isEmpty {
+            hfPois = cached
+        }
+        // 2) 内置资源
+        if hfPois.isEmpty,
+           let url = Bundle.main.url(forResource: "hefei_pois", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
+            hfPois = arr
+        }
+        // 3) 在线刷新（失败静默）
+        Task {
+            if let fresh = await fetchHefeiPoisOnline() {
+                hfPois = fresh
+                UserDefaults.standard.set(fresh, forKey: hfKey)
+            }
+        }
+    }
+
+    /// 在线拉取合肥小区/商铺名称（Overpass 免费接口）
+    private func fetchHefeiPoisOnline() async -> [String]? {
+        let q = "[out:json][timeout:25];(node[\"shop\"](31.55,116.85,32.05,117.70);way[\"shop\"](31.55,116.85,32.05,117.70);node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物\"](31.55,116.85,32.05,117.70););out tags;"
+        guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+        req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let els = root["elements"] as? [[String: Any]] else { return nil }
+        var names = Set<String>()
+        for e in els {
+            if let t = e["tags"] as? [String: Any],
+               let n = (t["name"] as? String)?.trimmingCharacters(in: .whitespaces),
+               !n.isEmpty {
+                names.insert(n)
+            }
+        }
+        return names.count > 20 ? Array(names) : nil
+    }
+
+    /// 按名称在线查询合肥地点坐标（用于联想命中后的规划）
+    func findHefeiCoordinate(_ name: String) async -> CLLocationCoordinate2D? {
+        let q = "[out:json][timeout:15];node[\"name\"=\"\(name)\"](31.55,116.85,32.05,117.70);out center 1;"
+        guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+        req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let els = root["elements"] as? [[String: Any]] else { return nil }
+        for e in els {
+            if let lat = e["lat"] as? Double, let lon = e["lon"] as? Double, lat != 0, lon != 0 {
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+            if let c = e["center"] as? [String: Any],
+               let lat = c["lat"] as? Double, let lon = c["lon"] as? Double {
+                return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            }
+        }
+        return nil
+    }
+
+    // MARK: - 自定义背景（相册）
+
+    private var bgURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("background.jpg")
+    }
+
+    func saveBackground(data: Data) {
+        do {
+            try data.write(to: bgURL)
+            bgImage = UIImage(data: data)
+        } catch {
+            status = "背景保存失败"
+        }
+    }
+
+    func clearBackground() {
+        try? FileManager.default.removeItem(at: bgURL)
+        bgImage = nil
+    }
+
+    private func loadBackground() {
+        if let d = try? Data(contentsOf: bgURL) {
+            bgImage = UIImage(data: d)
+        }
     }
 
     // MARK: - 历史搜索
@@ -291,11 +400,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return pois.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
-    /// 搜索智能联想：点位名称 + 历史目的地（最多 10 条）
+    /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺（最多 10 条）
     func searchSuggestions(_ query: String) -> [String] {
         var pool = Set<String>()
         for p in pois { pool.insert(p.name) }
         for h in searchHistory { pool.insert(h) }
+        for hf in hfPois { pool.insert(hf) }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty { return Array(pool).prefix(10).map { $0 } }
         return pool.filter { $0.localizedCaseInsensitiveContains(q) }.prefix(10).map { $0 }
@@ -324,6 +434,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 lastTurnSpoken = -1
                 let near = nearbyPoisOnRoute(r.points)
                 routePois = near
+                fitTick += 1
                 status = String(
                     format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",
                     name, Double(r.distanceM) / 1000.0, r.durationS / 60, near.count)
@@ -331,6 +442,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 route = [from, CLLocationCoordinate2D(latitude: lat, longitude: lon)]
                 routePois = nearbyPoisOnRoute(route)
                 routeTurns = []
+                fitTick += 1
                 status = "路线服务不可用，已显示直线到「\(name)」"
             }
         }

@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import PhotosUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -18,38 +19,49 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                statusBar
-                searchBar
-                historyBar
-                ZStack(alignment: .bottomTrailing) {
-                    MapViewRepresentable(
-                        pois: model.pois,
-                        userLocation: model.currentLocation,
-                        route: model.route,
-                        routePois: model.routePois,
-                        locateTick: model.locateTick,
-                        onLongPress: { coord in
-                            longPressCoord = coord
-                            showLongPressMenu = true
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    // 右下角定位按钮
-                    Button {
-                        model.centerOnUser()
-                    } label: {
-                        Image(systemName: "location.fill")
-                            .font(.title3)
-                            .foregroundStyle(.white)
-                            .padding(12)
-                            .background(.blue.opacity(0.9), in: Circle())
-                            .shadow(radius: 3)
-                    }
-                    .padding(16)
+            ZStack {
+                // 自定义背景（相册选择）
+                if let img = model.bgImage {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .ignoresSafeArea()
+                        .opacity(0.35)
                 }
-                navControls
+                VStack(spacing: 0) {
+                    statusBar
+                    searchBar
+                    historyBar
+                    ZStack(alignment: .bottomTrailing) {
+                        MapViewRepresentable(
+                            pois: model.pois,
+                            userLocation: model.currentLocation,
+                            route: model.route,
+                            routePois: model.routePois,
+                            locateTick: model.locateTick,
+                            fitTick: model.fitTick,
+                            onLongPress: { coord in
+                                longPressCoord = coord
+                                showLongPressMenu = true
+                            }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        // 右下角定位按钮
+                        Button {
+                            model.centerOnUser()
+                        } label: {
+                            Image(systemName: "location.fill")
+                                .font(.title3)
+                                .foregroundStyle(.white)
+                                .padding(12)
+                                .background(.blue.opacity(0.9), in: Circle())
+                                .shadow(radius: 3)
+                        }
+                        .padding(16)
+                    }
+                    navControls
+                }
             }
             .navigationTitle("摩托导航卫士")
             .toolbar {
@@ -88,6 +100,12 @@ struct ContentView: View {
                         Divider()
                         Button("导入 JSON") { showImport = true }
                         Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
+                        Divider()
+                        PhotosPicker(selection: $pickerItem, matching: .images) {
+                            Label("更换背景（相册）", systemImage: "photo")
+                        }
+                        Button("恢复默认背景") { model.clearBackground() }
+                        Divider()
                         Button("清空历史搜索") { model.clearHistory() }
                         Button("清空路线") { model.clearRoute() }
                     } label: {
@@ -142,6 +160,15 @@ struct ContentView: View {
                 Button("取消", role: .cancel) {}
             }
             .onAppear { model.authorizeAndStart() }
+            .onChange(of: pickerItem) { item in
+                guard let item else { return }
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        model.saveBackground(data: data)
+                        model.status = "背景已更换（可在 ⋯ 菜单恢复默认）"
+                    }
+                }
+            }
         }
     }
 
@@ -278,18 +305,30 @@ struct ContentView: View {
             return
         }
         let hits = model.searchPois(q)
-        if hits.isEmpty {
-            model.status = "未找到「\(q)」，请尝试点位名称或输入 纬度,经度"
+        if !hits.isEmpty {
+            if hits.count == 1 {
+                let p = hits[0]
+                model.selectedPoi = p
+                model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
+            } else {
+                model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
+                model.selectedPoi = nil
+            }
             return
         }
-        if hits.count == 1 {
-            let p = hits[0]
-            model.selectedPoi = p
-            model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
-        } else {
-            model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
-            model.selectedPoi = nil
+        // 合肥小区/商铺：在线查询坐标后规划
+        if model.hfPois.contains(where: { $0.localizedCaseInsensitiveContains(q) }) {
+            model.status = "正在查询「\(q)」位置…"
+            Task {
+                if let c = await model.findHefeiCoordinate(q) {
+                    model.planRoute(to: q, lat: c.latitude, lon: c.longitude)
+                } else {
+                    model.status = "未找到「\(q)」的坐标，可尝试地图长按选点"
+                }
+            }
+            return
         }
+        model.status = "未找到「\(q)」，请尝试点位名称或输入 纬度,经度"
     }
 }
 

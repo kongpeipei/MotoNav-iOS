@@ -36,6 +36,9 @@ import com.motonav.app.engine.RouteFetcher
 import com.motonav.app.engine.RouteTurn
 import com.motonav.app.ui.MapView
 import com.motonav.app.voice.VoiceSpeaker
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import java.util.Locale
 
 class MainActivity : AppCompatActivity(), LocationListener {
@@ -122,6 +125,104 @@ class MainActivity : AppCompatActivity(), LocationListener {
             }
         }
 
+    /** 相册选图作为软件背景 */
+    private val bgLauncher =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri != null) {
+                try {
+                    val input = contentResolver.openInputStream(uri) ?: return@registerForActivityResult
+                    val bytes = input.use { it.readBytes() }
+                    val f = java.io.File(filesDir, "background.jpg")
+                    f.writeBytes(bytes)
+                    prefs.edit().putString("bg_image", f.absolutePath).apply()
+                    applyBackground()
+                    showToast("背景已更换（可在 ⋯ 菜单恢复默认）")
+                } catch (e: Exception) {
+                    showToast("背景设置失败：${e.message}")
+                }
+            }
+        }
+
+    /** 合肥小区/商铺联想库（内置 + 在线刷新缓存） */
+    private var hfPois: List<String> = emptyList()
+
+    private fun loadHefeiPois() {
+        // 1) 本地缓存优先
+        val cached = prefs.getString("hf_pois", null)
+        if (cached != null) {
+            try {
+                val arr = org.json.JSONArray(cached)
+                hfPois = (0 until arr.length()).map { arr.getString(it) }
+                refreshSuggestions()
+            } catch (_: Exception) { }
+        }
+        if (hfPois.isEmpty()) {
+            try {
+                val raw = assets.open("hefei_pois.json").bufferedReader().use { it.readText() }
+                val arr = org.json.JSONArray(raw)
+                hfPois = (0 until arr.length()).map { arr.getString(it) }
+                refreshSuggestions()
+            } catch (_: Exception) { }
+        }
+        // 2) 后台在线刷新（Overpass，失败静默保留内置）
+        Thread {
+            try {
+                val q = "[out:json][timeout:25];" +
+                    "(node[\"shop\"](31.55,116.85,32.05,117.70);" +
+                    "way[\"shop\"](31.55,116.85,32.05,117.70);" +
+                    "node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物\"](31.55,116.85,32.05,117.70);" +
+                    ");out tags;"
+                val url = URL("https://overpass-api.de/api/interpreter")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 15000; conn.readTimeout = 15000
+                conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                conn.doOutput = true
+                conn.outputStream.use { it.write("data=${java.net.URLEncoder.encode(q, "UTF-8")}".toByteArray()) }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val root = org.json.JSONObject(body)
+                val els = root.getJSONArray("elements")
+                val names = LinkedHashSet<String>()
+                for (i in 0 until els.length()) {
+                    val t = els.getJSONObject(i).optJSONObject("tags")
+                    val n = t?.optString("name", "")?.trim() ?: ""
+                    if (n.isNotEmpty()) names.add(n)
+                }
+                if (names.size > 20) {
+                    val list = names.toList()
+                    prefs.edit().putString("hf_pois", org.json.JSONArray(list).toString()).apply()
+                    handler.post { hfPois = list; refreshSuggestions() }
+                }
+            } catch (_: Exception) { }
+        }.start()
+    }
+
+    private fun refreshSuggestions() {
+        val items = (repo.all().map { it.name } + history.map { it.first } + hfPois)
+            .distinct().take(60).toTypedArray()
+        binding.etSearch.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, items)
+        )
+    }
+
+    /** 应用自定义背景 */
+    private fun applyBackground() {
+        val path = prefs.getString("bg_image", null)
+        if (path == null) {
+            binding.rootLayout.background = null
+            return
+        }
+        try {
+            val f = java.io.File(path)
+            if (!f.exists()) return
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }
+            val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return
+            binding.rootLayout.background = android.graphics.drawable.BitmapDrawable(resources, bmp)
+        } catch (_: Exception) { }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -136,12 +237,9 @@ class MainActivity : AppCompatActivity(), LocationListener {
 
         binding.mapView.setPois(visiblePois())
 
-        // 搜索框智能联想：点位名称 + 历史目的地
-        val suggestionItems = (repo.all().map { it.name } + history.map { it.first })
-            .distinct().take(30).toTypedArray()
-        binding.etSearch.setAdapter(
-            ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, suggestionItems)
-        )
+        // 搜索框智能联想：点位名称 + 历史目的地 + 合肥小区/商铺
+        loadHefeiPois()
+        refreshSuggestions()
         binding.etSearch.setOnItemClickListener { _, _, pos, _ ->
             val name = binding.etSearch.adapter.getItem(pos) as String
             doSearch(name)
@@ -161,6 +259,8 @@ class MainActivity : AppCompatActivity(), LocationListener {
         }
         // 长按地图选点：添加违法拍照 / 导航到这里
         binding.mapView.onLongPress = { lat, lon -> showMapLongPressMenu(lat, lon) }
+        // 恢复自定义背景
+        applyBackground()
 
         createNotificationChannel()
         ensurePermissions()
@@ -292,7 +392,52 @@ class MainActivity : AppCompatActivity(), LocationListener {
             }
             return
         }
+        // 合肥小区/商铺：在线查询坐标后规划
+        if (hfPois.any { it.contains(query, ignoreCase = true) }) {
+            showToast("正在查询「$query」位置…")
+            Thread {
+                val c = fetchNameCoordinate(query)
+                handler.post {
+                    if (c != null) {
+                        planRouteTo(c.first, c.second, query)
+                    } else {
+                        showToast("未找到「$query」的坐标，可尝试地图长按选点")
+                    }
+                }
+            }.start()
+            return
+        }
         showToast("未找到「$query」，请尝试点位名称或输入 纬度,经度")
+    }
+
+    /** 通过 Overpass 按名称查询合肥地点坐标（纬度,经度），失败返回 null */
+    private fun fetchNameCoordinate(name: String): Pair<Double, Double>? {
+        return try {
+            val q = "[out:json][timeout:15];node[\"name\"=\"$name\"](31.55,116.85,32.05,117.70);out center 1;"
+            val url = URL("https://overpass-api.de/api/interpreter")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 12000; conn.readTimeout = 12000
+            conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            conn.doOutput = true
+            conn.outputStream.use { it.write("data=${java.net.URLEncoder.encode(q, "UTF-8")}".toByteArray()) }
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            val root = org.json.JSONObject(body)
+            val els = root.optJSONArray("elements") ?: return null
+            for (i in 0 until els.length()) {
+                val e = els.getJSONObject(i)
+                val lat = e.optDouble("lat", 0.0)
+                val lon = e.optDouble("lon", 0.0)
+                if (lat != 0.0 && lon != 0.0) return Pair(lat, lon)
+                val c = e.optJSONObject("center")
+                if (c != null) return Pair(c.getDouble("lat"), c.getDouble("lon"))
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** 规划到任意目的地，并高亮沿途抓拍点位 */
@@ -305,12 +450,15 @@ class MainActivity : AppCompatActivity(), LocationListener {
             val r = RouteFetcher.fetch(fromLat, fromLon, lat, lon)
             handler.post {
                 if (r == null) {
-                    binding.mapView.setRoute(listOf(Pair(fromLat, fromLon), Pair(lat, lon)))
-                    binding.mapView.setRoutePois(nearbyPoisOnRoute(listOf(Pair(fromLat, fromLon), Pair(lat, lon))))
+                    val line = listOf(Pair(fromLat, fromLon), Pair(lat, lon))
+                    binding.mapView.setRoute(line)
+                    binding.mapView.setRoutePois(nearbyPoisOnRoute(line))
+                    binding.mapView.fitRoute(line)
                     routeTurns = emptyList()
                     binding.tvStatus.text = "路线服务不可用，已显示直线到「$name」"
                 } else {
                     binding.mapView.setRoute(r.points)
+                    binding.mapView.fitRoute(r.points)
                     val near = nearbyPoisOnRoute(r.points)
                     binding.mapView.setRoutePois(near)
                     routeTurns = r.turns
@@ -517,6 +665,8 @@ class MainActivity : AppCompatActivity(), LocationListener {
         pop.menu.add(0, 6, 0, getString(R.string.menu_type_filter))
         pop.menu.add(0, 7, 0, getString(R.string.menu_import))
         pop.menu.add(0, 8, 0, getString(R.string.menu_export))
+        pop.menu.add(0, 11, 0, "更换背景（相册）")
+        pop.menu.add(0, 12, 0, "恢复默认背景")
         pop.menu.add(0, 9, 0, getString(R.string.menu_clear_history))
         pop.menu.add(0, 10, 0, getString(R.string.menu_clear_route))
         pop.setOnMenuItemClickListener { item -> onMenuItem(item) }
@@ -538,6 +688,14 @@ class MainActivity : AppCompatActivity(), LocationListener {
             6 -> { showTypeFilter(); true }
             7 -> { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")); true }
             8 -> { exportLauncher.launch("motonav_pois.json"); true }
+            11 -> { bgLauncher.launch("image/*"); true }
+            12 -> {
+                prefs.edit().remove("bg_image").apply()
+                java.io.File(filesDir, "background.jpg").delete()
+                applyBackground()
+                showToast("已恢复默认背景")
+                true
+            }
             9 -> { clearHistory(); true }
             10 -> { clearRoute(); true }
             else -> false

@@ -10,6 +10,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     let routePois: [Poi]
     /// 定位请求计数（点击定位按钮 +1，触发地图回中）
     let locateTick: Int
+    /// 路线全览请求计数（规划完成 +1，触发地图缩放全览）
+    let fitTick: Int
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
@@ -25,12 +27,30 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
+        // 定位按钮：强制回中；首次定位：设置初始区域
         if let loc = userLocation {
-            // locateTick 变化时强制回中；否则仅在初始/首次定位时设置区域
-            if locateTick > 0 || map.region.span.latitudeDelta > 0.5 {
+            if locateTick > 0 {
+                context.coordinator.setRegionProgrammatically {
+                    map.setRegion(
+                        MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
+                        animated: true)
+                }
+            } else if !context.coordinator.hasCentered && map.region.span.latitudeDelta > 0.5 {
+                context.coordinator.hasCentered = true
                 map.setRegion(
                     MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
-                    animated: true)
+                    animated: false)
+            }
+        }
+        // 路线全览
+        if fitTick > 0 && route.count > 1 {
+            context.coordinator.setRegionProgrammatically {
+                var rect = MKMapRect.null
+                for c in route {
+                    let p = MKMapPoint(c)
+                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                }
+                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
             }
         }
         let ids = Set(pois.map(\.id))
@@ -45,6 +65,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                 a.onRoute = routePois.contains { $0.id == p.id }
             }
         }
+        // 起终点标记
+        let ends = Set(map.annotations.compactMap { ($0 as? RouteEndAnnotation)?.kind })
+        let startPresent = ends.contains("start"), endPresent = ends.contains("end")
+        if let first = route.first, !startPresent {
+            map.addAnnotation(RouteEndAnnotation(kind: "start", coordinate: first))
+        }
+        if let last = route.last, !endPresent {
+            map.addAnnotation(RouteEndAnnotation(kind: "end", coordinate: last))
+        }
+        if route.count < 2 {
+            map.annotations
+                .compactMap { $0 as? RouteEndAnnotation }
+                .forEach { map.removeAnnotation($0) }
+        }
         map.removeOverlays(map.overlays)
         if route.count > 1 {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
@@ -55,6 +89,15 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
+        /// 是否已做过首次定位居中
+        var hasCentered = false
+        /// 程序主动设置区域（避免被标记为用户移动）
+        private var programmaticMove = false
+
+        func setRegionProgrammatically(_ block: () -> Void) {
+            programmaticMove = true
+            block()
+        }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
             guard gesture.state == .began,
@@ -64,7 +107,23 @@ struct MapViewRepresentable: UIViewRepresentable {
             onLongPress?(coord)
         }
 
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            // 程序 setRegion 触发时不标记用户移动
+            if programmaticMove {
+                programmaticMove = false
+            }
+        }
+
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if let re = annotation as? RouteEndAnnotation {
+                let id = "routeEnd"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
+                v.markerTintColor = re.kind == "start" ? .systemGreen : .systemRed
+                v.glyphText = re.kind == "start" ? "起" : "终"
+                v.titleVisibility = .adaptive
+                return v
+            }
             guard let pa = annotation as? PoiAnnotation else { return nil }
             let id = "poi"
             let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
@@ -92,6 +151,18 @@ struct MapViewRepresentable: UIViewRepresentable {
             return MKOverlayRenderer(overlay: overlay)
         }
     }
+}
+
+/// 路线起点/终点标记
+final class RouteEndAnnotation: NSObject, MKAnnotation {
+    let kind: String
+    let coordinate: CLLocationCoordinate2D
+    init(kind: String, coordinate: CLLocationCoordinate2D) {
+        self.kind = kind
+        self.coordinate = coordinate
+        super.init()
+    }
+    var title: String? { kind == "start" ? "起点" : "终点" }
 }
 
 final class PoiAnnotation: NSObject, MKAnnotation {
