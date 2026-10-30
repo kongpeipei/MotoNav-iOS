@@ -31,6 +31,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onPoiSelect: ((Poi) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
+    /// 轻点地图空白处选点（显示"导航到这里"）
+    var onMapTap: ((CLLocationCoordinate2D) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -41,6 +43,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.6
         map.addGestureRecognizer(longPress)
+        // 轻点地图：空白处选点（命中点位/地点标注时不触发，交给 didSelect）
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
+        tap.delegate = context.coordinator
+        map.addGestureRecognizer(tap)
         return map
     }
 
@@ -50,6 +56,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onCategorySelect = onCategorySelect
+        context.coordinator.onMapTap = onMapTap
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
         if locateTick != context.coordinator.lastLocateTick {
             context.coordinator.lastLocateTick = locateTick
@@ -182,12 +189,13 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator: NSObject, MKMapViewDelegate {
+    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var onPoiLongPress: ((Poi) -> Void)?
         var onPoiSelect: ((Poi) -> Void)?
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
+        var onMapTap: ((CLLocationCoordinate2D) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
@@ -224,6 +232,28 @@ struct MapViewRepresentable: UIViewRepresentable {
             let coord = map.convert(pt, toCoordinateFrom: map)
             onLongPress?(coord)
         }
+
+        /// 轻点地图空白处：选点（命中标注时不触发，避免与点位/地点选择冲突）
+        @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended,
+                  let map = gesture.view as? MKMapView else { return }
+            let pt = gesture.location(in: map)
+            for a in map.annotations {
+                let ap = map.convert(a.coordinate, toPointTo: map)
+                let d = hypot(pt.x - ap.x, pt.y - ap.y)
+                // 命中任何标注（点位/地点/类别/起点终点/用户位置）→ 交给 didSelect
+                if d < 40 && !(a is MKUserLocation) {
+                    return
+                }
+            }
+            let coord = map.convert(pt, toCoordinateFrom: map)
+            onMapTap?(coord)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool { false }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             // 程序 setRegion 触发时不标记用户移动

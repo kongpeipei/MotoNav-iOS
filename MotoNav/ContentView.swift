@@ -35,6 +35,8 @@ struct ContentView: View {
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
             menuOverlay
+            // 当前定位按钮：界面中间右侧
+            locateOverlay
             bottomOverlay
         }
         .sheet(item: $editPoi) { p in
@@ -158,6 +160,14 @@ struct ContentView: View {
             onCategorySelect: { r in
                 model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
                 model.clearCategory()
+            },
+            onMapTap: { coord in
+                // 轻点地图空白：该位置下方显示"导航到这里"
+                goHereLabel = "导航到这里"
+                goHereName = nil
+                goHereLat = coord.latitude
+                goHereLon = coord.longitude
+                model.setPreview("地图选点", lat: coord.latitude, lon: coord.longitude)
             }
         )
         .ignoresSafeArea()
@@ -207,13 +217,12 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航 + 清空路线
+    /// 底部浮层：类别结果 + 历史 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
             categoryBar
             historyBar
-            locateRow
             if model.navigating {
                 // 导航中：搜索框替换为退出导航按钮
                 Button {
@@ -284,35 +293,40 @@ struct ContentView: View {
         }
     }
 
-    /// 当前定位按钮：高德同款（白色圆底 + 圆圈中心点），位于搜索框右上方
-    private var locateRow: some View {
-        HStack {
+    /// 当前定位按钮：界面中间右侧（白色圆底 + 圆圈中心点）
+    private var locateOverlay: some View {
+        VStack {
             Spacer()
-            Button {
-                model.centerOnUser()
-            } label: {
-                ZStack {
-                    Circle().fill(.white)
-                    Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
-                    Image(systemName: "scope")
-                        .font(.title3)
-                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+            HStack {
+                Spacer()
+                Button {
+                    model.centerOnUser()
+                } label: {
+                    ZStack {
+                        Circle().fill(.white)
+                        Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                        Image(systemName: "scope")
+                            .font(.title3)
+                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    }
+                    .frame(width: 44, height: 44)
+                    .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                 }
-                .frame(width: 44, height: 44)
-                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                .padding(.trailing, 16)
             }
-            .padding(.trailing, 16)
-            .padding(.vertical, 4)
+            Spacer()
         }
     }
 
     /// 搜索预览"去这里" / 点选地点"导航到此处"按钮（绿色）
     private var goHereBar: some View {
         Group {
-            if let n = goHereName {
+            if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
-                    model.planRoute(to: n, lat: goHereLat, lon: goHereLon)
+                    model.planRoute(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
                     goHereName = nil
+                    goHereLat = 0
+                    goHereLon = 0
                     model.clearPreview()
                 } label: {
                     Text(goHereLabel)
@@ -328,23 +342,37 @@ struct ContentView: View {
         }
     }
 
-    /// 左上角指南针：指针指示正北（液态玻璃）
+    /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
     private var compassOverlay: some View {
         VStack {
             HStack {
                 ZStack {
                     Circle().fill(.ultraThinMaterial)
                     Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
+                    // 红色指北针（随手机朝向旋转）
                     Image(systemName: "location.north.fill")
                         .font(.title3)
                         .foregroundStyle(.red)
                         .rotationEffect(.degrees(model.heading))
-                    Text("N")
+                    // 四方位：北（上）东（右）南（下）西（左）
+                    Text("北")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.red)
+                        .offset(y: -20)
+                    Text("东")
                         .font(.caption2.bold())
                         .foregroundStyle(.secondary)
-                        .offset(y: -22)
+                        .offset(x: 19)
+                    Text("南")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
+                        .offset(y: 20)
+                    Text("西")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
+                        .offset(x: -19)
                 }
-                .frame(width: 54, height: 54)
+                .frame(width: 56, height: 56)
                 .padding(.leading, 12)
                 .padding(.top, 40)
                 Spacer()
@@ -365,7 +393,7 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
-    /// 屏幕最上边的状态提示条（等待定位 / 路线信息等）
+    /// 屏幕最上边的状态提示条（矩形，长度=屏宽不变，高度随行数自适应）
     private var topOverlay: some View {
         VStack {
             statusBar
@@ -377,11 +405,13 @@ struct ContentView: View {
         Text(model.status)
             .font(.footnote)
             .foregroundStyle(.white)
-            .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.black.opacity(0.45))
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.black.opacity(0.45))
+            )
     }
 
     /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
