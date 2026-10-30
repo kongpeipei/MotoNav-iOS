@@ -368,23 +368,7 @@ struct ContentView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(suggestions.enumerated()), id: \.offset) { idx, s in
-                    Button {
-                        searchFocused = false
-                        showSuggestions = false
-                        if s == NAV_ITEM {
-                            model.toggleNavigation()
-                        } else if s.hasPrefix("🔍") {
-                            let q = extractOnlineQuery(s)
-                            doSearch(q)
-                        } else {
-                            searchText = s
-                            doSearch()
-                        }
-                    } label: {
-                        suggestionRow(s)
-                    }
-                    .buttonStyle(.plain)
-                    Divider()
+                    suggestionButton(idx, s)
                 }
             }
         }
@@ -393,6 +377,29 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
         .padding(.horizontal)
+    }
+
+    /// 联想条目按钮（含分隔线）
+    private func suggestionButton(_ idx: Int, _ s: String) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                searchFocused = false
+                showSuggestions = false
+                if s == NAV_ITEM {
+                    model.toggleNavigation()
+                } else if s.hasPrefix("🔍") {
+                    let q = extractOnlineQuery(s)
+                    doSearch(q)
+                } else {
+                    searchText = s
+                    doSearch()
+                }
+            } label: {
+                suggestionRow(s)
+            }
+            .buttonStyle(.plain)
+            Divider()
+        }
     }
 
     /// 联想条目行（图标按条目类型区分）
