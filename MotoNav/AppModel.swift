@@ -3,6 +3,7 @@ import CoreLocation
 import AVFoundation
 import UserNotifications
 import UIKit
+import ActivityKit
 
 extension Notification.Name {
     /// 触发点位提醒（object 为 Poi）
@@ -67,6 +68,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let repo = PoiRepository()
     private let lm = CLLocationManager()
     private let speech = AVSpeechSynthesizer()
+    /// 违拍提醒 Live Activity（灵动岛/锁屏实时显示前方抓拍点，导航中生效）
+    private var liveActivity: Activity<MotoNavAttributes>?
     private var simTimer: Timer?
     private var simStep = 0
     private var lastTrigger: [Int64: Date] = [:]
@@ -811,13 +814,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     alertStage[p.id] = 1
                     status = "前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意"
                     speak("前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意")
+                    updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
                 } else if nd <= 300 && stage < 2 {
                     alertStage[p.id] = 2
                     status = "接近\(p.type.voicePrefix)点位：\(p.name)，请减速"
                     speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速")
+                    updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
                 } else if nd <= p.radiusM && stage < 3 {
                     alertStage[p.id] = 3
                     triggerAlert(p, distance: nd)
+                    updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
                 } else if nd > 500 {
                     alertStage[p.id] = 0
                 }
@@ -1143,6 +1149,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routeDurationS = 0
         lastTurnSpoken = -1
         farAnnounced.removeAll()
+        endLiveActivity()
         status = "已清除路线"
     }
 
@@ -1232,6 +1239,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             UIApplication.shared.isIdleTimerDisabled = false // 恢复自动锁屏
             navigateFollowTick += 1
             finishTrip()
+            endLiveActivity()
             speak("导航结束")
             status = "导航已结束"
         } else {
@@ -1244,8 +1252,42 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             offRouteCount = 0
             arriveAnnounced = false
             startMonitoring()
+            startLiveActivity(destName: destName)
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
+        }
+    }
+
+    // MARK: - Live Activity（灵动岛/锁屏违拍提醒）
+
+    /// 开始导航 → 启动灵动岛活动
+    private func startLiveActivity(destName: String) {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let attr = MotoNavAttributes(destName: destName)
+        let initial = MotoNavAttributes.ContentState(poiName: "已出发", poiType: "违拍提醒", distanceM: 0)
+        do {
+            liveActivity = try Activity<MotoNavAttributes>.request(
+                attributes: attr, contentState: initial, pushType: nil)
+        } catch {
+            liveActivity = nil
+        }
+    }
+
+    /// 接近违拍点 → 更新灵动岛内容（最近路线点位，三档渐进）
+    private func updateLiveActivity(poiName: String, poiType: String, distanceM: Int) {
+        guard let act = liveActivity else { return }
+        let state = MotoNavAttributes.ContentState(poiName: poiName, poiType: poiType, distanceM: distanceM)
+        Task {
+            await act.update(using: state)
+        }
+    }
+
+    /// 到达/退出导航/清空路线 → 结束灵动岛活动
+    private func endLiveActivity() {
+        guard let act = liveActivity else { return }
+        liveActivity = nil
+        Task {
+            await act.end(dismissal: .immediate)
         }
     }
 
@@ -1314,6 +1356,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             UIApplication.shared.isIdleTimerDisabled = false
             navigateFollowTick += 1
             finishTrip()
+            endLiveActivity()
             routePois = []
             return
         }
