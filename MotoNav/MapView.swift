@@ -28,6 +28,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     let categoryTick: Int
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
     var onPoiLongPress: ((Poi) -> Void)?
+    var onPoiMoved: ((Poi, Double, Double) -> Void)?
     var onPoiSelect: ((Poi) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -53,6 +54,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
+        context.coordinator.onPoiMoved = onPoiMoved
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onCategorySelect = onCategorySelect
@@ -194,6 +196,11 @@ struct MapViewRepresentable: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var onPoiLongPress: ((Poi) -> Void)?
+        var onPoiMoved: ((Poi, Double, Double) -> Void)?
+        /// 长按拖动校准状态
+        private var dragAnnotation: PoiAnnotation?
+        private var dragStartPt: CGPoint = .zero
+        private var dragStartCoord: CLLocationCoordinate2D?
         var onPoiSelect: ((Poi) -> Void)?
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -214,25 +221,47 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-            guard gesture.state == .began,
-                  let map = gesture.view as? MKMapView else { return }
+            guard let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
-            // 优先命中已有点位标注（屏幕距离 < 40pt）
-            var best: Poi?
-            var bestDist = CGFloat.greatestFiniteMagnitude
-            for a in map.annotations {
-                if let pa = a as? PoiAnnotation {
-                    let ap = map.convert(pa.coordinate, toPointTo: map)
-                    let d = hypot(pt.x - ap.x, pt.y - ap.y)
-                    if d < 40 && d < bestDist { bestDist = d; best = pa.poi }
+            switch gesture.state {
+            case .began:
+                // 命中已有点位标注 → 进入拖动校准；否则空白长按菜单
+                var best: Poi?
+                var bestDist = CGFloat.greatestFiniteMagnitude
+                for a in map.annotations {
+                    if let pa = a as? PoiAnnotation {
+                        let ap = map.convert(pa.coordinate, toPointTo: map)
+                        let d = hypot(pt.x - ap.x, pt.y - ap.y)
+                        if d < 40 && d < bestDist { bestDist = d; best = pa.poi }
+                    }
                 }
+                if let p = best {
+                    dragStartPt = pt
+                    dragStartCoord = p.coordinate
+                    dragAnnotation = map.annotations
+                        .compactMap { $0 as? PoiAnnotation }
+                        .first { $0.poi.id == p.id }
+                } else {
+                    let coord = map.convert(pt, toCoordinateFrom: map)
+                    onLongPress?(coord)
+                }
+            case .changed:
+                if let ann = dragAnnotation {
+                    ann.dragCoordinate = map.convert(pt, toCoordinateFrom: map)
+                }
+            case .ended, .cancelled:
+                guard let ann = dragAnnotation, let poi = dragStartCoord != nil ? ann.poi : nil else { return }
+                let moved = hypot(pt.x - dragStartPt.x, pt.y - dragStartPt.y) > 20
+                let final = ann.dragCoordinate ?? dragStartCoord!
+                ann.dragCoordinate = nil
+                dragAnnotation = nil
+                if moved && gesture.state == .ended {
+                    onPoiMoved?(poi, final.latitude, final.longitude)
+                } else if gesture.state == .ended {
+                    onPoiLongPress?(poi)
+                }
+            default: break
             }
-            if let p = best {
-                onPoiLongPress?(p)
-                return
-            }
-            let coord = map.convert(pt, toCoordinateFrom: map)
-            onLongPress?(coord)
         }
 
         /// 轻点地图空白处：选点（命中标注时不触发，避免与点位/地点选择冲突）
@@ -390,12 +419,14 @@ final class RouteEndAnnotation: NSObject, MKAnnotation {
 final class PoiAnnotation: NSObject, MKAnnotation {
     let poi: Poi
     var onRoute: Bool
+    /// 拖动校准中的临时坐标（nil = 使用点位原始坐标）
+    var dragCoordinate: CLLocationCoordinate2D?
     init(poi: Poi, onRoute: Bool = false) {
         self.poi = poi
         self.onRoute = onRoute
         super.init()
     }
-    var coordinate: CLLocationCoordinate2D { poi.coordinate }
+    var coordinate: CLLocationCoordinate2D { dragCoordinate ?? poi.coordinate }
     var title: String? { poi.name }
     var subtitle: String? { poi.type.label }
 }

@@ -146,6 +146,9 @@ struct ContentView: View {
             onPoiLongPress: { p in
                 poiManagePoi = p
             },
+            onPoiMoved: { p, nLat, nLon in
+                model.updatePoi(id: p.id, type: p.type, name: p.name, lat: nLat, lon: nLon, radiusM: p.radiusM)
+            },
             onPoiSelect: { p in
                 model.selectedPoi = p
                 goHereLabel = "导航到此处：\(displayName(p.name))"
