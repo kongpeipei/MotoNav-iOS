@@ -599,34 +599,8 @@ struct ContentView: View {
         Group {
             if !model.routeChoices.isEmpty {
                 VStack(spacing: 6) {
-                    // 规划头部（高德式：出发地 → 目的地）
-                    HStack {
-                        Text("我的位置")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "arrow.right")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(model.destName)
-                            .font(.caption.bold())
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 4)
-                    // 横排方案卡（高德式并列）
-                    HStack(spacing: 8) {
-                        ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
-                            Button {
-                                haptic()
-                                model.selectedRouteIdx = idx
-                                model.applyRouteChoice(c)
-                            } label: {
-                                routeChoiceCard(c, selected: model.selectedRouteIdx == idx)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    routeChoiceHeader
+                    routeChoiceCards
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 4)
@@ -634,8 +608,42 @@ struct ContentView: View {
         }
     }
 
+    /// 规划头部（高德式：出发地 → 目的地）
+    private var routeChoiceHeader: some View {
+        HStack {
+            Text("我的位置")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Image(systemName: "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(model.destName)
+                .font(.caption.bold())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+    }
+
+    /// 横排方案卡（高德式并列）
+    private var routeChoiceCards: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
+                Button {
+                    haptic()
+                    model.selectedRouteIdx = idx
+                    model.applyRouteChoice(c)
+                } label: {
+                    routeChoiceCard(c, selected: model.selectedRouteIdx == idx)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     /// 单张高德式方案卡：大分钟 + 里程·抓拍 + 标签，选中蓝框高亮
-    private func routeChoiceCard(_ c: AppModel.RouteChoice, selected: Bool) -> some View {
+    private func routeChoiceCard(_ c: RouteChoice, selected: Bool) -> some View {
         let sel = selected
         return VStack(alignment: .leading, spacing: 3) {
             Text("\(c.durationS / 60) 分钟")
