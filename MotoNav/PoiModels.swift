@@ -18,9 +18,9 @@ enum PoiType: String, Codable, CaseIterable {
 
     var voicePrefix: String {
         switch self {
-        case .RED_LIGHT: return "前方闯红灯拍照"
-        case .RESTRICTION: return "前方限行禁摩路段"
-        case .LANE: return "前方车道违章拍照"
+        case .RED_LIGHT: return "闯红灯拍照"
+        case .RESTRICTION: return "限行禁摩路段"
+        case .LANE: return "车道违章拍照"
         }
     }
 

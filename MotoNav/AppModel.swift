@@ -110,7 +110,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func triggerAlert(_ p: Poi, distance: Double) {
-        let msg = "\(p.type.voicePrefix)，\(p.name)，距离约\(Int(distance))米"
+        let msg = "前方约\(Int(distance))米\(p.type.voicePrefix)，\(p.name)，请提前减速、注意信号灯"
         status = msg
         selectedPoi = p
         speak(msg)
@@ -138,8 +138,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         let content = UNMutableNotificationContent()
-        content.title = p.type.voicePrefix
-        content.body = "\(p.name) · 距离约\(Int(distance))米"
+        content.title = "前方\(p.type.voicePrefix)"
+        content.body = "\(p.name) · 距离约\(Int(distance))米 · 请提前减速、注意信号灯"
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: "moto_\(p.id)", content: content,

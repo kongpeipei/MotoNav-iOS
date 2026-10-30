@@ -58,7 +58,7 @@ final class CarPlaySceneDelegate: NSObject, CPTemplateApplicationSceneDelegate, 
 
     @objc private func onAlert(_ note: Notification) {
         guard let p = note.object as? Poi, let controller = interfaceController else { return }
-        speak("\(p.type.voicePrefix)，\(p.name)")
+        speak("前方\(p.type.voicePrefix)，\(p.name)，请提前减速、注意信号灯")
         let alert = CPAlertTemplate(
             titleVariants: [p.type.voicePrefix, p.name],
             actions: [CPAlertAction(title: "知道了", style: .default) { _ in }])
