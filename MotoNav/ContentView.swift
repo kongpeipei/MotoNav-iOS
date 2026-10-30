@@ -44,10 +44,14 @@ struct ContentView: View {
             if !model.navigating {
                 menuOverlay
             }
-            // 当前定位按钮：界面中间右侧（导航中隐藏，地图已跟随）
-            locateOverlay.opacity(model.navigating ? 0 : 1)
-            // 常用地点（家/公司）快捷按钮
-            homeWorkOverlay
+            // 当前定位按钮（非导航中显示；点击清空路线规划回到主页）
+            if !model.navigating {
+                locateOverlay
+            }
+            // 常用地点（家/公司）快捷按钮：仅规划态显示（主页有搜索框时隐藏，高德式）
+            if !model.navigating, !showSearchField, !model.routeChoices.isEmpty {
+                homeWorkOverlay
+            }
             // 天气条（左上角，指南针下方，一行）
             weatherOverlay
             // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
@@ -559,13 +563,14 @@ struct ContentView: View {
             HStack {
                 Spacer()
                 VStack(spacing: 8) {
-                    // 定位按钮：白底圆圈中心点（点击后收起"导航到这里"并回中跟随）
+                    // 定位按钮：点击回中跟随，并清空路线规划回到主页（搜索框界面）
                     Button {
                         haptic()
                         goHereName = nil
                         goHereLat = 0
                         goHereLon = 0
                         model.clearPreview()
+                        model.clearRoute()
                         model.centerOnUser()
                     } label: {
                         ZStack {
