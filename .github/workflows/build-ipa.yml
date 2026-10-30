@@ -26,7 +26,7 @@ jobs:
         run: |
           xcodebuild \
             -project MotoNav.xcodeproj \
-            -scheme MotoNav \
+            -alltargets \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
