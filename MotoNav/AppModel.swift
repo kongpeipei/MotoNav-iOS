@@ -68,8 +68,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var destLat = 0.0
     private var destLon = 0.0
     private var destName = ""
-    private var routeTurns: [RouteTurn] = []
+    @Published var routeTurns: [RouteTurn] = []
     private var lastTurnSpoken = -1
+    /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
+    private var farAnnounced: Set<Int> = []
+    /// 所选路线全程距离/用时（导航信息卡：剩余里程与时间按比例估算）
+    @Published var routeDistanceM = 0
+    @Published var routeDurationS = 0
 
     private let historyKey = "search_history"
     private let historyLimit = 10
@@ -864,7 +869,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if let r = r {
                 route = r.points
                 routeTurns = r.turns
+                routeDistanceM = r.distanceM
+                routeDurationS = r.durationS
                 lastTurnSpoken = -1
+        farAnnounced.removeAll()
                 let near = nearbyPoisOnRoute(r.points)
                 routePois = near
                 fitTick += 1
@@ -875,6 +883,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 route = [from, CLLocationCoordinate2D(latitude: lat, longitude: lon)]
                 routePois = nearbyPoisOnRoute(route)
                 routeTurns = []
+                routeDistanceM = 0
+                routeDurationS = 0
                 fitTick += 1
                 status = "路线服务不可用，已显示直线到「\(name)」"
             }
@@ -887,7 +897,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routePois = []
         routeTurns = []
         routeChoices = []
+        routeDistanceM = 0
+        routeDurationS = 0
         lastTurnSpoken = -1
+        farAnnounced.removeAll()
         status = "已清除路线"
     }
 
@@ -908,6 +921,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 route = [from, end]
                 routePois = nearbyPoisOnRoute(route)
                 routeTurns = []
+                routeDistanceM = 0
+                routeDurationS = 0
                 fitTick += 1
                 status = "路线服务不可用，已显示直线到「\(name)」"
             } else if choices.count == 1 {
@@ -923,7 +938,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let n = name ?? destName
         route = c.points
         routeTurns = c.turns
+        routeDistanceM = c.distanceM
+        routeDurationS = c.durationS
         lastTurnSpoken = -1
+        farAnnounced.removeAll()
         let near = nearbyPoisOnRoute(c.points)
         routePois = near
         routeChoices = []
@@ -994,13 +1012,60 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let d = distanceM(coord, routeTurns[i].coordinate)
             if d < best { best = d; idx = i }
         }
-        if idx >= 0 && best < 150 {
-            lastTurnSpoken = idx
+        if idx >= 0 {
             let t = routeTurns[idx]
             let text = turnText(t)
-            speak("\(text)，距您\(Int(best))米")
-            status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
+            // 高德式两段播报：远提示（800 米级，含路名）→ 近提示（150 米内）
+            if best < 900 && !farAnnounced.contains(idx) {
+                farAnnounced.insert(idx)
+                let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
+                speak("前方\(Int(best))米\(text)\(road)")
+                status = "导航：前方\(Int(best))米\(text)\(road) · 余\(Int(toDest / 1000))公里"
+            } else if best < 150 {
+                lastTurnSpoken = idx
+                speak("\(text)，距您\(Int(best))米")
+                status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
+            }
         }
+    }
+
+    // MARK: - 导航信息卡（高德式：剩余里程/时间 + 速度 + 下一转向）
+
+    struct NavStatus {
+        let remainM: Int
+        let remainS: Int
+        let speedKph: Double
+        let nextTurn: RouteTurn?
+        let distToTurnM: Int
+    }
+
+    func navigationStatus(at coord: CLLocationCoordinate2D?) -> NavStatus? {
+        guard !route.isEmpty, let start = route.first, let end = route.last else { return nil }
+        let loc = coord ?? currentLocation
+        guard let loc = loc else { return nil }
+        let traveled = traveledM(route, loc)
+        let total = routeDistanceM > 0 ? routeDistanceM : Int(distanceM(start, end))
+        let remainM = max(0, total - traveled)
+        let remainS = (routeDurationS > 0 && total > 0)
+            ? Int(Double(routeDurationS) * Double(remainM) / Double(total))
+            : 0
+        let speed = (loc.speed > 0) ? loc.speed * 3.6 : 0
+        let nt = routeTurns.first { $0.fromStartM > traveled }
+        return NavStatus(remainM: remainM, remainS: remainS, speedKph: speed,
+                         nextTurn: nt, distToTurnM: nt.map { $0.fromStartM - traveled } ?? 0)
+    }
+
+    /// 沿路线折线累计已走距离（米）：定位点到折线的最近点（含前段距离）
+    private func traveledM(_ pts: [CLLocationCoordinate2D], _ loc: CLLocationCoordinate2D) -> Int {
+        var bestI = 0
+        var bestD = Double.greatestFiniteMagnitude
+        for i in pts.indices {
+            let d = distanceM(loc, pts[i])
+            if d < bestD { bestD = d; bestI = i }
+        }
+        var acc = 0.0
+        for i in 0..<bestI { acc += distanceM(pts[i], pts[i + 1]) }
+        return Int(acc + bestD / 2)
     }
 
     private func turnText(_ t: RouteTurn) -> String {

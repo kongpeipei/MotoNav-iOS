@@ -1,11 +1,12 @@
 import Foundation
 import CoreLocation
 
-/// 转向步骤：距起点里程(米) + 动作 + 方向修饰 + 位置
+/// 转向步骤：距起点里程(米) + 动作 + 方向修饰 + 转入道路名 + 位置
 struct RouteTurn {
     let fromStartM: Int
     let action: String
     let modifier: String
+    let roadName: String
     let coordinate: CLLocationCoordinate2D
 }
 
@@ -91,8 +92,10 @@ enum RouteFetcher {
                             lat = loc[1]; lon = loc[0]
                         }
                         acc += step["distance"] as? Int ?? 0
+                        let roadName = step["name"] as? String ?? ""
                         turns.append(RouteTurn(
                             fromStartM: acc, action: action, modifier: modifier,
+                            roadName: roadName,
                             coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
                     }
                 }
@@ -156,8 +159,10 @@ enum RouteFetcher {
                         lat = loc[1]; lon = loc[0]
                     }
                     acc += step["distance"] as? Int ?? 0
+                    let roadName = step["name"] as? String ?? ""
                     turns.append(RouteTurn(
                         fromStartM: acc, action: action, modifier: modifier,
+                        roadName: roadName,
                         coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
                 }
             }

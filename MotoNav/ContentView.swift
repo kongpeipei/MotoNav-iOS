@@ -222,13 +222,14 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：类别结果 + 历史 + 去这里 + 搜索框/退出导航 + 清空路线
+    /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
             categoryBar
             historyBar
             if model.navigating {
+                navInfoCard
                 // 导航中：搜索框替换为退出导航按钮
                 Button {
                     model.toggleNavigation()
@@ -248,6 +249,100 @@ struct ContentView: View {
                 searchBar
             }
         }
+    }
+
+    /// 高德式导航信息卡：下一转向（图标+距离+路名）+ 剩余里程/时间 + 实时速度
+    private var navInfoCard: some View {
+        Group {
+            if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
+                HStack(spacing: 12) {
+                    // 左：下一转向
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let t = ns.nextTurn {
+                            HStack(spacing: 6) {
+                                Image(systemName: navTurnIcon(t.modifier))
+                                    .font(.title2)
+                                    .foregroundStyle(.white)
+                                Text("前方\(navDist(ns.distToTurnM))\(navTurnText(t))")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.white)
+                            }
+                            if !t.roadName.isEmpty {
+                                Text(t.roadName)
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.85))
+                            }
+                        } else {
+                            Text("沿当前道路直行")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                    Spacer()
+                    // 中：剩余里程/时间
+                    VStack(alignment: .trailing, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(String(format: "%.1f", Double(ns.remainM) / 1000.0))
+                                .font(.title3.bold())
+                                .foregroundStyle(.white)
+                            Text("公里")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        if ns.remainS > 0 {
+                            Text("剩余 \(ns.remainS / 60) 分钟")
+                                .font(.footnote)
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
+                    }
+                    // 右：实时速度
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text("\(Int(ns.speedKph))")
+                            .font(.title.bold())
+                            .foregroundStyle(.white)
+                        Text("km/h")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    /// 转向图标（SF Symbols）
+    private func navTurnIcon(_ modifier: String) -> String {
+        switch modifier {
+        case "left": return "arrow.turn.up.left"
+        case "right": return "arrow.turn.up.right"
+        case "slight left": return "arrow.up.left"
+        case "slight right": return "arrow.up.right"
+        case "sharp left": return "arrow.turn.up.left"
+        case "sharp right": return "arrow.turn.up.right"
+        case "uturn": return "arrow.uturn.up.left"
+        default: return "arrow.up"
+        }
+    }
+
+    private func navTurnText(_ t: RouteTurn) -> String {
+        switch t.modifier {
+        case "left": return "左转"
+        case "right": return "右转"
+        case "slight left": return "稍向左"
+        case "slight right": return "稍向右"
+        case "sharp left": return "急左转"
+        case "sharp right": return "急右转"
+        case "uturn": return "掉头"
+        default: return "继续"
+        }
+    }
+
+    private func navDist(_ m: Int) -> String {
+        m >= 1000 ? String(format: "%.1f公里", Double(m) / 1000.0) : "\(m)米"
     }
 
     /// 类别搜索结果横条（学校/医院/加油站，点击直接规划路线）
