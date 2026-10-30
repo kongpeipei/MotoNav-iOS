@@ -30,6 +30,8 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             mapLayer
+            // 等待定位/状态提示：屏幕最上边
+            topOverlay
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
             menuOverlay
@@ -200,7 +202,7 @@ struct ContentView: View {
                 .background(.ultraThinMaterial, in: Circle())
                 .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 .padding(.trailing, 12)
-                .padding(.top, 6)
+                .padding(.top, 40)
             }
             Spacer()
         }
@@ -221,17 +223,16 @@ struct ContentView: View {
                         .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 }
                 .padding(.trailing, 12)
-                .padding(.top, 58)
+                .padding(.top, 92)
             }
             Spacer()
         }
     }
 
-    /// 底部浮层：状态 + 类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航 + 清空路线
+    /// 底部浮层：类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
-            statusBar
             categoryBar
             historyBar
             locateRow
@@ -367,7 +368,7 @@ struct ContentView: View {
                 }
                 .frame(width: 54, height: 54)
                 .padding(.leading, 12)
-                .padding(.top, 6)
+                .padding(.top, 40)
                 Spacer()
             }
             Spacer()
@@ -384,6 +385,14 @@ struct ContentView: View {
         model.addPoi(type: type, name: "地图新增\(type.label)点", lat: c.latitude, lon: c.longitude)
         model.status = "已添加：地图新增\(type.label)点"
         pendingCoord = nil
+    }
+
+    /// 屏幕最上边的状态提示条（等待定位 / 路线信息等）
+    private var topOverlay: some View {
+        VStack {
+            statusBar
+            Spacer()
+        }
     }
 
     private var statusBar: some View {

@@ -50,14 +50,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onCategorySelect = onCategorySelect
-        // 定位按钮：跟随手机朝向模式（地图自动旋转 + 蓝点方向指示 + 回中）
-        if locateTick > 0 {
-            context.coordinator.setRegionProgrammatically {
-                map.userTrackingMode = .followWithHeading
-                if let loc = userLocation {
-                    map.setRegion(
-                        MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
-                        animated: true)
+        // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
+        if locateTick != context.coordinator.lastLocateTick {
+            context.coordinator.lastLocateTick = locateTick
+            if locateTick > 0 {
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .followWithHeading
                 }
             }
         } else if !context.coordinator.hasCentered, let loc = userLocation {
@@ -69,8 +67,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                     animated: false)
             }
         }
-        // 路线全览
-        if fitTick > 0 && route.count > 1 {
+        // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回）
+        if fitTick != context.coordinator.lastFitTick && route.count > 1 {
+            context.coordinator.lastFitTick = fitTick
             context.coordinator.setRegionProgrammatically {
                 var rect = MKMapRect.null
                 for c in route {
@@ -80,8 +79,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
             }
         }
-        // 加油站全览（含当前位置）
-        if gasTick > 0 && !gasStations.isEmpty {
+        // 加油站全览（仅在新请求时触发一次）
+        if gasTick != context.coordinator.lastGasTick && !gasStations.isEmpty {
+            context.coordinator.lastGasTick = gasTick
             context.coordinator.setRegionProgrammatically {
                 var rect = MKMapRect.null
                 var pts = gasStations
@@ -120,8 +120,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                 .compactMap { $0 as? RouteEndAnnotation }
                 .forEach { map.removeAnnotation($0) }
         }
-        // 搜索预览点（绿色高亮）
+        // 搜索预览点（绿色高亮）+ 跳转到搜索结果
         let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
+        let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
+        if previewKey != context.coordinator.lastPreviewKey {
+            context.coordinator.lastPreviewKey = previewKey
+            if let p = preview {
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .none
+                    map.setRegion(
+                        MKCoordinateRegion(center: p, latitudinalMeters: 3000, longitudinalMeters: 3000),
+                        animated: true)
+                }
+            }
+        }
         if let p = preview {
             if previews.isEmpty {
                 map.addAnnotation(PreviewAnnotation(coordinate: p))
@@ -178,6 +190,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
+        /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
+        var lastLocateTick = 0
+        var lastFitTick = 0
+        var lastGasTick = 0
+        var lastPreviewKey = ""
         /// 程序主动设置区域（避免被标记为用户移动）
         private var programmaticMove = false
 
