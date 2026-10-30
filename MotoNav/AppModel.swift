@@ -97,7 +97,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 导航状态
     private var destLat = 0.0
     private var destLon = 0.0
-    private var destName = ""
+    var destName = ""
     @Published var routeTurns: [RouteTurn] = []
     private var lastTurnSpoken = -1
     /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
