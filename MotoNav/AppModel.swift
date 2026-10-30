@@ -43,8 +43,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 权限与定位
 
     @objc func authorizeAndStart() {
-        let status = lm.authorizationStatus
-        switch status {
+        let auth = lm.authorizationStatus
+        switch auth {
         case .notDetermined:
             lm.requestWhenInUseAuthorization()
         case .authorizedWhenInUse, .authorizedAlways:
