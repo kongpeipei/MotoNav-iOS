@@ -26,7 +26,19 @@ jobs:
         run: |
           xcodebuild \
             -project MotoNav.xcodeproj \
-            -alltargets \
+            -scheme MotoNav \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Build widget (unsigned)
+        run: |
+          xcodebuild \
+            -project MotoNav.xcodeproj \
+            -scheme MotoNavWidget \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
