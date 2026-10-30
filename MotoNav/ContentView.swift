@@ -135,6 +135,10 @@ struct ContentView: View {
                 model.checkClipboard()
             }
         }
+        // 导航中保持屏幕常亮（骑行看导航不被锁屏；退出导航恢复）
+        .onChange(of: model.navigating) { nav in
+            UIApplication.shared.isIdleTimerDisabled = nav
+        }
         // 行程总结（到达/退出导航时弹出，高德式行程卡）
         .alert("本次行程", isPresented: Binding(
             get: { model.tripSummary != nil },
@@ -712,21 +716,40 @@ struct ContentView: View {
         }
     }
 
-    /// 高德式顶部大数字条：剩余里程 + 剩余时间（导航中显示，避开右上退出按钮）
+    /// 高德式顶部导航条：剩余里程 + 时间 + 下一转向预告（<500米显示，高德顶部主条样式）
     private var navTopBar: some View {
         VStack {
             if model.navigating, let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
-                        .font(.system(size: 34, weight: .heavy))
+                VStack(spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
+                            .font(.system(size: 34, weight: .heavy))
+                            .foregroundStyle(.white)
+                        Text("公里")
+                            .font(.caption.bold())
+                            .foregroundStyle(.white.opacity(0.85))
+                        Spacer()
+                        Text("\(max(ns.remainS, 0) / 60) 分钟")
+                            .font(.system(size: 26, weight: .heavy))
+                            .foregroundStyle(.white)
+                    }
+                    // 下一转向预告（高德顶部主条：接近转向时显示"前方X米右转 进入XX路"）
+                    if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: navTurnIcon(t.modifier))
+                                .font(.subheadline.bold())
+                            Text("前方\(navDist(ns.distToTurnM))\(navTurnText(t))")
+                                .font(.subheadline.bold())
+                            if !t.roadName.isEmpty {
+                                Text("进入 \(t.roadName)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.92))
+                                    .lineLimit(1)
+                            }
+                        }
                         .foregroundStyle(.white)
-                    Text("公里")
-                        .font(.caption.bold())
-                        .foregroundStyle(.white.opacity(0.85))
-                    Spacer()
-                    Text("\(max(ns.remainS, 0) / 60) 分钟")
-                        .font(.system(size: 26, weight: .heavy))
-                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)

@@ -263,6 +263,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastPitchState = isNav
             map.camera.pitch = isNav ? 55 : 0
         }
+        // 导航中强制深色底图（高德夜间导航效果：深色底图 + 蓝色箭头更醒目）；非导航恢复浅色
+        if isNav != context.coordinator.lastDarkState {
+            context.coordinator.lastDarkState = isNav
+            map.overrideUserInterfaceStyle = isNav ? .dark : .light
+        }
         // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
         if zoomInTick != context.coordinator.lastZoomInTick {
             context.coordinator.lastZoomInTick = zoomInTick
@@ -317,6 +322,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPreviewKey = ""
         /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
         var lastPitchState: Bool?
+        /// 导航深色底图状态记忆
+        var lastDarkState: Bool?
         /// 路线白色描边底层引用（renderer 区分双层）
         var underPolyline: MKPolyline?
         /// 当前方案主层（草绿色，renderer 区分）
