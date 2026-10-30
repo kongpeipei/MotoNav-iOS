@@ -34,6 +34,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 地图缩放按钮计数（+1 放大 / 缩小，MapView 响应）
     @Published var zoomInTick = 0
     @Published var zoomOutTick = 0
+    /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
+    @Published var navigateFollowTick = 0
     /// 手机朝向（度，0=北，顺时针）
     @Published var heading: Double = 0
     /// 自定义背景图片（相册选择，v1.11 已移除入口，保留字段兼容旧数据）
@@ -73,6 +75,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastReroute = Date(timeIntervalSince1970: 0)
     /// 导航开始时间（行程总结用）
     private var navStart: Date?
+    /// 即将到达播报去重
+    private var arriveAnnounced = false
     /// 收藏点位（key: "lat,lon"）
     @Published var favorites: [String: String] = [:]
     /// 常用地点（家/公司）
@@ -1041,6 +1045,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func clearRoute() {
         navigating = false
+        UIApplication.shared.isIdleTimerDisabled = false
+        navigateFollowTick += 1
         route = []
         routePois = []
         routeTurns = []
@@ -1143,15 +1149,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func toggleNavigation() {
         if navigating {
             navigating = false
+            UIApplication.shared.isIdleTimerDisabled = false // 恢复自动锁屏
+            navigateFollowTick += 1
             finishTrip()
             speak("导航结束")
             status = "导航已结束"
         } else {
             guard route.count >= 2 else { status = "请先搜索目的地并规划路线"; return }
             navigating = true
+            UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
+            navigateFollowTick += 1
             navStart = Date()
             alertStage = [:]
             offRouteCount = 0
+            arriveAnnounced = false
             startMonitoring()
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
@@ -1219,9 +1230,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"
             navigating = false
+            UIApplication.shared.isIdleTimerDisabled = false
+            navigateFollowTick += 1
             finishTrip()
             routePois = []
             return
+        }
+        // 接近终点播报（高德式：剩余500米提示即将到达）
+        if toDest < 500 && !arriveAnnounced {
+            arriveAnnounced = true
+            speak("前方即将到达目的地，\(destName)")
+        } else if toDest > 800 {
+            arriveAnnounced = false
         }
         guard !routeTurns.isEmpty else { return }
         var idx = -1

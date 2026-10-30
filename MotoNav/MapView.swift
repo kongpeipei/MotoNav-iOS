@@ -27,6 +27,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 类别结果刷新计数
     let categoryTick: Int
     /// 导航中（3D 俯仰视角）
+    let navigateFollowTick: Int
     let navigating: Bool
     /// 地图缩放按钮计数
     let zoomInTick: Int
@@ -206,6 +207,31 @@ struct MapViewRepresentable: UIViewRepresentable {
         if !context.coordinator.userMoved {
             map.camera.heading = CLLocationDirection(heading)
         }
+        // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
+        if navigateFollowTick != context.coordinator.lastNavFollowTick {
+            context.coordinator.lastNavFollowTick = navigateFollowTick
+            context.coordinator.userMoved = false
+            if let loc = userLocation {
+                context.coordinator.navLastFollow = loc
+            }
+            context.coordinator.setRegionProgrammatically {
+                map.userTrackingMode = .followWithHeading
+            }
+        }
+        // 导航中拖动/旋转地图后，车开远（>100米）自动拉回跟随（高德导航行为）
+        if navigating && context.coordinator.userMoved {
+            if let loc = userLocation, let last = context.coordinator.navLastFollow,
+               CLLocation(latitude: loc.latitude, longitude: loc.longitude)
+                .distance(from: CLLocation(latitude: last.latitude, longitude: last.longitude)) > 100 {
+                context.coordinator.userMoved = false
+                context.coordinator.navLastFollow = loc
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .followWithHeading
+                }
+            }
+        } else if navigating, let loc = userLocation {
+            context.coordinator.navLastFollow = loc
+        }
         // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
@@ -270,6 +296,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var underPolyline: MKPolyline?
         /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
         var userMoved = false
+        /// 导航跟随触发记忆
+        var lastNavFollowTick = 0
+        /// 导航中最后跟随位置（开远自动拉回）
+        var navLastFollow: CLLocationCoordinate2D?
         /// 程序主动设置区域（避免被标记为用户移动）
         private var programmaticMove = false
 

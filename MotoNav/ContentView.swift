@@ -52,6 +52,8 @@ struct ContentView: View {
             zoomOverlay
             // 导航中悬浮退出按钮
             exitNavOverlay
+            // 高德式顶部大数字条（剩余里程/时间，导航中显示）
+            navTopBar
             bottomOverlay
         }
         .sheet(item: $poiDetail) { p in
@@ -187,6 +189,7 @@ struct ContentView: View {
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
             categoryTick: model.categoryTick,
+            navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
@@ -281,13 +284,15 @@ struct ContentView: View {
                 goHereBar
                 searchBar
             } else {
+                turnAheadCard
                 navInfoCard
                 snapAlertCard
             }
         }
     }
 
-    /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 剩余里程/时间 + 实时速度
+    /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 实时速度
+    /// （剩余里程/时间已移到顶部大数字条 navTopBar）
     private var navInfoCard: some View {
         Group {
             if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
@@ -327,22 +332,6 @@ struct ContentView: View {
                         }
                     }
                     Spacer()
-                    // 中：剩余里程/时间（大字分层）
-                    VStack(alignment: .trailing, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 3) {
-                            Text(String(format: "%.1f", Double(ns.remainM) / 1000.0))
-                                .font(.system(size: 30, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("公里")
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.85))
-                        }
-                        if ns.remainS > 0 {
-                            Text("剩余 \(ns.remainS / 60) 分钟")
-                                .font(.subheadline.bold())
-                                .foregroundStyle(.white.opacity(0.95))
-                        }
-                    }
                     // 右：实时速度
                     VStack(alignment: .trailing, spacing: 0) {
                         Text("\(Int(ns.speedKph))")
@@ -356,6 +345,41 @@ struct ContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    /// 高德式路口放大示意图：接近下一转向（<200米）时显示交叉路口 + 转弯箭头 + 路名
+    private var turnAheadCard: some View {
+        Group {
+            if let ns = model.navigationStatus(at: model.currentLocation),
+               let t = ns.nextTurn, ns.distToTurnM < 200 {
+                ZStack {
+                    // 当前道路（垂直）
+                    Rectangle().fill(.white.opacity(0.92))
+                        .frame(width: 12, height: 110)
+                    // 目标道路（水平）
+                    Rectangle().fill(.white.opacity(0.92))
+                        .frame(width: 110, height: 12)
+                    // 转弯箭头
+                    Image(systemName: navTurnIcon(t.modifier))
+                        .font(.system(size: 46, weight: .bold))
+                        .foregroundStyle(Color(red: 0.25, green: 0.72, blue: 1.0))
+                    // 路名标签
+                    if !t.roadName.isEmpty {
+                        Text(t.roadName)
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                            .offset(y: 54)
+                    }
+                }
+                .frame(width: 110, height: 110)
+                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal)
                 .padding(.bottom, 4)
             }
@@ -680,9 +704,34 @@ struct ContentView: View {
         }
     }
 
-    /// 导航中悬浮退出按钮（右上角红色胶囊，高德导航式）
-    private var exitNavOverlay: some View {
+    /// 高德式顶部大数字条：剩余里程 + 剩余时间（导航中显示，避开右上退出按钮）
+    private var navTopBar: some View {
         VStack {
+            if model.navigating, let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
+                        .font(.system(size: 34, weight: .heavy))
+                        .foregroundStyle(.white)
+                    Text("公里")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white.opacity(0.85))
+                    Spacer()
+                    Text("\(max(ns.remainS, 0) / 60) 分钟")
+                        .font(.system(size: 26, weight: .heavy))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal)
+                .padding(.top, 52)
+            }
+            Spacer()
+        }
+    }
+
+    /// 导航中悬浮退出按钮（右上角红色胶囊，高德导航式）
+    private var exitNavOverlay: some View {        VStack {
             HStack {
                 Spacer()
                 if model.navigating {
