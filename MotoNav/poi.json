@@ -1,25 +1,5 @@
 [
  {
-  "id": 1,
-  "type": "RED_LIGHT",
-  "name": "演示·闯红灯抓拍点",
-  "lat": 31.812,
-  "lon": 117.225,
-  "radiusM": 150,
-  "enabled": true,
-  "note": "演示点位，供模拟测试使用，可删除"
- },
- {
-  "id": 2,
-  "type": "LANE",
-  "name": "演示·车道违章拍照点",
-  "lat": 31.8155,
-  "lon": 117.2195,
-  "radiusM": 120,
-  "enabled": true,
-  "note": "演示点位，供模拟测试使用，可删除"
- },
- {
   "id": 11,
   "type": "RESTRICTION",
   "name": "合肥一环·环城北路禁摩区界",
