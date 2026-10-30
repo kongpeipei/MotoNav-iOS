@@ -87,6 +87,39 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
+    // MARK: - 网络查询工具（v1.26：统一超时 + 备用镜像 + 动态搜索范围）
+
+    /// 生成动态 bbox 字符串 "minLat,minLon,maxLat,maxLon"。
+    /// 以 center 为中心（无定位时回退合肥），latSpan/lonSpan 为跨度（度），使在线查询跟随当前位置，支持全国范围。
+    private func bbox(center: CLLocationCoordinate2D?, latSpan: Double, lonSpan: Double) -> String {
+        let c = center ?? CLLocationCoordinate2D(latitude: 31.86, longitude: 117.28)
+        return String(format: "%.4f,%.4f,%.4f,%.4f",
+                      c.latitude - latSpan / 2, c.longitude - lonSpan / 2,
+                      c.latitude + latSpan / 2, c.longitude + lonSpan / 2)
+    }
+
+    /// 统一的 Overpass POST 查询：主实例失败自动切换备用镜像，解析失败返回 nil。
+    private func overpassQuery(_ query: String, timeout: TimeInterval = 25) async -> [String: Any]? {
+        let endpoints = [
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter"
+        ]
+        for endpoint in endpoints {
+            guard let url = URL(string: endpoint) else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = timeout
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+            req.httpBody = "data=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)".data(using: .utf8)
+            if let (data, _) = try? await URLSession.shared.data(for: req),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                return root
+            }
+        }
+        return nil
+    }
+
     // MARK: - 合肥小区/商铺联想
 
     private func loadHefeiPois() {
@@ -110,18 +143,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 在线拉取合肥小区/商铺名称（Overpass 免费接口）
+    /// 在线拉取当前位置周边小区/商铺名称（Overpass 免费接口，范围跟随定位）
     private func fetchHefeiPoisOnline() async -> [String]? {
-        let q = "[out:json][timeout:25];(node[\"shop\"](31.55,116.85,32.05,117.70);way[\"shop\"](31.55,116.85,32.05,117.70);node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物\"](31.55,116.85,32.05,117.70););out tags;"
-        guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 20
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
-        req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let bb = bbox(center: currentLocation, latSpan: 0.6, lonSpan: 0.9)
+        let q = "[out:json][timeout:25];(node[\"shop\"](\(bb));way[\"shop\"](\(bb));node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物\"](\(bb)););out tags;"
+        guard let root = await overpassQuery(q, timeout: 20),
               let els = root["elements"] as? [[String: Any]] else { return nil }
         var names = Set<String>()
         for e in els {
@@ -134,27 +160,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return names.count > 20 ? Array(names) : nil
     }
 
-    /// 按名称在线查询合肥地点坐标（用于联想命中后的规划 / 模糊兜底搜索）
+    /// 按名称在线查询地点坐标（联想命中后的规划 / 模糊兜底搜索，范围跟随定位）
     /// fuzzy=true 时模糊匹配 node/way/relation（小区多为 way，精确匹配找不到时兜底）
     func findHefeiCoordinate(_ name: String, fuzzy: Bool = false) async -> CLLocationCoordinate2D? {
         let esc = name
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+        let bb = bbox(center: currentLocation, latSpan: 1.0, lonSpan: 1.4)
         let q: String
         if fuzzy {
-            q = "[out:json][timeout:20];(node[\"name\"~\"\(esc)\",i](31.55,116.85,32.05,117.70);way[\"name\"~\"\(esc)\",i](31.55,116.85,32.05,117.70);relation[\"name\"~\"\(esc)\",i](31.55,116.85,32.05,117.70););out center 15;"
+            q = "[out:json][timeout:20];(node[\"name\"~\"\(esc)\",i](\(bb));way[\"name\"~\"\(esc)\",i](\(bb));relation[\"name\"~\"\(esc)\",i](\(bb)););out center 15;"
         } else {
-            q = "[out:json][timeout:15];node[\"name\"=\"\(esc)\"](31.55,116.85,32.05,117.70);out center 1;"
+            q = "[out:json][timeout:15];node[\"name\"=\"\(esc)\"](\(bb));out center 1;"
         }
-        guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = fuzzy ? 20 : 15
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
-        req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let root = await overpassQuery(q, timeout: fuzzy ? 20 : 15),
               let els = root["elements"] as? [[String: Any]] else { return nil }
         var best: CLLocationCoordinate2D?
         var bestIsExact = false
@@ -255,19 +274,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "检测到剪贴板位置「\(name)」，点「去这里」规划路线"
     }
 
-    /// 拉取地图小区/商铺名称标签（带坐标）
+    /// 拉取地图周边小区/商铺名称标签（带坐标，范围跟随定位，半径约 16km）
     func fetchPlaceLabels() {
         Task {
-            let q = "[out:json][timeout:30];(node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](31.55,116.85,32.05,117.70);way[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](31.55,116.85,32.05,117.70););out center 500;"
-            guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.timeoutInterval = 30
-            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
-            req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
-            guard let (data, _) = try? await URLSession.shared.data(for: req),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let bb = bbox(center: currentLocation, latSpan: 0.3, lonSpan: 0.4)
+            let q = "[out:json][timeout:30];(node[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](\(bb));way[\"name\"~\"小区|花园|苑|家园|社区|新村|公寓|广场|商场|购物|中心\"](\(bb)););out center 500;"
+            guard let root = await overpassQuery(q, timeout: 30),
                   let els = root["elements"] as? [[String: Any]] else { return }
             var list: [PlaceLabel] = []
             var seen = Set<String>()
@@ -349,15 +361,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let query = "[out:json][timeout:25];(node[\"amenity\"~\"\(c.amenity)\"](\(bbox));way[\"amenity\"~\"\(c.amenity)\"](\(bbox)););out center 80;"
         status = "正在查找附近10公里\(c.kind)…"
         Task {
-            let reqURL = URL(string: "https://overpass-api.de/api/interpreter")
-            var req = URLRequest(url: reqURL!)
-            req.httpMethod = "POST"
-            req.timeoutInterval = 25
-            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
-            req.httpBody = "data=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)".data(using: .utf8)
-            guard let (data, _) = try? await URLSession.shared.data(for: req),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            guard let root = await overpassQuery(query, timeout: 25),
                   let els = root["elements"] as? [[String: Any]] else {
                 status = "查询\(c.kind)失败，请稍后重试"
                 return
@@ -417,9 +421,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             comps.queryItems = [
                 URLQueryItem(name: "latitude", value: String(loc.latitude)),
                 URLQueryItem(name: "longitude", value: String(loc.longitude)),
-                URLQueryItem(name: "current_weather", value: "true"),
-                URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
-                URLQueryItem(name: "timezone", value: "Asia%2FShanghai"),
+                // v1.26：新增降水、风速，对摩托车出行更关键
+                URLQueryItem(name: "current", value: "temperature_2m,weather_code,precipitation,wind_speed_10m,wind_direction_10m"),
+                URLQueryItem(name: "hourly", value: "precipitation_probability"),
+                URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
+                URLQueryItem(name: "timezone", value: "Asia/Shanghai"),
                 URLQueryItem(name: "forecast_days", value: "2")
             ]
             guard let url = comps.url else { return }
@@ -428,17 +434,41 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
             guard let (data, _) = try? await URLSession.shared.data(for: req),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            if let cw = root["current_weather"] as? [String: Any],
-               let temp = cw["temperature"] as? Double,
-               let code = cw["weathercode"] as? Int {
-                weatherText = "\(weatherIcon(code)) \(Int(temp))°"
+            // 当前天气（兼容新旧两种字段名）
+            var icon = "🌡️"
+            var temp: Double?
+            var windKmH: Double?
+            var precipProb: Int?
+            if let cur = root["current"] as? [String: Any] {
+                temp = cur["temperature_2m"] as? Double ?? cur["temperature"] as? Double
+                if let code = cur["weather_code"] as? Int ?? cur["weathercode"] as? Int {
+                    icon = weatherIcon(code)
+                }
+                windKmH = cur["wind_speed_10m"] as? Double
             }
-            // 明日最高/最低
+            // 当前小时降水概率（hourly 首项即当前整点，时区已对齐上海）
+            if let hourly = root["hourly"] as? [String: Any],
+               let probs = hourly["precipitation_probability"] as? [Double],
+               let first = probs.first {
+                precipProb = Int(first.rounded())
+            }
+            if let t = temp {
+                var parts = [icon, "\(Int(t.rounded()))°"]
+                if let pp = precipProb, pp > 0 { parts.append("降水\(pp)%") }
+                if let w = windKmH { parts.append("风\(Int(w.rounded()))km/h") }
+                weatherText = parts.joined(separator: " ")
+            }
+            // 明日最高/最低 + 降水概率
             if let daily = root["daily"] as? [String: Any],
                let max = daily["temperature_2m_max"] as? [Double],
                let min = daily["temperature_2m_min"] as? [Double],
                max.count > 1, min.count > 1 {
-                tomorrowText = "明日 \(Int(min[1].rounded()))~\(Int(max[1].rounded()))°"
+                var t = "明日 \(Int(min[1].rounded()))~\(Int(max[1].rounded()))°"
+                if let ppMax = daily["precipitation_probability_max"] as? [Double],
+                   ppMax.count > 1, Int(ppMax[1].rounded()) > 0 {
+                    t += " 降水\(Int(ppMax[1].rounded()))%"
+                }
+                tomorrowText = t
             }
         }
     }
@@ -463,16 +493,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func fetchGasStations() {
         Task {
-            let q = "[out:json][timeout:25];node[\"amenity\"=\"fuel\"](31.55,116.85,32.05,117.70);out;"
-            guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.timeoutInterval = 25
-            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
-            req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
-            guard let (data, _) = try? await URLSession.shared.data(for: req),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let bb = bbox(center: currentLocation, latSpan: 0.45, lonSpan: 0.6)
+            let q = "[out:json][timeout:25];node[\"amenity\"=\"fuel\"](\(bb));out;"
+            guard let root = await overpassQuery(q, timeout: 25),
                   let els = root["elements"] as? [[String: Any]] else {
                 status = "加油站数据加载失败，请检查网络"
                 return
