@@ -60,3 +60,10 @@ struct PlaceLabel: Identifiable, Hashable {
     let lon: Double
     var id: String { name }
 }
+
+/// 让 CLLocationCoordinate2D 满足 Equatable（驱动 onChange 观察预览点变化）
+extension CLLocationCoordinate2D: Equatable {
+    public static func == (l: CLLocationCoordinate2D, r: CLLocationCoordinate2D) -> Bool {
+        l.latitude == r.latitude && l.longitude == r.longitude
+    }
+}

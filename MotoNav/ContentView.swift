@@ -302,97 +302,105 @@ struct ContentView: View {
     /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
     private var searchBar: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("搜索目的地", text: $searchText)
-                        .font(.subheadline)
-                        .focused($searchFocused)
-                        .submitLabel(.search)
-                        .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
-                        .onChange(of: searchText) { newValue in
-                            suggestions = model.searchSuggestions(newValue).map { displayName($0) }
-                            if !suggestions.contains(NAV_ITEM) {
-                                suggestions.append(NAV_ITEM)
-                            }
-                            showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
-                        }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.white, in: Capsule())
-                .overlay(Capsule().stroke(.quaternary))
-
-                Button {
-                    showSuggestions = false
-                    dismissKeyboard()
-                    doSearch()
-                } label: {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white)
-                }
-                .padding(6)
-                .background(.black.opacity(0.55), in: Circle())
-
-                // 加油站按钮：显示市区加油站
-                Button {
-                    showSuggestions = false
-                    dismissKeyboard()
-                    model.fetchGasStations()
-                } label: {
-                    Text("⛽")
-                        .font(.title3)
-                        .foregroundStyle(.white)
-                }
-                .padding(6)
-                .background(.black.opacity(0.55), in: Circle())
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-
-            // 联想下拉
+            searchInputRow
             if showSuggestions && !suggestions.isEmpty {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(suggestions.enumerated()), id: \.offset) { idx, s in
-                            Button {
-                                searchFocused = false
-                                showSuggestions = false
-                                if s == NAV_ITEM {
-                                    model.toggleNavigation()
-                                } else if s.hasPrefix("🔍") {
-                                    let q = extractOnlineQuery(s)
-                                    doSearch(q)
-                                } else {
-                                    searchText = s
-                                    doSearch()
-                                }
-                            } label: {
-                                HStack {
-                                    Image(systemName: s == NAV_ITEM ? "arrow.right.circle" : s.hasPrefix("🔍") ? "magnifyingglass" : "mappin.and.ellipse")
-                                        .foregroundStyle(s == NAV_ITEM ? Color.accentColor : s.hasPrefix("🔍") ? .orange : .secondary)
-                                    Text(s).foregroundStyle(.primary)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            Divider()
-                        }
-                    }
-                }
-                .frame(maxHeight: 200)
-                .background(.bar)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
-                .padding(.horizontal)
+                suggestionsList
             }
         }
         .background(.black.opacity(0.18))
+    }
+
+    /// 搜索输入行：输入框 + 搜索按钮 + 加油站按钮
+    private var searchInputRow: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("搜索目的地", text: $searchText)
+                    .font(.subheadline)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
+                    .onChange(of: searchText) { newValue in
+                        suggestions = model.searchSuggestions(newValue).map { displayName($0) }
+                        if !suggestions.contains(NAV_ITEM) {
+                            suggestions.append(NAV_ITEM)
+                        }
+                        showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+                    }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.white, in: Capsule())
+            .overlay(Capsule().stroke(.quaternary))
+
+            Button {
+                showSuggestions = false
+                dismissKeyboard()
+                doSearch()
+            } label: {
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white)
+            }
+            .padding(6)
+            .background(.black.opacity(0.55), in: Circle())
+
+            // 加油站按钮：显示市区加油站
+            Button {
+                showSuggestions = false
+                dismissKeyboard()
+                model.fetchGasStations()
+            } label: {
+                Text("⛽")
+                    .font(.title3)
+                    .foregroundStyle(.white)
+            }
+            .padding(6)
+            .background(.black.opacity(0.55), in: Circle())
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+    }
+
+    /// 联想下拉列表
+    private var suggestionsList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(suggestions.enumerated()), id: \.offset) { idx, s in
+                    Button {
+                        searchFocused = false
+                        showSuggestions = false
+                        if s == NAV_ITEM {
+                            model.toggleNavigation()
+                        } else if s.hasPrefix("🔍") {
+                            let q = extractOnlineQuery(s)
+                            doSearch(q)
+                        } else {
+                            searchText = s
+                            doSearch()
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: s == NAV_ITEM ? "arrow.right.circle" : s.hasPrefix("🔍") ? "magnifyingglass" : "mappin.and.ellipse")
+                                .foregroundStyle(s == NAV_ITEM ? Color.accentColor : s.hasPrefix("🔍") ? .orange : .secondary)
+                            Text(s).foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Divider()
+                }
+            }
+        }
+        .frame(maxHeight: 200)
+        .background(.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+        .padding(.horizontal)
     }
 
     /// 历史搜索记录（横滑标签，地址简化显示）
