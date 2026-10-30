@@ -89,7 +89,7 @@ final class CarPlaySceneDelegate: NSObject, CPTemplateApplicationSceneDelegate, 
                 .filter { $0.type == type }
                 .map { CPListItem(text: $0.name, detailText: $0.type.label) }
             guard !items.isEmpty else { return nil }
-            return CPListSection(items: items, header: type.label)
+            return CPListSection(items: items, header: type.label, sectionIndexTitle: nil)
         }
         let list = CPListTemplate(title: "附近点位", sections: groups)
         list.delegate = self
@@ -100,7 +100,7 @@ final class CarPlaySceneDelegate: NSObject, CPTemplateApplicationSceneDelegate, 
 
     nonisolated func listTemplate(
         _ listTemplate: CPListTemplate,
-        didSelectListItem item: CPListItem,
+        didSelect item: CPListItem,
         completionHandler: @escaping () -> Void
     ) {
         Task { @MainActor in
@@ -116,7 +116,7 @@ final class CarPlaySceneDelegate: NSObject, CPTemplateApplicationSceneDelegate, 
         let alert = CPAlertTemplate(
             titleVariants: [name, "前方提醒点位"],
             actions: [
-                CPAlertAction(title: "播报") { [weak self] _ in
+                CPAlertAction(title: "播报", style: .default) { [weak self] _ in
                     Task { @MainActor in self?.speak("\(name)，请规范骑行") }
                 },
                 CPAlertAction(title: "关闭", style: .cancel) { _ in }
