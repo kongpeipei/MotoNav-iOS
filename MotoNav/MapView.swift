@@ -2,7 +2,7 @@ import SwiftUI
 import MapKit
 import UIKit
 
-/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点
+/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
     let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
@@ -14,7 +14,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     let fitTick: Int
     /// 手机朝向（度），驱动地图跟随旋转
     let heading: Double
+    /// 搜索预览点（绿色高亮）
+    let preview: CLLocationCoordinate2D?
+    /// 市区加油站（橙色"油"标注）
+    let gasStations: [CLLocationCoordinate2D]
+    /// 加油站全览请求计数（+1 触发缩放显示全部加油站 + 当前位置）
+    let gasTick: Int
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
+    var onPoiLongPress: ((Poi) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -30,6 +37,7 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
+        context.coordinator.onPoiLongPress = onPoiLongPress
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 蓝点方向指示 + 回中）
         if locateTick > 0 {
             context.coordinator.setRegionProgrammatically {
@@ -60,6 +68,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
             }
         }
+        // 加油站全览（含当前位置）
+        if gasTick > 0 && !gasStations.isEmpty {
+            context.coordinator.setRegionProgrammatically {
+                var rect = MKMapRect.null
+                var pts = gasStations
+                if let u = userLocation { pts.append(u) }
+                for c in pts {
+                    let p = MKMapPoint(c)
+                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                }
+                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
+            }
+        }
+        // 点位标注增删
         let ids = Set(pois.map(\.id))
         map.annotations
             .compactMap { $0 as? PoiAnnotation }
@@ -86,6 +108,30 @@ struct MapViewRepresentable: UIViewRepresentable {
                 .compactMap { $0 as? RouteEndAnnotation }
                 .forEach { map.removeAnnotation($0) }
         }
+        // 搜索预览点（绿色高亮）
+        let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
+        if let p = preview {
+            if previews.isEmpty {
+                map.addAnnotation(PreviewAnnotation(coordinate: p))
+            } else if let a = previews.first {
+                a.coordinate = p
+            }
+        } else {
+            previews.forEach { map.removeAnnotation($0) }
+        }
+        // 加油站标注
+        let gasIds = Set(map.annotations.compactMap { ($0 as? GasAnnotation)?.id })
+        let wantGas = Set(gasStations.map { "\($0.latitude),\($0.longitude)" })
+        map.annotations
+            .compactMap { $0 as? GasAnnotation }
+            .filter { !wantGas.contains("\($0.coordinate.latitude),\($0.coordinate.longitude)") }
+            .forEach { map.removeAnnotation($0) }
+        for c in gasStations {
+            let key = "\(c.latitude),\(c.longitude)"
+            if !gasIds.contains(key) {
+                map.addAnnotation(GasAnnotation(id: key, coordinate: c))
+            }
+        }
         map.removeOverlays(map.overlays)
         if route.count > 1 {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
@@ -96,6 +142,7 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
+        var onPoiLongPress: ((Poi) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 程序主动设置区域（避免被标记为用户移动）
@@ -110,6 +157,20 @@ struct MapViewRepresentable: UIViewRepresentable {
             guard gesture.state == .began,
                   let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
+            // 优先命中已有点位标注（屏幕距离 < 40pt）
+            var best: Poi?
+            var bestDist = CGFloat.greatestFiniteMagnitude
+            for a in map.annotations {
+                if let pa = a as? PoiAnnotation {
+                    let ap = map.convert(pa.coordinate, toPointTo: map)
+                    let d = hypot(pt.x - ap.x, pt.y - ap.y)
+                    if d < 40 && d < bestDist { bestDist = d; best = pa.poi }
+                }
+            }
+            if let p = best {
+                onPoiLongPress?(p)
+                return
+            }
             let coord = map.convert(pt, toCoordinateFrom: map)
             onLongPress?(coord)
         }
@@ -129,6 +190,24 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.markerTintColor = re.kind == "start" ? .systemGreen : .systemRed
                 v.glyphText = re.kind == "start" ? "起" : "终"
                 v.titleVisibility = .adaptive
+                return v
+            }
+            if let pa = annotation as? PreviewAnnotation {
+                let id = "preview"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
+                v.markerTintColor = .systemGreen
+                v.glyphText = "✓"
+                v.titleVisibility = .adaptive
+                return v
+            }
+            if let ga = annotation as? GasAnnotation {
+                let id = "gas"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: ga, reuseIdentifier: id)
+                v.markerTintColor = .systemOrange
+                v.glyphText = "油"
+                v.titleVisibility = .hidden
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
@@ -183,6 +262,28 @@ final class PoiAnnotation: NSObject, MKAnnotation {
     var coordinate: CLLocationCoordinate2D { poi.coordinate }
     var title: String? { poi.name }
     var subtitle: String? { poi.type.label }
+}
+
+/// 搜索预览点（绿色高亮）
+final class PreviewAnnotation: NSObject, MKAnnotation {
+    var coordinate: CLLocationCoordinate2D
+    init(coordinate: CLLocationCoordinate2D) {
+        self.coordinate = coordinate
+        super.init()
+    }
+    var title: String? { "搜索目标" }
+}
+
+/// 加油站标注（橙色"油"）
+final class GasAnnotation: NSObject, MKAnnotation {
+    let id: String
+    var coordinate: CLLocationCoordinate2D
+    init(id: String, coordinate: CLLocationCoordinate2D) {
+        self.id = id
+        self.coordinate = coordinate
+        super.init()
+    }
+    var title: String? { "加油站" }
 }
 
 extension MKPolyline {

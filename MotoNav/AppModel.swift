@@ -31,8 +31,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var fitTick = 0
     /// 手机朝向（度，0=北，顺时针）
     @Published var heading: Double = 0
-    /// 自定义背景图片（相册选择）
+    /// 自定义背景图片（相册选择，v1.11 已移除入口，保留字段兼容旧数据）
     @Published var bgImage: UIImage?
+    /// 天气文本（小图标 + 温度，显示在 ⋯ 左侧）
+    @Published var weatherText: String?
+    /// 搜索预览点（绿色高亮，等待"去这里"）
+    @Published var searchPreview: CLLocationCoordinate2D?
+    @Published var searchPreviewName = ""
+    /// 市区加油站坐标
+    @Published var gasStations: [CLLocationCoordinate2D] = []
+    /// 加油站全览请求计数
+    @Published var gasTick = 0
 
     /// 合肥小区/商铺联想库（内置 + 在线刷新）
     @Published var hfPois: [String] = []
@@ -67,7 +76,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         pois = repo.load()
         loadHistory()
         loadHefeiPois()
-        loadBackground()
         NotificationCenter.default.addObserver(
             self, selector: #selector(authorizeAndStart),
             name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -145,33 +153,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return nil
     }
 
-    // MARK: - 自定义背景（相册）
-
-    private var bgURL: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("background.jpg")
-    }
-
-    func saveBackground(data: Data) {
-        do {
-            try data.write(to: bgURL)
-            bgImage = UIImage(data: data)
-        } catch {
-            status = "背景保存失败"
-        }
-    }
-
-    func clearBackground() {
-        try? FileManager.default.removeItem(at: bgURL)
-        bgImage = nil
-    }
-
-    private func loadBackground() {
-        if let d = try? Data(contentsOf: bgURL) {
-            bgImage = UIImage(data: d)
-        }
-    }
-
     // MARK: - 历史搜索
 
     private func loadHistory() {
@@ -190,6 +171,90 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func clearHistory() {
         searchHistory = []
         UserDefaults.standard.removeObject(forKey: historyKey)
+    }
+
+    // MARK: - 天气（Open-Meteo 免费接口）
+
+    func fetchWeather() {
+        guard let loc = currentLocation else { return }
+        Task {
+            var comps = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
+            comps.queryItems = [
+                URLQueryItem(name: "latitude", value: String(loc.latitude)),
+                URLQueryItem(name: "longitude", value: String(loc.longitude)),
+                URLQueryItem(name: "current_weather", value: "true")
+            ]
+            guard let url = comps.url else { return }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 12
+            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+            guard let (data, _) = try? await URLSession.shared.data(for: req),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let cw = root["current_weather"] as? [String: Any],
+                  let temp = cw["temperature"] as? Double,
+                  let code = cw["weathercode"] as? Int else { return }
+            weatherText = "\(weatherIcon(code)) \(Int(temp))°"
+        }
+    }
+
+    private func weatherIcon(_ code: Int) -> String {
+        switch code {
+        case 0: return "☀️"
+        case 1, 2: return "🌤️"
+        case 3: return "☁️"
+        case 45, 48: return "🌫️"
+        case 51, 53, 55, 56, 57: return "🌦️"
+        case 61, 63, 65, 66, 67: return "🌧️"
+        case 71, 73, 75, 77: return "🌨️"
+        case 80, 81, 82: return "🌦️"
+        case 85, 86: return "🌨️"
+        case 95, 96, 99: return "⛈️"
+        default: return "🌡️"
+        }
+    }
+
+    // MARK: - 市区加油站（Overpass）
+
+    func fetchGasStations() {
+        Task {
+            let q = "[out:json][timeout:25];node[\"amenity\"=\"fuel\"](31.55,116.85,32.05,117.70);out;"
+            guard let url = URL(string: "https://overpass-api.de/api/interpreter") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 25
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+            req.httpBody = "data=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q)".data(using: .utf8)
+            guard let (data, _) = try? await URLSession.shared.data(for: req),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let els = root["elements"] as? [[String: Any]] else {
+                status = "加油站数据加载失败，请检查网络"
+                return
+            }
+            var list: [CLLocationCoordinate2D] = []
+            for e in els {
+                if let lat = e["lat"] as? Double, let lon = e["lon"] as? Double, lat != 0, lon != 0 {
+                    list.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
+                }
+            }
+            gasStations = list
+            if !list.isEmpty {
+                gasTick += 1
+                status = "已显示市区 \(list.count) 个加油站"
+            }
+        }
+    }
+
+    // MARK: - 搜索预览（绿色高亮 + 去这里）
+
+    func setPreview(_ name: String, lat: Double, lon: Double) {
+        searchPreviewName = name
+        searchPreview = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    func clearPreview() {
+        searchPreview = nil
+        searchPreviewName = ""
     }
 
     // MARK: - 权限与定位
@@ -235,6 +300,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let coord = loc.coordinate
         Task { @MainActor in
             currentLocation = coord
+            if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
             checkNavigation(at: coord)
         }

@@ -134,25 +134,6 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             }
         }
 
-    /** 相册选图作为软件背景（直接打开系统相册） */
-    private val bgLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val uri = result.data?.data
-            if (uri != null) {
-                try {
-                    val input = contentResolver.openInputStream(uri) ?: return@registerForActivityResult
-                    val bytes = input.use { it.readBytes() }
-                    val f = java.io.File(filesDir, "background.jpg")
-                    f.writeBytes(bytes)
-                    prefs.edit().putString("bg_image", f.absolutePath).apply()
-                    applyBackground()
-                    showToast("背景已更换（可在 ⋯ 菜单恢复默认）")
-                } catch (e: Exception) {
-                    showToast("背景设置失败：${e.message}")
-                }
-            }
-        }
-
     /** 合肥小区/商铺联想库（内置 + 在线刷新缓存） */
     private var hfPois: List<String> = emptyList()
 
@@ -230,20 +211,80 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         private const val NAV_ITEM = "▶ 开始导航"
     }
 
-    /** 应用自定义背景 */
-    private fun applyBackground() {
-        val path = prefs.getString("bg_image", null)
-        if (path == null) {
-            binding.rootLayout.background = null
-            return
-        }
-        try {
-            val f = java.io.File(path)
-            if (!f.exists()) return
-            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }
-            val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return
-            binding.rootLayout.background = android.graphics.drawable.BitmapDrawable(resources, bmp)
-        } catch (_: Exception) { }
+    // ==================== 天气（Open-Meteo 免费接口） ====================
+
+    private fun fetchWeather() {
+        Thread {
+            try {
+                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=$lastLat&longitude=$lastLon&current_weather=true")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 10000; conn.readTimeout = 10000
+                conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val root = org.json.JSONObject(body)
+                val cw = root.getJSONObject("current_weather")
+                val temp = cw.getDouble("temperature")
+                val code = cw.getInt("weathercode")
+                val icon = weatherIcon(code)
+                handler.post {
+                    binding.tvWeather.visibility = android.view.View.VISIBLE
+                    binding.tvWeather.text = "$icon ${temp.toInt()}°"
+                }
+            } catch (_: Exception) { }
+        }.start()
+    }
+
+    private fun weatherIcon(code: Int): String = when (code) {
+        0 -> "☀️"
+        1, 2 -> "🌤️"
+        3 -> "☁️"
+        45, 48 -> "🌫️"
+        51, 53, 55, 56, 57 -> "🌦️"
+        61, 63, 65, 66, 67 -> "🌧️"
+        71, 73, 75, 77 -> "🌨️"
+        80, 81, 82 -> "🌦️"
+        85, 86 -> "🌨️"
+        95, 96, 99 -> "⛈️"
+        else -> "🌡️"
+    }
+
+    // ==================== 市区加油站（Overpass） ====================
+
+    private fun loadGasStations(showAll: Boolean) {
+        Thread {
+            try {
+                val q = "[out:json][timeout:25];node[\"amenity\"=\"fuel\"](31.55,116.85,32.05,117.70);out;"
+                val url = URL("https://overpass-api.de/api/interpreter")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 15000; conn.readTimeout = 15000
+                conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                conn.doOutput = true
+                conn.outputStream.use { it.write("data=${URLEncoder.encode(q, "UTF-8")}".toByteArray()) }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val root = org.json.JSONObject(body)
+                val els = root.getJSONArray("elements")
+                val list = mutableListOf<Pair<Double, Double>>()
+                for (i in 0 until els.length()) {
+                    val e = els.getJSONObject(i)
+                    val lat = e.optDouble("lat", 0.0)
+                    val lon = e.optDouble("lon", 0.0)
+                    if (lat != 0.0 && lon != 0.0) list.add(Pair(lat, lon))
+                }
+                handler.post {
+                    binding.mapView.setGasStations(list)
+                    if (showAll && list.isNotEmpty()) {
+                        binding.mapView.fitGasStations()
+                        showToast("已显示市区 ${list.size} 个加油站")
+                    }
+                }
+            } catch (_: Exception) {
+                if (showAll) handler.post { showToast("加油站数据加载失败，请检查网络") }
+            }
+        }.start()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -283,15 +324,36 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             binding.mapView.centerOnUser()
             showToast("已回到当前位置")
         }
-        // 长按地图选点：添加违法拍照 / 导航到这里
+        binding.btnZoomIn.setOnClickListener { binding.mapView.zoomIn() }
+        binding.btnZoomOut.setOnClickListener { binding.mapView.zoomOut() }
+        // 搜索预览"去这里"：规划当前定位点到预览点路线
+        binding.btnGoHere.setOnClickListener {
+            if (previewLat != 0.0 || previewLon != 0.0) {
+                planRouteTo(previewLat, previewLon, previewName.ifEmpty { "目的地" })
+                binding.btnGoHere.visibility = android.view.View.GONE
+                binding.mapView.clearPreview()
+            }
+        }
+        binding.btnExitNav.setOnClickListener { toggleNavigation() }
+        // 加油站：拉取市区加油站并缩放显示
+        binding.btnGas.setOnClickListener {
+            loadGasStations(showAll = true)
+            binding.mapView.setUser(lastLat, lastLon)
+            binding.mapView.fitGasStations()
+        }
+        // 长按地图空白：添加违法拍照 / 导航到这里
         binding.mapView.onLongPress = { lat, lon -> showMapLongPressMenu(lat, lon) }
+        // 长按已有点位：删除 / 导航到这里
+        binding.mapView.onPoiLongPress = { poi -> showPoiManageMenu(poi) }
         // 手机朝向传感器：驱动地图旋转 + 指南针
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
             sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
-        // 恢复自定义背景
-        applyBackground()
+        // 天气（Open-Meteo 免费接口，显示在 ⋯ 左侧）
+        fetchWeather()
+        // 后台预取加油站缓存
+        loadGasStations(showAll = false)
 
         createNotificationChannel()
         ensurePermissions()
@@ -435,6 +497,20 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
 
     // ==================== 搜索与历史 ====================
 
+    /** 搜索预览目标（地图跳转绿色高亮，等待用户点"去这里"） */
+    private var previewLat = 0.0
+    private var previewLon = 0.0
+    private var previewName = ""
+
+    private fun showPreview(lat: Double, lon: Double, name: String) {
+        previewLat = lat; previewLon = lon; previewName = name
+        binding.mapView.setPreview(lat, lon)
+        binding.mapView.focusOn(lat, lon)
+        binding.btnGoHere.visibility = android.view.View.VISIBLE
+        binding.btnGoHere.text = "去这里：${displayName(name)}"
+        binding.tvStatus.text = "已定位到「$name」，点「去这里」规划路线"
+    }
+
     private fun doSearch(q: String) {
         val query = q.trim()
         if (query.isEmpty()) { showToast("请输入目的地"); return }
@@ -444,7 +520,7 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             val lat = coord[0].toDoubleOrNull()
             val lon = coord[1].toDoubleOrNull()
             if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) {
-                planRouteTo(lat, lon, "坐标目的地 $lat,$lon")
+                showPreview(lat, lon, "坐标目的地 $lat,$lon")
                 return
             }
         }
@@ -454,27 +530,27 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             if (hits.size == 1) {
                 val p = hits.first()
                 binding.mapView.setSelected(p.id)
-                planRouteTo(p.lat, p.lon, p.name)
+                showPreview(p.lat, p.lon, p.name)
             } else {
                 AlertDialog.Builder(this)
                     .setTitle("选择目的地（${hits.size} 个匹配）")
                     .setItems(hits.map { "${it.name} · ${it.type.label}" }.toTypedArray()) { _, which ->
                         val p = hits[which]
-                        planRouteTo(p.lat, p.lon, p.name)
+                        showPreview(p.lat, p.lon, p.name)
                     }
                     .setNegativeButton("取消", null)
                     .show()
             }
             return
         }
-        // 合肥小区/商铺：在线查询坐标后规划
+        // 合肥小区/商铺：在线查询坐标后预览
         if (hfPois.any { it.contains(query, ignoreCase = true) }) {
             showToast("正在查询「$query」位置…")
             Thread {
                 val c = fetchNameCoordinate(query)
                 handler.post {
                     if (c != null) {
-                        planRouteTo(c.first, c.second, query)
+                        showPreview(c.first, c.second, query)
                     } else {
                         showToast("未找到「$query」的坐标，可尝试地图长按选点")
                     }
@@ -583,9 +659,26 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         binding.mapView.setRoutePois(emptyList())
         routeTurns = emptyList()
         binding.tvStatus.text = "已清除路线"
+        updateNavUI()
+        if (!monitoring) binding.tvStatus.text = getString(R.string.status_waiting)
     }
 
     // ==================== 实时导航播报 ====================
+
+    /** 导航态切换搜索框 / 退出导航按钮 */
+    private fun updateNavUI() {
+        if (navigating) {
+            binding.searchRow.visibility = android.view.View.GONE
+            binding.btnExitNav.visibility = android.view.View.VISIBLE
+            binding.btnGoHere.visibility = android.view.View.GONE
+            binding.historyRow.visibility = android.view.View.GONE
+            binding.mapView.clearPreview()
+        } else {
+            binding.searchRow.visibility = android.view.View.VISIBLE
+            binding.btnExitNav.visibility = android.view.View.GONE
+            binding.historyRow.visibility = if (history.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+        }
+    }
 
     private fun toggleNavigation() {
         if (routeTurns.isEmpty() && binding.mapView.hasRoute().not()) { showToast("请先搜索目的地并规划路线"); return }
@@ -599,6 +692,7 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             voice.speak("开始导航到$destName，全程${binding.tvStatus.text}")
             showToast("开始导航：沿路线行驶，到达自动播报")
         }
+        updateNavUI()
     }
 
     private fun checkNavigation(lat: Double, lon: Double) {
@@ -728,16 +822,11 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
 
     private fun showMenu() {
         val pop = PopupMenu(this, binding.btnMenu)
-        pop.menu.add(0, 1, 0, getString(if (monitoring) R.string.btn_stop else R.string.btn_start))
-        pop.menu.add(0, 2, 0, if (simulating) "停止模拟" else getString(R.string.menu_simulate))
-        pop.menu.add(0, 3, 0, getString(R.string.menu_add_here))
-        pop.menu.add(0, 4, 0, getString(R.string.menu_manual))
         pop.menu.add(0, 5, 0, getString(if (allPoiEnabled) R.string.menu_disable_all else R.string.menu_enable_all))
         pop.menu.add(0, 6, 0, getString(R.string.menu_type_filter))
         pop.menu.add(0, 7, 0, getString(R.string.menu_import))
         pop.menu.add(0, 8, 0, getString(R.string.menu_export))
-        pop.menu.add(0, 11, 0, "更换背景（相册）")
-        pop.menu.add(0, 12, 0, "恢复默认背景")
+        pop.menu.add(0, 13, 0, if (navigating) "退出导航" else "开始导航")
         pop.menu.add(0, 9, 0, getString(R.string.menu_clear_history))
         pop.menu.add(0, 10, 0, getString(R.string.menu_clear_route))
         pop.setOnMenuItemClickListener { item -> onMenuItem(item) }
@@ -746,10 +835,6 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
 
     private fun onMenuItem(item: MenuItem): Boolean {
         return when (item.itemId) {
-            1 -> { if (monitoring) stopMonitoring() else startMonitoring(); true }
-            2 -> { toggleSimulate(); true }
-            3 -> { showAddDialog(); true }
-            4 -> { showManualDialog(); true }
             5 -> {
                 allPoiEnabled = !allPoiEnabled
                 refreshPois()
@@ -759,18 +844,7 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             6 -> { showTypeFilter(); true }
             7 -> { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")); true }
             8 -> { exportLauncher.launch("motonav_pois.json"); true }
-            11 -> {
-                val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
-                bgLauncher.launch(intent)
-                true
-            }
-            12 -> {
-                prefs.edit().remove("bg_image").apply()
-                java.io.File(filesDir, "background.jpg").delete()
-                applyBackground()
-                showToast("已恢复默认背景")
-                true
-            }
+            13 -> { toggleNavigation(); true }
             9 -> { clearHistory(); true }
             10 -> { clearRoute(); true }
             else -> false
@@ -836,6 +910,27 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
                 repo.add(type, name, lat, lon)
                 refreshPois()
                 showToast("已添加：$name（长按校准可编辑）")
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 长按已有点位：删除 / 导航到这里 */
+    private fun showPoiManageMenu(poi: Poi) {
+        val msg = String.format(Locale.CHINA, "类型：%s\n纬度 %.5f\n经度 %.5f", poi.type.label, poi.lat, poi.lon)
+        AlertDialog.Builder(this)
+            .setTitle(poi.name)
+            .setMessage(msg)
+            .setItems(arrayOf("导航到这里", "删除该点位")) { _, which ->
+                when (which) {
+                    0 -> planRouteTo(poi.lat, poi.lon, poi.name)
+                    1 -> {
+                        repo.remove(poi.id)
+                        refreshPois()
+                        binding.mapView.setSelected(null)
+                        showToast("已删除：${poi.name}")
+                    }
+                }
             }
             .setNegativeButton("取消", null)
             .show()

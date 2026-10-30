@@ -1,0 +1,6 @@
+Android_MotoNav/build/
+Android_MotoNav/app/build/
+Android_MotoNav/.gradle/
+Android_MotoNav/.idea/
+Android_MotoNav/local.properties
+Android_MotoNav/app/.cxx/

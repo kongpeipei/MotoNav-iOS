@@ -1,6 +1,5 @@
 import SwiftUI
 import MapKit
-import PhotosUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -10,7 +9,6 @@ struct ContentView: View {
     @State private var showSuggestions = false
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
-    @State private var showManualAdd = false
     @State private var editPoi: Poi?
     @State private var showImport = false
     @State private var exportDoc: JsonFile?
@@ -20,29 +18,16 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     @State private var pendingCoord: CLLocationCoordinate2D?
     @State private var showTypePicker = false
-    @State private var pickerItem: PhotosPickerItem?
+    @State private var poiManagePoi: Poi?
     @State private var headingNeedleTick = 0
 
     var body: some View {
         ZStack {
-            // 自定义背景（相册选择）
-            if let img = model.bgImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .ignoresSafeArea()
-                    .opacity(0.35)
-            }
             mapLayer
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
             menuOverlay
             bottomOverlay
-        }
-        .sheet(isPresented: $showManualAdd) {
-            PoiEditSheet(mode: .add, poi: nil) { type, name, lat, lon, r in
-                model.addPoi(type: type, name: name, lat: lat, lon: lon, radiusM: r)
-            }
         }
         .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
@@ -85,16 +70,24 @@ struct ContentView: View {
             }
             Button("取消", role: .cancel) {}
         }
-        .onAppear { model.authorizeAndStart() }
-        .onChange(of: pickerItem) { item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    model.saveBackground(data: data)
-                    model.status = "背景已更换（可在 ⋯ 菜单恢复默认）"
-                }
+        // 长按已有点位：删除 / 编辑 / 导航
+        .confirmationDialog("点位操作", isPresented: Binding(
+            get: { poiManagePoi != nil },
+            set: { if !$0 { poiManagePoi = nil } }
+        ), presenting: poiManagePoi) { p in
+            Button("导航到这里") {
+                model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
             }
+            Button("编辑该点位") { editPoi = p }
+            Button("删除该点位", role: .destructive) {
+                model.deletePoi(id: p.id)
+                model.status = "已删除：\(p.name)"
+            }
+            Button("取消", role: .cancel) {}
+        } message: { p in
+            Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
         }
+        .onAppear { model.authorizeAndStart() }
     }
 
     /// 地图全屏层（高德式：地图在上，搜索框下置）
@@ -107,9 +100,15 @@ struct ContentView: View {
             locateTick: model.locateTick,
             fitTick: model.fitTick,
             heading: model.heading,
+            preview: model.searchPreview,
+            gasStations: model.gasStations,
+            gasTick: model.gasTick,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
+            },
+            onPoiLongPress: { p in
+                poiManagePoi = p
             }
         )
         .ignoresSafeArea()
@@ -117,27 +116,23 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 右上角 ⋯ 菜单
+    /// 右上角 ⋯ 菜单（v1.11 清理：去掉监控/模拟/手动坐标/背景）
     private var menuOverlay: some View {
         VStack {
             HStack {
                 Spacer()
+                // 天气小图标（⋯ 左侧）
+                if let w = model.weatherText {
+                    Text(w)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.5), in: Capsule())
+                }
                 Menu {
-                    Button(model.monitoring ? "停止监控" : "开始监控") {
-                        model.toggleMonitoring()
-                    }
-                    Button(model.simulating ? "停止模拟" : "模拟测试") {
-                        model.toggleSimulation()
-                    }
                     Button(model.navigating ? "结束导航" : "开始导航") {
                         model.toggleNavigation()
                     }
-                    Button("添加当前位置") {
-                        guard let loc = model.currentLocation else { model.status = "请先定位"; return }
-                        model.addPoi(type: .RED_LIGHT, name: "手动添加", lat: loc.latitude, lon: loc.longitude)
-                        model.status = "已添加当前位置点位"
-                    }
-                    Button("手动添加坐标") { showManualAdd = true }
                     Divider()
                     Button(model.allPoiEnabled ? "全部点位关闭" : "全部点位开启") {
                         model.setAllPoiEnabled(!model.allPoiEnabled)
@@ -160,11 +155,6 @@ struct ContentView: View {
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
                     Divider()
-                    PhotosPicker(selection: $pickerItem, matching: .images) {
-                        Label("更换背景（相册）", systemImage: "photo")
-                    }
-                    Button("恢复默认背景") { model.clearBackground() }
-                    Divider()
                     Button("清空历史搜索") { model.clearHistory() }
                     Button("清空路线") { model.clearRoute() }
                 } label: {
@@ -181,13 +171,30 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：状态 + 历史 + 搜索框 + 定位按钮
+    /// 底部浮层：状态 + 历史 + 去这里 + 搜索框/退出导航 + 定位按钮
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
             statusBar
             historyBar
-            searchBar
+            if model.navigating {
+                // 导航中：搜索框替换为退出导航按钮
+                Button {
+                    model.toggleNavigation()
+                } label: {
+                    Text("退出导航")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.red, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal)
+                }
+                .padding(.vertical, 6)
+            } else {
+                goHereBar
+                searchBar
+            }
             // 右下角定位按钮（黑色圆球）
             HStack {
                 Spacer()
@@ -204,6 +211,29 @@ struct ContentView: View {
                 }
                 .padding(.trailing, 16)
                 .padding(.bottom, 6)
+            }
+        }
+    }
+
+    /// 搜索预览"去这里"按钮（搜索后出现）
+    private var goHereBar: some View {
+        Group {
+            if model.searchPreview != nil {
+                Button {
+                    if let p = model.searchPreview {
+                        model.planRoute(to: model.searchPreviewName, lat: p.latitude, lon: p.longitude)
+                        model.clearPreview()
+                    }
+                } label: {
+                    Text("去这里：\(displayName(model.searchPreviewName))")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal)
+                }
+                .padding(.bottom, 4)
             }
         }
     }
@@ -256,7 +286,7 @@ struct ContentView: View {
             .background(.black.opacity(0.45))
     }
 
-    /// 目的地搜索框（输入时智能联想，高德式底部胶囊）
+    /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
     private var searchBar: some View {
         VStack(spacing: 4) {
             HStack(spacing: 8) {
@@ -285,6 +315,19 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "arrow.right.circle.fill")
                         .font(.title2)
+                        .foregroundStyle(.white)
+                }
+                .padding(6)
+                .background(.black.opacity(0.55), in: Circle())
+
+                // 加油站按钮：显示市区加油站
+                Button {
+                    showSuggestions = false
+                    dismissKeyboard()
+                    model.fetchGasStations()
+                } label: {
+                    Text("⛽")
+                        .font(.title3)
                         .foregroundStyle(.white)
                 }
                 .padding(6)
@@ -373,6 +416,7 @@ struct ContentView: View {
 
     private let NAV_ITEM = "▶ 开始导航"
 
+    /// v1.11：搜索后地图绿色高亮定位点，等待"去这里"规划路线
     private func doSearch() {
         let q = searchText.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { model.status = "请输入目的地"; return }
@@ -380,7 +424,9 @@ struct ContentView: View {
         let parts = q.split(whereSeparator: { $0 == "," || $0 == "，" }).map { $0.trimmingCharacters(in: .whitespaces) }
         if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
            (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-            model.planRoute(to: "坐标目的地 \(lat),\(lon)", lat: lat, lon: lon)
+            model.addHistory("坐标目的地 \(lat),\(lon)")
+            model.setPreview("坐标目的地 \(lat),\(lon)", lat: lat, lon: lon)
+            model.status = "已定位，点「去这里」规划路线"
             return
         }
         let hits = model.searchPois(q)
@@ -388,19 +434,21 @@ struct ContentView: View {
             if hits.count == 1 {
                 let p = hits[0]
                 model.selectedPoi = p
-                model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
+                model.setPreview(p.name, lat: p.lat, lon: p.lon)
+                model.status = "已定位到「\(p.name)」，点「去这里」规划路线"
             } else {
                 model.status = "找到 \(hits.count) 个匹配，请点击地图点位或直接输入 纬度,经度"
                 model.selectedPoi = nil
             }
             return
         }
-        // 合肥小区/商铺：在线查询坐标后规划
+        // 合肥小区/商铺：在线查询坐标后预览
         if model.hfPois.contains(where: { $0.localizedCaseInsensitiveContains(q) }) {
             model.status = "正在查询「\(q)」位置…"
             Task {
                 if let c = await model.findHefeiCoordinate(q) {
-                    model.planRoute(to: q, lat: c.latitude, lon: c.longitude)
+                    model.setPreview(q, lat: c.latitude, lon: c.longitude)
+                    model.status = "已定位到「\(q)」，点「去这里」规划路线"
                 } else {
                     model.status = "未找到「\(q)」的坐标，可尝试地图长按选点"
                 }
