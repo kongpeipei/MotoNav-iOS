@@ -476,8 +476,9 @@ struct ContentView: View {
     }
 
     /// v1.12：搜索后地图绿色高亮定位点，等待"去这里"规划路线；找不到走在线模糊搜索
-    private func doSearch() {
-        let q = searchText.trimmingCharacters(in: .whitespaces)
+    /// 支持传入关键词（联想"在线搜索"入口），缺省用搜索框当前文字
+    private func doSearch(_ q: String? = nil) {
+        let q = (q ?? searchText).trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { model.status = "请输入目的地"; return }
         // 支持 纬度,经度
         let parts = q.split(whereSeparator: { $0 == "," || $0 == "，" }).map { $0.trimmingCharacters(in: .whitespaces) }
