@@ -575,7 +575,7 @@ struct ContentView: View {
                                 Text("★ \(c.label)　·　\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里")
                                     .font(.footnote.bold())
                                     .foregroundStyle(.primary)
-                                Text("导航用时约 \(c.durationS / 60) 分钟 · 途经抓拍 \(c.poiCount) 处 · 路口约 \(c.turns.count) 个")
+                                Text("导航用时约 \(c.durationS / 60) 分钟 · 途经抓拍 \(c.poiCount) 处 · 转向 \(c.turns.count) 处")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -594,13 +594,13 @@ struct ContentView: View {
         }
     }
 
-    /// 常用地点快捷按钮（家/公司，未设置时提示长按地图设置）
+    /// 常用地点快捷按钮（家/公司并排，未设置时提示长按地图设置）
     private var homeWorkOverlay: some View {
         VStack {
             Spacer()
             HStack {
                 Spacer()
-                VStack(spacing: 8) {
+                HStack(spacing: 8) {
                     Button {
                         haptic()
                         if let h = model.homePlace {
@@ -609,10 +609,10 @@ struct ContentView: View {
                             model.status = "请长按地图选点后「设为家」"
                         }
                     } label: {
-                        Text("家")
+                        Image(systemName: "house.fill")
                             .font(.headline)
                             .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .background(Color.white, in: Circle())
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
@@ -625,17 +625,17 @@ struct ContentView: View {
                             model.status = "请长按地图选点后「设为公司」"
                         }
                     } label: {
-                        Text("公司")
+                        Image(systemName: "building.2.fill")
                             .font(.headline)
                             .foregroundStyle(.orange)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .background(Color.white, in: Circle())
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
                 }
                 .padding(.trailing, 18)
-                .offset(y: -150)
+                .offset(y: -132)
                 .opacity(model.navigating ? 0 : 1)
             }
             Spacer()
@@ -904,12 +904,13 @@ struct ContentView: View {
         }
     }
 
-    /// 联想条目行（图标按条目类型区分）
+    /// 联想条目行（收藏 ⭐ 优先展示，点击用原名）
     private func suggestionRow(_ s: String) -> some View {
-        HStack {
+        let isFav = !s.hasPrefix("🔍") && model.favorites.values.contains(s)
+        return HStack {
             Image(systemName: suggestionIcon(s))
                 .foregroundStyle(suggestionIconColor(s))
-            Text(s).foregroundStyle(.primary)
+            Text(isFav ? "⭐ \(s)" : s).foregroundStyle(.primary)
             Spacer()
         }
         .padding(.horizontal, 12)

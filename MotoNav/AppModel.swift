@@ -757,27 +757,36 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func checkAlerts(at coord: CLLocationCoordinate2D) {
         let now = Date()
-        for p in pois where p.enabled && allPoiEnabled && enabledTypes.contains(p.type) {
-            let d = distanceM(coord, p.coordinate)
-            let onRoute = navigating && routePois.contains { $0.id == p.id }
-            if onRoute {
-                // 导航中：500m/300m/进入 三档播报
+        // 导航中：三档播报只播最近的一个路线点位（避免同路口多点位语音重叠/连播）
+        if navigating {
+            var nearest: Poi?
+            var nd = Double.greatestFiniteMagnitude
+            for p in pois where p.enabled && allPoiEnabled && enabledTypes.contains(p.type) && routePois.contains(where: { $0.id == p.id }) {
+                let d = distanceM(coord, p.coordinate)
+                if d < nd { nd = d; nearest = p }
+            }
+            if let p = nearest {
                 let stage = alertStage[p.id] ?? 0
-                if d <= 500 && stage < 1 {
+                if nd <= 500 && stage < 1 {
                     alertStage[p.id] = 1
-                    status = "前方约\(Int(d))米\(p.type.voicePrefix)，\(p.name)，请注意"
-                    speak("前方约\(Int(d))米\(p.type.voicePrefix)，\(p.name)，请注意")
-                } else if d <= 300 && stage < 2 {
+                    status = "前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意"
+                    speak("前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意")
+                } else if nd <= 300 && stage < 2 {
                     alertStage[p.id] = 2
                     status = "接近\(p.type.voicePrefix)点位：\(p.name)，请减速"
                     speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速")
-                } else if d <= p.radiusM && stage < 3 {
+                } else if nd <= p.radiusM && stage < 3 {
                     alertStage[p.id] = 3
-                    triggerAlert(p, distance: d)
-                } else if d > 500 {
+                    triggerAlert(p, distance: nd)
+                } else if nd > 500 {
                     alertStage[p.id] = 0
                 }
-            } else if d <= p.radiusM {
+            }
+            return
+        }
+        for p in pois where p.enabled && allPoiEnabled && enabledTypes.contains(p.type) {
+            let d = distanceM(coord, p.coordinate)
+            if d <= p.radiusM {
                 if let last = lastTrigger[p.id], now.timeIntervalSince(last) < 90 { continue }
                 lastTrigger[p.id] = now
                 triggerAlert(p, distance: d)
@@ -954,7 +963,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return false
     }
 
-    /// 搜索智能联想：点位名称 + 历史目的地 + 合肥小区/商铺 + 地标词典（最多 10 条）；
+    /// 搜索智能联想：收藏 ⭐ 优先 + 点位名称 + 历史目的地 + 合肥小区/商铺 + 地标词典（最多 10 条）；
     /// 无匹配时给出"在线搜索「关键词」"入口
     func searchSuggestions(_ query: String) -> [String] {
         var pool = Set<String>()
@@ -963,12 +972,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         for hf in hfPois { pool.insert(hf) }
         for lm in searchLandmarks where lm.matches(query) { pool.insert(lm.name) }
         let q = query.trimmingCharacters(in: .whitespaces)
-        if q.isEmpty { return Array(pool).prefix(10).map { $0 } }
-        var matched = pool.filter { fuzzyMatch($0, q) }.prefix(10).map { $0 }
+        if q.isEmpty {
+            // 空输入：收藏 ⭐ 优先，其次历史，其次常驻点位
+            var ordered: [String] = []
+            for n in favorites.values where !ordered.contains(n) { ordered.append(n) }
+            for h in searchHistory where !ordered.contains(h) { ordered.append(h) }
+            for x in pool where !ordered.contains(x) { ordered.append(x) }
+            return Array(ordered.prefix(10))
+        }
+        var matched = pool.filter { fuzzyMatch($0, q) }.map { $0 }
+        // 收藏点位命中置顶（⭐ 前缀由界面渲染，数据保持原名可点击）
+        let favHits = favorites.values.filter { fuzzyMatch($0, q) && !matched.contains($0) }
+        matched = Array(favHits) + matched
         if matched.isEmpty {
             matched = ["🔍 在线搜索「\(q)」"]
         }
-        return matched
+        return Array(matched.prefix(10))
     }
 
     /// 右下角定位按钮：地图回中

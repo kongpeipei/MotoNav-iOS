@@ -70,6 +70,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         if locateTick != context.coordinator.lastLocateTick {
             context.coordinator.lastLocateTick = locateTick
             if locateTick > 0 {
+                context.coordinator.userMoved = false // 恢复跟随/自动旋转
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .followWithHeading
                 }
@@ -201,7 +202,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.underPolyline = nil
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
-        map.camera.heading = CLLocationDirection(heading)
+        // 用户手动拖动/旋转地图后暂停跟随（高德式：点定位按钮恢复）
+        if !context.coordinator.userMoved {
+            map.camera.heading = CLLocationDirection(heading)
+        }
         // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
@@ -264,6 +268,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPitchState: Bool?
         /// 路线白色描边底层引用（renderer 区分双层）
         var underPolyline: MKPolyline?
+        /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
+        var userMoved = false
         /// 程序主动设置区域（避免被标记为用户移动）
         private var programmaticMove = false
 
@@ -342,6 +348,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 程序 setRegion 触发时不标记用户移动
             if programmaticMove {
                 programmaticMove = false
+            } else if !animated {
+                // 用户手势（拖动/旋转/缩放）触发的区域变化 → 暂停跟随与自动旋转
+                userMoved = true
             }
         }
 

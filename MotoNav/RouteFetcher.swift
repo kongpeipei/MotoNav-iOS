@@ -116,7 +116,8 @@ enum RouteFetcher {
                 durationS: r["duration"] as? Int ?? 0,
                 turns: turns))
         }
-        // 按用时升序 + 高德式标签：【推荐】【距离最短】【少红绿灯】【不走高速】
+        // 按用时升序 + 真实标签：【推荐】用时最短、【距离最短】真实最短，其余统一【备选】
+        // （OSRM 无红绿灯/高速数据，"少红绿灯/不走高速"属虚假相对标注，已移除）
         list.sort { $0.durationS < $1.durationS }
         let minDist = list.map(\.distanceM).min() ?? 0
         var out: [RouteChoice] = []
@@ -125,8 +126,7 @@ enum RouteFetcher {
             switch i {
             case 0: label = "推荐"
             case 1 where rr.distanceM == minDist: label = "距离最短"
-            case 1: label = "少红绿灯"
-            default: label = "不走高速"
+            default: label = "备选"
             }
             out.append(RouteChoice(points: rr.points, distanceM: rr.distanceM,
                                    durationS: rr.durationS, turns: rr.turns, label: label, poiCount: 0))
