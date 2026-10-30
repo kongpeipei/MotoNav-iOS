@@ -313,11 +313,11 @@ struct ContentView: View {
                                 Text("路")
                                 Text("线")
                             }
-                            .font(.footnote.bold())
-                            .foregroundStyle(.primary)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.black)
                             .frame(width: 44, height: 132)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.35), lineWidth: 0.8))
+                            .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.black.opacity(0.12), lineWidth: 1))
                         }
                         .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
                     }
