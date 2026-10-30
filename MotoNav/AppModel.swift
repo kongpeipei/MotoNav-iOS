@@ -22,6 +22,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var status = "等待定位…"
     @Published var route: [CLLocationCoordinate2D] = []
     @Published var routePois: [Poi] = []
+    /// 多路线方案（点"去这里"后展示，选择后应用）
+    @Published var routeChoices: [RouteChoice] = []
     @Published var selectedPoi: Poi?
     @Published var navigating = false
     @Published var searchHistory: [String] = []
@@ -783,8 +785,51 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         route = []
         routePois = []
         routeTurns = []
+        routeChoices = []
         lastTurnSpoken = -1
         status = "已清除路线"
+    }
+
+    /// "去这里/导航到这里"触发：获取多路线方案，多条时交由界面选择
+    func fetchRouteChoices(to name: String, lat: Double, lon: Double) {
+        guard let start = currentLocation else {
+            status = "请先定位后再规划路线"
+            return
+        }
+        destName = name; destLat = lat; destLon = lon
+        addHistory(name)
+        status = "正在规划到「\(name)」…"
+        let from = start
+        let end = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        Task {
+            let choices = await RouteFetcher.fetchAll(from: from, to: end)
+            if choices.isEmpty {
+                route = [from, end]
+                routePois = nearbyPoisOnRoute(route)
+                routeTurns = []
+                fitTick += 1
+                status = "路线服务不可用，已显示直线到「\(name)」"
+            } else if choices.count == 1 {
+                applyRouteChoice(choices[0], name: name)
+            } else {
+                routeChoices = choices
+            }
+        }
+    }
+
+    /// 应用所选路线方案（地图严格绘制该方案折线）
+    func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
+        let n = name ?? destName
+        route = c.points
+        routeTurns = c.turns
+        lastTurnSpoken = -1
+        let near = nearbyPoisOnRoute(c.points)
+        routePois = near
+        routeChoices = []
+        fitTick += 1
+        status = String(
+            format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",
+            n, Double(c.distanceM) / 1000.0, c.durationS / 60, near.count)
     }
 
     /// 筛选距路线折线 130 米内的点位

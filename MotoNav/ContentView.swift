@@ -28,6 +28,8 @@ struct ContentView: View {
     @State private var goHereLabel = ""
     /// "导航到这里"已触发标记：仅此时显示清空路线竖条
     @State private var showClearRouteBtn = false
+    /// 搜索框当前高度（手指上下滑动调整）
+    @State private var searchHeight: CGFloat = 54
 
     var body: some View {
         ZStack {
@@ -238,6 +240,7 @@ struct ContentView: View {
                 }
                 .padding(.vertical, 6)
             } else {
+                routeChoiceList
                 goHereBar
                 searchBar
             }
@@ -331,7 +334,7 @@ struct ContentView: View {
         Group {
             if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
-                    model.planRoute(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
+                    model.fetchRouteChoices(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
                     // "导航到这里"触发 → 允许显示清空路线竖条
                     showClearRouteBtn = true
                     goHereName = nil
@@ -347,6 +350,44 @@ struct ContentView: View {
                         .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
                         .padding(.horizontal)
                 }
+                .padding(.bottom, 4)
+            }
+        }
+    }
+
+    /// 多路线方案列表（点"去这里"后显示在搜索框上方）：优点 + 距离 + 导航用时
+    private var routeChoiceList: some View {
+        Group {
+            if !model.routeChoices.isEmpty {
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("选择路线方案")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { _, c in
+                        Button {
+                            model.applyRouteChoice(c)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("★ \(c.label)　·　\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里")
+                                    .font(.footnote.bold())
+                                    .foregroundStyle(.primary)
+                                Text("导航用时约 \(c.durationS / 60) 分钟")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.35), lineWidth: 0.8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
                 .padding(.bottom, 4)
             }
         }
@@ -484,9 +525,18 @@ struct ContentView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 0.8))
+        .frame(height: searchHeight)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 2))
+        .overlay(RoundedRectangle(cornerRadius: 2).stroke(.white.opacity(0.35), lineWidth: 0.8))
         .padding(.horizontal)
+        .gesture(
+            DragGesture(minimumDistance: 10)
+                .onChanged { value in
+                    var h = 54 + value.translation.height
+                    h = min(max(h, 48), 170)
+                    if abs(h - searchHeight) > 1 { searchHeight = h }
+                }
+        )
         .padding(.vertical, 6)
     }
 
