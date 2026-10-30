@@ -52,6 +52,65 @@
                 android:textSize="22sp"
                 android:contentDescription="缩小" />
         </LinearLayout>
+
+        <!-- 右上角：天气+明日天气 + ⋯菜单 + 加油站按钮（竖排） -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="8dp"
+            android:layout_marginEnd="8dp"
+            android:orientation="vertical"
+            android:gravity="end">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tvWeather"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="13sp"
+                    android:textColor="#FFFFFF"
+                    android:padding="6dp"
+                    android:background="#80000000"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/btnMenu"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⋯"
+                    android:textSize="20sp"
+                    android:minWidth="0dp"
+                    android:minHeight="40dp"
+                    android:layout_marginStart="4dp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvTomorrow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="12sp"
+                android:textColor="#FFFFFF"
+                android:padding="5dp"
+                android:background="#80000000"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnGas"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="⛽"
+                android:textSize="16sp"
+                android:minWidth="0dp"
+                android:minHeight="40dp"
+                android:layout_marginTop="6dp"
+                android:contentDescription="显示市区加油站" />
+        </LinearLayout>
     </FrameLayout>
 
     <!-- 底部控制区：状态 + 历史 + 去这里 + 搜索框 -->
@@ -71,6 +130,25 @@
             android:textColor="@color/textPrimary"
             android:textSize="13sp"
             android:maxLines="2" />
+
+        <!-- 类别搜索结果（学校/医院/加油站，横向可滚动，点击直接规划路线） -->
+        <HorizontalScrollView
+            android:id="@+id/categoryRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/categoryChips"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp" />
+        </HorizontalScrollView>
 
         <!-- 历史搜索记录（横向可滚动标签） -->
         <HorizontalScrollView
@@ -167,39 +245,25 @@
                     android:textSize="14sp"
                     android:completionThreshold="1" />
 
+                <!-- 一键清除输入内容（有内容时显示） -->
+                <TextView
+                    android:id="@+id/btnClear"
+                    android:layout_width="36dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:text="✕"
+                    android:textSize="16sp"
+                    android:textColor="#666666"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:visibility="gone"
+                    android:contentDescription="清除输入" />
+
                 <Button
                     android:id="@+id/btnSearch"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/btn_search"
-                    android:minWidth="0dp"
-                    android:minHeight="40dp" />
-
-                <Button
-                    android:id="@+id/btnGas"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⛽"
-                    android:textSize="16sp"
-                    android:minWidth="0dp"
-                    android:minHeight="40dp"
-                    android:contentDescription="显示市区加油站" />
-
-                <TextView
-                    android:id="@+id/tvWeather"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textSize="13sp"
-                    android:textColor="#FFFFFF"
-                    android:padding="6dp"
-                    android:visibility="gone" />
-
-                <Button
-                    android:id="@+id/btnMenu"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⋯"
-                    android:textSize="20sp"
                     android:minWidth="0dp"
                     android:minHeight="40dp" />
             </LinearLayout>

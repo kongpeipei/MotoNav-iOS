@@ -175,6 +175,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPoiLongPress: ((Poi) -> Void)?
         var onPoiSelect: ((Poi) -> Void)?
         var onPlaceSelect: ((PlaceLabel) -> Void)?
+        var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 程序主动设置区域（避免被标记为用户移动）

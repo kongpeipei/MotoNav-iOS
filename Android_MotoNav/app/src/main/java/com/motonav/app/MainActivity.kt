@@ -235,7 +235,7 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
     private fun fetchWeather() {
         Thread {
             try {
-                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=$lastLat&longitude=$lastLon&current_weather=true")
+                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=$lastLat&longitude=$lastLon&current_weather=true&daily=temperature_2m_max,temperature_2m_min&timezone=Asia%2FShanghai&forecast_days=2")
                 val conn = url.openConnection() as HttpURLConnection
                 conn.connectTimeout = 10000; conn.readTimeout = 10000
                 conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
@@ -246,9 +246,24 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
                 val temp = cw.getDouble("temperature")
                 val code = cw.getInt("weathercode")
                 val icon = weatherIcon(code)
+                var tomorrow: String? = null
+                try {
+                    val daily = root.getJSONObject("daily")
+                    val maxArr = daily.getJSONArray("temperature_2m_max")
+                    val minArr = daily.getJSONArray("temperature_2m_min")
+                    if (maxArr.length() > 1 && minArr.length() > 1) {
+                        val tMax = maxArr.getDouble(1).toInt()
+                        val tMin = minArr.getDouble(1).toInt()
+                        tomorrow = "明日 $tMin~$tMax°"
+                    }
+                } catch (_: Exception) { }
                 handler.post {
                     binding.tvWeather.visibility = android.view.View.VISIBLE
                     binding.tvWeather.text = "$icon ${temp.toInt()}°"
+                    if (tomorrow != null) {
+                        binding.tvTomorrow.visibility = android.view.View.VISIBLE
+                        binding.tvTomorrow.text = tomorrow
+                    }
                 }
             } catch (_: Exception) { }
         }.start()
@@ -327,9 +342,21 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { }
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
                 refreshSuggestions(s?.toString() ?: "")
+                // 一键清除按钮：有内容时显示
+                binding.btnClear.visibility =
+                    if (s.isNullOrEmpty()) android.view.View.GONE else android.view.View.VISIBLE
             }
             override fun afterTextChanged(s: android.text.Editable?) { }
         })
+        // 一键清除输入内容
+        binding.btnClear.setOnClickListener {
+            binding.etSearch.setText("")
+            binding.etSearch.dismissDropDown()
+            binding.btnClear.visibility = android.view.View.GONE
+            binding.mapView.setCategoryResults(emptyList())
+            binding.categoryRow.visibility = android.view.View.GONE
+            binding.categoryChips.removeAllViews()
+        }
         binding.etSearch.setOnItemClickListener { _, _, pos, _ ->
             val name = binding.etSearch.adapter.getItem(pos) as String
             when {
@@ -390,6 +417,13 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         }
         binding.mapView.onPlaceClick = { lat, lon, name ->
             setPendingNav(lat, lon, name, "导航到此处：${name}")
+        }
+        binding.mapView.onCategoryClick = { lat, lon, name ->
+            // 类别结果标注点击：直接规划路线并清理类别结果
+            planRouteTo(lat, lon, name)
+            binding.mapView.setCategoryResults(emptyList())
+            binding.categoryRow.visibility = android.view.View.GONE
+            binding.categoryChips.removeAllViews()
         }
         // 预加载地图小区名称标签
         loadPlaceLabels()
@@ -571,6 +605,13 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
     private fun doSearch(q: String) {
         val query = q.trim()
         if (query.isEmpty()) { showToast("请输入目的地"); return }
+        // 类别搜索：学校/医院/加油站 → 附近10公里所有点位高亮，点击直接规划路线
+        val cat = categoryKeyword(query)
+        if (cat != null) {
+            binding.etSearch.dismissDropDown()
+            fetchCategory(query, cat.first, cat.second)
+            return
+        }
         // 支持 纬度,经度
         val coord = query.split(",", "，").map { it.trim() }
         if (coord.size == 2) {
@@ -675,6 +716,115 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
                 }
             }
         }.start()
+    }
+
+    // ==================== 类别搜索（学校/医院/加油站，附近10公里） ====================
+
+    /** 判断关键词是否为类别搜索，返回 (类别名, Overpass amenity 匹配式) */
+    private fun categoryKeyword(q: String): Pair<String, String>? = when {
+        q.contains("学校") || q.contains("中学") || q.contains("小学") || q.contains("大学") || q.contains("学院") || q.contains("幼儿园") ->
+            "学校" to "school|kindergarten|college|university"
+        q.contains("医院") || q.contains("诊所") || q.contains("卫生") || q.contains("卫生院") ->
+            "医院" to "hospital|clinic|doctors|dentist"
+        q.contains("加油站") || q.contains("油站") ->
+            "加油站" to "fuel"
+        else -> null
+    }
+
+    /** 拉取附近约10公里类别点位并在地图高亮 + 底部结果条（点击直接规划路线） */
+    private fun fetchCategory(q: String, kind: String, amenity: String) {
+        val centerLat = if (lastLat != 0.0) lastLat else 31.86
+        val centerLon = if (lastLon != 0.0) lastLon else 117.28
+        val dLat = 0.09; val dLon = 0.11
+        val bbox = "${centerLat - dLat},${centerLon - dLon},${centerLat + dLat},${centerLon + dLon}"
+        showToast("正在查找附近10公里$kind…")
+        Thread {
+            try {
+                val qs = "[out:json][timeout:25];(node[\"amenity\"~\"$amenity\"]($bbox);way[\"amenity\"~\"$amenity\"]($bbox););out center 80;"
+                val url = URL("https://overpass-api.de/api/interpreter")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 20000; conn.readTimeout = 25000
+                conn.setRequestProperty("User-Agent", "MotoNavHelper/1.0")
+                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                conn.doOutput = true
+                conn.outputStream.use { it.write("data=${java.net.URLEncoder.encode(qs, "UTF-8")}".toByteArray()) }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val root = org.json.JSONObject(body)
+                val els = root.getJSONArray("elements")
+                val seen = LinkedHashMap<String, Triple<Double, Double, String>>()
+                val results = mutableListOf<Triple<Double, Double, String>>()
+                for (i in 0 until els.length()) {
+                    val e = els.getJSONObject(i)
+                    val t = e.optJSONObject("tags")
+                    val n = t?.optString("name", "")?.trim() ?: ""
+                    if (n.isEmpty()) continue
+                    var lat = e.optDouble("lat", 0.0)
+                    var lon = e.optDouble("lon", 0.0)
+                    val c = e.optJSONObject("center")
+                    if ((lat == 0.0 || lon == 0.0) && c != null) {
+                        lat = c.getDouble("lat"); lon = c.getDouble("lon")
+                    }
+                    if (lat == 0.0 || lon == 0.0) continue
+                    // 10公里内才保留
+                    val dist = haversine(centerLat, centerLon, lat, lon)
+                    if (dist > 10000) continue
+                    if (seen.putIfAbsent(n, Triple(lat, lon, n)) == null) {
+                        results.add(Triple(lat, lon, n))
+                    }
+                }
+                // 按距离升序
+                results.sortBy { haversine(centerLat, centerLon, it.first, it.second) }
+                handler.post {
+                    if (results.isEmpty()) {
+                        binding.categoryChips.removeAllViews()
+                        binding.categoryRow.visibility = android.view.View.GONE
+                        binding.mapView.setCategoryResults(emptyList())
+                        binding.tvStatus.text = "附近10公里未找到$kind"
+                        return@post
+                    }
+                    binding.mapView.setCategoryResults(results)
+                    binding.categoryChips.removeAllViews()
+                    for (r in results.take(30)) {
+                        val chip = android.widget.TextView(this)
+                        chip.text = "${displayName(r.third)} · ${fmtDist(haversine(centerLat, centerLon, r.first, r.second))} · 导航"
+                        chip.setTextColor(0xFFFFFFFF.toInt())
+                        chip.textSize = 13f
+                        chip.setPadding(28, 18, 28, 18)
+                        chip.setBackgroundColor(0xE64C9AFF.toInt())
+                        chip.setOnClickListener {
+                            planRouteTo(r.first, r.second, r.third)
+                            binding.categoryRow.visibility = android.view.View.GONE
+                            binding.categoryChips.removeAllViews()
+                            binding.mapView.setCategoryResults(emptyList())
+                        }
+                        binding.categoryChips.addView(chip, android.widget.LinearLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+                            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = 20 })
+                    }
+                    binding.categoryRow.visibility = android.view.View.VISIBLE
+                    binding.tvStatus.text = "找到 ${results.size} 个$kind，点击可直接规划路线"
+                }
+            } catch (e: Exception) {
+                handler.post { binding.tvStatus.text = "查询${kind}失败，请稍后重试" }
+            }
+        }.start()
+    }
+
+    private fun fmtDist(d: Double): String =
+        if (d < 1000) "${d.toInt()}m" else String.format("%.1fkm", d / 1000)
+
+    /** Haversine 距离（米） */
+    private fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val R = 6371000.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        return 2 * R * Math.asin(Math.sqrt(a))
     }
 
     /** 地图小区/商铺名称标签（带坐标，点击可导航） */

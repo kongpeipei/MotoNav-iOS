@@ -78,6 +78,8 @@ class MapView @JvmOverloads constructor(
     private var gasStations: List<Pair<Double, Double>> = emptyList()
     /** 地图小区/商铺名称标签（纬度,经度,名称） */
     private var placeLabels: List<Triple<Double, Double, String>> = emptyList()
+    /** 类别搜索结果（学校/医院/加油站） */
+    private var categoryResults: List<Triple<Double, Double, String>> = emptyList()
 
     /** 视图平移偏移（像素，地图层坐标系），用户拖动地图后保留 */
     private var panX = 0f
@@ -98,6 +100,7 @@ class MapView @JvmOverloads constructor(
     var onPoiLongPress: ((Poi) -> Unit)? = null
     /** 点击小区/商铺标签回调（纬度, 经度, 名称） */
     var onPlaceClick: ((Double, Double, String) -> Unit)? = null
+    var onCategoryClick: ((Double, Double, String) -> Unit)? = null
 
     // ==================== OSM 瓦片 ====================
     private val R = 6378137.0
@@ -245,6 +248,11 @@ class MapView @JvmOverloads constructor(
     /** 设置地图小区/商铺名称标签（纬度,经度,名称） */
     fun setPlaceLabels(list: List<Triple<Double, Double, String>>) {
         placeLabels = list
+        postInvalidate()
+    }
+
+    fun setCategoryResults(list: List<Triple<Double, Double, String>>) {
+        categoryResults = list
         postInvalidate()
     }
 
@@ -406,6 +414,7 @@ class MapView @JvmOverloads constructor(
         pois.forEach { drawPoi(canvas, it) }
         drawGasStations(canvas)
         drawPlaceLabels(canvas)
+        drawCategoryResults(canvas)
         drawPreview(canvas)
         drawUser(canvas)
         canvas.restore()
@@ -517,6 +526,34 @@ class MapView @JvmOverloads constructor(
         }
     }
 
+    /** 类别搜索结果（学校/医院/加油站）：彩色圆标 + 名称块，任意缩放级别显示 */
+    private fun drawCategoryResults(canvas: Canvas) {
+        if (categoryResults.isEmpty()) return
+        for ((lat, lon, name) in categoryResults) {
+            val s = toScreen(lat, lon)
+            if (s[0] < -160 || s[0] > width + 160 || s[1] < -60 || s[1] > height + 60) continue
+            val ring = Paint().apply {
+                color = Color.parseColor("#2ECC71"); style = Paint.Style.FILL; isAntiAlias = true
+            }
+            canvas.drawCircle(s[0], s[1], 22f, Paint().apply {
+                color = Color.parseColor("#332ECC71"); style = Paint.Style.FILL
+            })
+            canvas.drawCircle(s[0], s[1], 9f, ring)
+            canvas.drawCircle(s[0], s[1], 3f, Paint().apply {
+                color = Color.WHITE; style = Paint.Style.FILL
+            })
+            val bg = Paint().apply {
+                color = Color.parseColor("#D9000000"); style = Paint.Style.FILL; isAntiAlias = true
+            }
+            val txt = Paint().apply {
+                color = Color.WHITE; textSize = 21f; isAntiAlias = true
+            }
+            val w = txt.measureText(name) + 12f
+            canvas.drawRoundRect(s[0] - w / 2, s[1] + 14f, s[0] + w / 2, s[1] + 36f, 8f, 8f, bg)
+            canvas.drawText(name, s[0] - txt.measureText(name) / 2, s[1] + 31f, txt)
+        }
+    }
+
     /** 搜索预览点：绿色高亮圆标 */
     private fun drawPreview(canvas: Canvas) {
         if (!hasPreview) return
@@ -623,6 +660,21 @@ class MapView @JvmOverloads constructor(
                     onPoiClick?.invoke(best)
                     postInvalidate()
                     return true
+                }
+                // 未命中点位：尝试命中类别结果（学校/医院/加油站，任意缩放级别）
+                if (categoryResults.isNotEmpty()) {
+                    var bestCat: Triple<Double, Double, String>? = null
+                    var bestD = Float.MAX_VALUE
+                    for (p in categoryResults) {
+                        val ps = toScreen(p.first, p.second)
+                        val d = kotlin.math.hypot(s[0] - ps[0], s[1] - ps[1])
+                        if (d < 55f && d < bestD) { bestD = d; bestCat = p }
+                    }
+                    if (bestCat != null) {
+                        onCategoryClick?.invoke(bestCat.first, bestCat.second, bestCat.third)
+                        postInvalidate()
+                        return true
+                    }
                 }
                 // 未命中点位：尝试命中小区/商铺标签
                 if (metersPerPx <= 6f) {

@@ -121,10 +121,6 @@ struct ContentView: View {
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
             categoryTick: model.categoryTick,
-            onCategorySelect: { r in
-                model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
-                model.clearCategory()
-            },
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -146,6 +142,10 @@ struct ContentView: View {
                 goHereLat = pl.lat
                 goHereLon = pl.lon
                 model.clearPreview()
+            },
+            onCategorySelect: { r in
+                model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
+                model.clearCategory()
             }
         )
         .ignoresSafeArea()
