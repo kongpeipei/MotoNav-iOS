@@ -230,6 +230,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // 当前位置：缩小版指南针图标（玻璃圆底 + 红色指北针）
+            if annotation is MKUserLocation {
+                let id = "userLoc"
+                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                if v == nil {
+                    v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
+                }
+                v?.image = Self.makeUserIcon()
+                v?.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
+                v?.centerOffset = .zero
+                v?.canShowCallout = false
+                return v
+            }
             if let re = annotation as? RouteEndAnnotation {
                 let id = "routeEnd"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
@@ -391,5 +404,37 @@ extension MKPolyline {
         var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: pointCount)
         getCoordinates(&coords, range: NSRange(location: 0, length: pointCount))
         return coords
+    }
+}
+
+extension MapViewRepresentable {
+    /// 当前位置图标：缩小版指南针（玻璃圆底 + 红色指北针 + N）
+    static func makeUserIcon() -> UIImage {
+        let size: CGFloat = 30
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { ctx in
+            let c = ctx.cgContext
+            let center = CGPoint(x: size / 2, y: size / 2)
+            let r: CGFloat = 14
+            // 玻璃圆底
+            c.setFillColor(UIColor(white: 1, alpha: 0.6).cgColor)
+            c.fillEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+            // 白描边
+            c.setStrokeColor(UIColor.white.withAlphaComponent(0.8).cgColor)
+            c.setLineWidth(1.5)
+            c.strokeEllipse(in: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+            // 红色指北针（朝上）
+            c.setFillColor(UIColor.systemRed.cgColor)
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: center.x, y: center.y - r + 4))
+            path.addLine(to: CGPoint(x: center.x - 5.5, y: center.y + 4))
+            path.addLine(to: CGPoint(x: center.x, y: center.y - 1))
+            path.addLine(to: CGPoint(x: center.x + 5.5, y: center.y + 4))
+            path.close()
+            path.fill()
+            // 中心点
+            c.setFillColor(UIColor(white: 0.2, alpha: 1).cgColor)
+            c.fillEllipse(in: CGRect(x: center.x - 1.8, y: center.y - 1.8, width: 3.6, height: 3.6))
+        }
     }
 }

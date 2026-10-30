@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var searchText = ""
     @State private var suggestions: [String] = []
     @State private var showSuggestions = false
@@ -98,6 +99,12 @@ struct ContentView: View {
             model.fetchPlaceLabels()
             model.checkClipboard()
         }
+        // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                model.checkClipboard()
+            }
+        }
         // 预览点变化（含在线搜索兜底）→ 同步"去这里"按钮
         .onChange(of: model.searchPreview) { p in
             if let p = p {
@@ -181,7 +188,6 @@ struct ContentView: View {
                 }
                 Menu {
                     Button("清空历史搜索") { model.clearHistory() }
-                    Button("清空路线") { model.clearRoute() }
                     Divider()
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
@@ -221,7 +227,7 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：状态 + 类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航
+    /// 底部浮层：状态 + 类别结果 + 历史 + 定位按钮(搜索框右上方) + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -246,6 +252,22 @@ struct ContentView: View {
             } else {
                 goHereBar
                 searchBar
+            }
+            // 已规划路线时：搜索框下方中间显示"清空路线"
+            if !model.navigating && model.route != nil && goHereName == nil {
+                Button {
+                    model.clearRoute()
+                    model.status = "路线已清空"
+                } label: {
+                    Text("清空路线")
+                        .font(.footnote.bold())
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.35), lineWidth: 0.8))
+                }
+                .padding(.bottom, 6)
             }
         }
     }
@@ -386,10 +408,10 @@ struct ContentView: View {
         .background(.black.opacity(0.18))
     }
 
-    /// 搜索输入行：输入框（1.5cm 宽、液态玻璃、圆角、含一键清除 x）+ 搜索按钮
+    /// 搜索输入行：输入框（与手机等宽、加高、液态玻璃、圆角、含一键清除 x）+ 搜索按钮
     private var searchInputRow: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -419,9 +441,9 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .frame(width: 90) // 1.5cm 宽
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity) // 与手机同宽
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12) // 加高，方便点击输入
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 0.8))
 
