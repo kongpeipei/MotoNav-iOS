@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		CarPlay 导航类 Entitlement。
+		注意：该能力必须在 Apple Developer 后台申请（Capabilities → CarPlay → 选择 Maps/导航类目），
+		需要付费开发者账号，且由 Apple 审批通过后才生效。
+		审批前 App 仍可正常构建、安装到 iPhone 使用（仅 CarPlay 界面不出现）；
+		获批后重新签名安装即可在车载屏幕上使用。
+	-->
+	<key>com.apple.developer.carplay-maps</key>
+	<true/>
+</dict>
+</plist>

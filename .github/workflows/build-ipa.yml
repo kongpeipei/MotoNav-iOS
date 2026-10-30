@@ -1,0 +1,58 @@
+# 云端编译 IPA（无 Mac 方案）
+# 用法：把 MotoNaviOS 推送到自己的 GitHub 仓库，本工作流在 GitHub 的 macOS 虚拟机上
+#       编译出「未签名 IPA」，下载后用全能签等工具签名安装。
+# 触发方式：Actions 页手动运行（workflow_dispatch），或 push 到 main 分支。
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          APP=$(ls /Applications | grep '^Xcode_16' | sort | tail -1)
+          if [ -n "$APP" ]; then sudo xcode-select -s "/Applications/$APP"; fi
+          xcodebuild -version
+
+      - name: Build app (unsigned)
+        run: |
+          xcodebuild \
+            -project MotoNav.xcodeproj \
+            -scheme MotoNav \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Ad-hoc sign (便于全能签重签)
+        run: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "APP=$APP_PATH"
+          test -n "$APP_PATH"
+          codesign --force --sign - "$APP_PATH"
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          test -n "$APP_PATH"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qr MotoNav-unsigned.ipa Payload
+          ls -la MotoNav-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MotoNav-unsigned.ipa
+          path: MotoNav-unsigned.ipa

@@ -1,0 +1,50 @@
+import Foundation
+import CoreLocation
+import UIKit
+
+/// 提醒点位类型（与安卓版一致）
+enum PoiType: String, Codable, CaseIterable {
+    case RED_LIGHT
+    case RESTRICTION
+    case LANE
+
+    var label: String {
+        switch self {
+        case .RED_LIGHT: return "闯红灯拍照"
+        case .RESTRICTION: return "限行/禁摩"
+        case .LANE: return "车道拍照"
+        }
+    }
+
+    var voicePrefix: String {
+        switch self {
+        case .RED_LIGHT: return "前方闯红灯拍照"
+        case .RESTRICTION: return "前方限行禁摩路段"
+        case .LANE: return "前方车道违章拍照"
+        }
+    }
+
+    var color: UIColor {
+        switch self {
+        case .RED_LIGHT: return .systemRed
+        case .RESTRICTION: return .systemOrange
+        case .LANE: return .systemCyan
+        }
+    }
+}
+
+/// 单个提醒点位
+struct Poi: Codable, Identifiable, Equatable {
+    var id: Int64
+    var type: PoiType
+    var name: String
+    var lat: Double
+    var lon: Double
+    var radiusM: Double
+    var enabled: Bool
+    var note: String
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+}
