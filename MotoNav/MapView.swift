@@ -192,9 +192,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         map.removeOverlays(map.overlays)
         if route.count > 1 {
-            // 高德式双层路线：白色描边底层 + 蓝色主层
-            map.addOverlay(UnderlayPolyline(coordinates: route, count: route.count))
-            map.addOverlay(RoutePolyline(coordinates: route, count: route.count))
+            // 高德式双层路线：白色描边底层 + 蓝色主层（以引用区分，避免子类化便利构造问题）
+            let under = MKPolyline(coordinates: route, count: route.count)
+            context.coordinator.underPolyline = under
+            map.addOverlay(under)
+            map.addOverlay(MKPolyline(coordinates: route, count: route.count))
+        } else {
+            context.coordinator.underPolyline = nil
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
         map.camera.heading = CLLocationDirection(heading)
@@ -258,6 +262,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPreviewKey = ""
         /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
         var lastPitchState: Bool?
+        /// 路线白色描边底层引用（renderer 区分双层）
+        var underPolyline: MKPolyline?
         /// 程序主动设置区域（避免被标记为用户移动）
         private var programmaticMove = false
 
@@ -439,31 +445,21 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let u = overlay as? UnderlayPolyline {
-                let r = MKPolylineRenderer(polyline: u)
-                r.strokeColor = .white
-                r.lineWidth = 9
+            if let poly = overlay as? MKPolyline {
+                let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
-                return r
-            }
-            if let o = overlay as? RoutePolyline {
-                let r = MKPolylineRenderer(polyline: o)
-                r.strokeColor = .systemBlue
-                r.lineWidth = 5.5
-                r.lineCap = .round
+                if poly === context.coordinator.underPolyline {
+                    r.strokeColor = .white
+                    r.lineWidth = 9
+                } else {
+                    r.strokeColor = .systemBlue
+                    r.lineWidth = 5.5
+                }
                 return r
             }
             return MKOverlayRenderer(overlay: overlay)
         }
     }
-}
-
-/// 高德式双层路线：白色描边底层 + 蓝色主层
-final class UnderlayPolyline: MKPolyline {
-    required init?(coder aDecoder: NSCoder) { fatalError("not supported") }
-}
-final class RoutePolyline: MKPolyline {
-    required init?(coder aDecoder: NSCoder) { fatalError("not supported") }
 }
 
 /// 路线起点/终点标记

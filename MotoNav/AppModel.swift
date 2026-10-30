@@ -214,11 +214,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func isFavorite(_ p: Poi) -> Bool {
-        favorites["\(p.latitude),\(p.longitude)"] != nil
+        favorites["\(p.lat),\(p.lon)"] != nil
     }
 
     func toggleFavorite(_ p: Poi) {
-        let key = "\(p.latitude),\(p.longitude)"
+        let key = "\(p.lat),\(p.lon)"
         if favorites[key] != nil {
             favorites.removeValue(forKey: key)
         } else {
@@ -228,13 +228,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func setHome(_ p: Poi) {
-        homePlace = SavedPlace(name: p.name, lat: p.latitude, lon: p.longitude)
+        homePlace = SavedPlace(name: p.name, lat: p.lat, lon: p.lon)
         let ud = UserDefaults.standard
         if let d = try? JSONEncoder().encode(homePlace) { ud.set(d, forKey: homeKey) }
     }
 
     func setWork(_ p: Poi) {
-        workPlace = SavedPlace(name: p.name, lat: p.latitude, lon: p.longitude)
+        workPlace = SavedPlace(name: p.name, lat: p.lat, lon: p.lon)
         let ud = UserDefaults.standard
         if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
     }
