@@ -29,8 +29,8 @@ struct ContentView: View {
     @State private var goHereLat = 0.0
     @State private var goHereLon = 0.0
     @State private var goHereLabel = ""
-    /// "导航到这里"已触发标记：仅此时显示清空路线竖条
-    @State private var showClearRouteBtn = false
+    /// 顶部搜索胶囊展开标记（规划态搜索框移至底部时，点击顶部胶囊重新展开搜索）
+    @State private var showSearchField = false
     /// 搜索框当前高度（手指上下滑动调整）
     @State private var searchHeight: CGFloat = 54
 
@@ -48,6 +48,10 @@ struct ContentView: View {
             locateOverlay.opacity(model.navigating ? 0 : 1)
             // 常用地点（家/公司）快捷按钮
             homeWorkOverlay
+            // 天气条（左上角，指南针下方，一行）
+            weatherOverlay
+            // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
+            routeBarOverlay
             // 地图缩放 + / - 按钮
             zoomOverlay
             // 导航中悬浮退出按钮
@@ -90,7 +94,8 @@ struct ContentView: View {
                 showTypePicker = true
             }
             Button("导航到这里") {
-                model.planRoute(to: "地图选点", lat: coord.latitude, lon: coord.longitude)
+                let n = placeNameNear(coord)
+                model.planRoute(to: n, lat: coord.latitude, lon: coord.longitude)
             }
             Button("设为家") {
                 let p = Poi(id: 999_991, type: .SPEED, name: "家", lat: coord.latitude, lon: coord.longitude,
@@ -219,12 +224,13 @@ struct ContentView: View {
                 model.clearCategory()
             },
             onMapTap: { coord in
-                // 轻点地图空白：该位置下方显示"导航到这里"
+                // 轻点地图空白：该位置下方显示"导航到这里"（目的地名用附近地标，避免"地图选点"）
+                let n = placeNameNear(coord)
                 goHereLabel = "导航去此处"
-                goHereName = nil
+                goHereName = n
                 goHereLat = coord.latitude
                 goHereLon = coord.longitude
-                model.setPreview("地图选点", lat: coord.latitude, lon: coord.longitude)
+                model.setPreview(n, lat: coord.latitude, lon: coord.longitude)
             }
         )
         .ignoresSafeArea()
@@ -232,28 +238,31 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 右上角 ⋯ 菜单（v1.14：液态玻璃 + 天气/明日天气）
+    /// 天气条：左上角（指南针下方），一行液态玻璃胶囊（不再遮挡右上角状态文字）
+    private var weatherOverlay: some View {
+        VStack {
+            HStack {
+                if let w = model.weatherText, let t = model.tomorrowText {
+                    Text("\(w) · 明日\(t)")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.leading, 12)
+                        .padding(.top, 96)
+                }
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+
+    /// 右上角 ⋯ 菜单（导入/导出点位数据）
     private var menuOverlay: some View {
         VStack {
             HStack {
                 Spacer()
-                // 天气 + 明日天气（⋯ 左侧，纵向排列，液态玻璃）
-                VStack(alignment: .trailing, spacing: 4) {
-                    if let w = model.weatherText {
-                        Text(w)
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                            .padding(8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    if let t = model.tomorrowText {
-                        Text(t)
-                            .font(.caption)
-                            .foregroundStyle(.primary)
-                            .padding(6)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                }
                 Menu {
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
@@ -272,6 +281,46 @@ struct ContentView: View {
         }
     }
 
+    /// 规划态顶部路线胶囊：显示"我的位置 → 目的地"，点击重新搜索（高德规划态顶部搜索框）
+    private var routeBarOverlay: some View {
+        VStack {
+            HStack {
+                Spacer()
+                if !model.navigating, !model.routeChoices.isEmpty, !showSearchField {
+                    Button {
+                        haptic()
+                        showSearchField = true
+                        searchFocused = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("我的位置")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                            Image(systemName: "arrow.right")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text(model.destName)
+                                .font(.caption.bold())
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Image(systemName: "magnifyingglass")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 40)
+                }
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+
     /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
@@ -282,7 +331,10 @@ struct ContentView: View {
                 historyBar
                 routeChoiceList
                 goHereBar
-                searchBar
+                // 规划态隐藏底部搜索框（顶部路线胶囊提供重新搜索入口），避免底部三层拥挤
+                if showSearchField || model.routeChoices.isEmpty {
+                    searchBar
+                }
             } else {
                 turnAheadCard
                 navInfoCard
@@ -524,26 +576,6 @@ struct ContentView: View {
                         .frame(width: 44, height: 44)
                         .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
-                    // 清空路线：竖形长条（宽同定位按钮，长为 3 倍）
-                    if showClearRouteBtn && model.route != nil {
-                        Button {
-                            model.clearRoute()
-                            showClearRouteBtn = false
-                        } label: {
-                            VStack(spacing: 4) {
-                                Text("清")
-                                Text("空")
-                                Text("路")
-                                Text("线")
-                            }
-                            .font(.subheadline.bold())
-                            .foregroundStyle(.black)
-                            .frame(width: 44, height: 132)
-                            .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.black.opacity(0.12), lineWidth: 1))
-                        }
-                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
-                    }
                 }
                 .padding(.trailing, 18) // 与搜索胶囊内"搜索"按钮居中对齐
                 .offset(y: -57) // 相对中间位置向上提高 2cm
@@ -573,9 +605,8 @@ struct ContentView: View {
             } else if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
                     haptic()
+                    showSearchField = false
                     model.fetchRouteChoices(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
-                    // "导航到这里"触发 → 允许显示清空路线竖条
-                    showClearRouteBtn = true
                     goHereName = nil
                     goHereLat = 0
                     goHereLon = 0
@@ -645,11 +676,14 @@ struct ContentView: View {
     /// 单张高德式方案卡：大分钟 + 里程·抓拍 + 标签，选中蓝框高亮
     private func routeChoiceCard(_ c: RouteChoice, selected: Bool) -> some View {
         let sel = selected
+        let distTxt = c.distanceM < 1000
+            ? "\(c.distanceM)米"
+            : String(format: "%.1f公里", Double(c.distanceM) / 1000.0)
         return VStack(alignment: .leading, spacing: 3) {
-            Text("\(c.durationS / 60) 分钟")
+            Text(c.durationS < 60 ? "1分钟内" : "\(c.durationS / 60) 分钟")
                 .font(.system(size: 17, weight: .heavy))
                 .foregroundStyle(.primary)
-            Text("\(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里 · 抓拍\(c.poiCount)")
+            Text("\(distTxt) · 抓拍\(c.poiCount)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text(c.label)
@@ -1063,6 +1097,18 @@ struct ContentView: View {
             return String(name[r])
         }
         return name.replacingOccurrences(of: #"(交口|路口|交叉口)$"#, with: "", options: .regularExpression)
+    }
+
+    /// 地图选点命名：使用 800 米内最近的地图地标（小区/商铺），无则"地图选点"
+    private func placeNameNear(_ coord: CLLocationCoordinate2D) -> String {
+        let c = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        var best: PlaceLabel?
+        var bestD = 800.0
+        for pl in model.placeLabels {
+            let d = c.distance(from: CLLocation(latitude: pl.lat, longitude: pl.lon))
+            if d < bestD { bestD = d; best = pl }
+        }
+        return best?.name ?? "地图选点"
     }
 
     /// 从「🔍 在线搜索「XX」」提取 XX

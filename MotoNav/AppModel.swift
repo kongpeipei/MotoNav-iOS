@@ -1063,9 +1063,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let near = nearbyPoisOnRoute(r.points)
                 routePois = near
                 fitTick += 1
-                status = String(
-                    format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",
-                    name, Double(r.distanceM) / 1000.0, r.durationS / 60, near.count)
+                status = routeSummary(name, distanceM: r.distanceM, durationS: r.durationS, poiCount: near.count)
             } else {
                 fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             }
@@ -1100,6 +1098,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             applyRouteChoice(list[0], name: name)
             status = "路线已恢复，请选择方案或开始导航"
         }
+    }
+
+    /// 路线摘要文字（高德式：短距离显示米、短时间显示"1分钟内"，避免"0.0公里/0分钟"）
+    private func routeSummary(_ name: String, distanceM: Int, durationS: Int, poiCount: Int) -> String {
+        let distTxt = distanceM < 1000 ? "\(distanceM)米" : String(format: "%.1f公里", Double(distanceM) / 1000.0)
+        let timeTxt = durationS < 60 ? "1分钟内" : "\(durationS / 60)分钟"
+        return "到「\(name)」约\(distTxt)，预计\(timeTxt)，沿途抓拍点\(poiCount)处，请留意"
     }
 
     func clearRoute() {
@@ -1164,9 +1169,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let near = nearbyPoisOnRoute(c.points)
         routePois = near
         fitTick += 1
-        status = String(
-            format: "到「%@」约%.1f公里，预计%d分钟，沿途抓拍点%d处，请留意",
-            n, Double(c.distanceM) / 1000.0, c.durationS / 60, near.count)
+        status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
     }
 
     /// 筛选距路线折线 130 米内的点位
