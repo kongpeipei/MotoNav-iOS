@@ -22,10 +22,15 @@ struct MapViewRepresentable: UIViewRepresentable {
     let gasTick: Int
     /// 地图小区/商铺名称标签
     let placeLabels: [PlaceLabel]
+    /// 类别搜索结果（学校/医院/加油站）
+    let categoryResults: [AppModel.CategoryResult]
+    /// 类别结果刷新计数
+    let categoryTick: Int
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
     var onPoiLongPress: ((Poi) -> Void)?
     var onPoiSelect: ((Poi) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
+    var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -44,6 +49,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPoiLongPress = onPoiLongPress
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
+        context.coordinator.onCategorySelect = onCategorySelect
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 蓝点方向指示 + 回中）
         if locateTick > 0 {
             context.coordinator.setRegionProgrammatically {
@@ -147,6 +153,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
             map.addAnnotation(PlaceAnnotation(place: pl))
         }
+        // 类别搜索结果（学校/医院/加油站）
+        let wantCats = Set(categoryResults.map(\.id))
+        map.annotations
+            .compactMap { $0 as? CategoryAnnotation }
+            .filter { !wantCats.contains($0.result.id) }
+            .forEach { map.removeAnnotation($0) }
+        for r in categoryResults where !map.annotations.contains(where: { ($0 as? CategoryAnnotation)?.result.id == r.id }) {
+            map.addAnnotation(CategoryAnnotation(result: r))
+        }
         map.removeOverlays(map.overlays)
         if route.count > 1 {
             map.addOverlay(MKPolyline(coordinates: route, count: route.count))
@@ -207,6 +222,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             } else if let pla = view.annotation as? PlaceAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onPlaceSelect?(pla.place)
+            } else if let ca = view.annotation as? CategoryAnnotation {
+                mapView.deselectAnnotation(view.annotation, animated: false)
+                onCategorySelect?(ca.result)
             }
         }
 
@@ -247,6 +265,22 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.titleVisibility = .visible // 直接显示小区/商铺名称
                 v.canShowCallout = false
                 v.displayPriority = .defaultLow
+                return v
+            }
+            if let ca = annotation as? CategoryAnnotation {
+                let id = "category"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: ca, reuseIdentifier: id)
+                // 按类别着色：学校蓝 / 医院红 / 加油站橙
+                switch ca.result.kind {
+                case "医院": v.markerTintColor = .systemRed
+                case "加油站": v.markerTintColor = .systemOrange
+                default: v.markerTintColor = .systemBlue
+                }
+                v.glyphText = ca.result.kind == "加油站" ? "油" : "点"
+                v.titleVisibility = .visible
+                v.canShowCallout = false
+                v.displayPriority = .required
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
@@ -336,6 +370,19 @@ final class PlaceAnnotation: NSObject, MKAnnotation {
         CLLocationCoordinate2D(latitude: place.lat, longitude: place.lon)
     }
     var title: String? { place.name }
+}
+
+/// 类别搜索结果标注（学校/医院/加油站）
+final class CategoryAnnotation: NSObject, MKAnnotation {
+    let result: AppModel.CategoryResult
+    init(result: AppModel.CategoryResult) {
+        self.result = result
+        super.init()
+    }
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: result.lat, longitude: result.lon)
+    }
+    var title: String? { result.name }
 }
 
 extension MKPolyline {

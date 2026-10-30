@@ -32,6 +32,7 @@ struct ContentView: View {
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
             menuOverlay
+            gasOverlay
             bottomOverlay
         }
         .sheet(item: $editPoi) { p in
@@ -118,6 +119,12 @@ struct ContentView: View {
             gasStations: model.gasStations,
             gasTick: model.gasTick,
             placeLabels: model.placeLabels,
+            categoryResults: model.categoryResults,
+            categoryTick: model.categoryTick,
+            onCategorySelect: { r in
+                model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
+                model.clearCategory()
+            },
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -146,18 +153,27 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 右上角 ⋯ 菜单（v1.12 精简：只剩清历史/清路线/导入/导出）
+    /// 右上角 ⋯ 菜单（v1.13：天气+明日天气，⋯ 与加油站）
     private var menuOverlay: some View {
         VStack {
             HStack {
                 Spacer()
-                // 天气小图标（⋯ 左侧）
-                if let w = model.weatherText {
-                    Text(w)
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .padding(8)
-                        .background(.black.opacity(0.5), in: Capsule())
+                // 天气 + 明日天气（⋯ 左侧，纵向排列）
+                VStack(alignment: .trailing, spacing: 4) {
+                    if let w = model.weatherText {
+                        Text(w)
+                            .font(.subheadline)
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.5), in: Capsule())
+                    }
+                    if let t = model.tomorrowText {
+                        Text(t)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(6)
+                            .background(.black.opacity(0.5), in: Capsule())
+                    }
                 }
                 Menu {
                     Button("清空历史搜索") { model.clearHistory() }
@@ -179,11 +195,33 @@ struct ContentView: View {
         }
     }
 
-    /// 底部浮层：状态 + 历史 + 定位按钮 + 去这里 + 搜索框/退出导航
+    /// 加油站按钮：位于 ⋯ 按钮下方（v1.13 从搜索框移到这里）
+    private var gasOverlay: some View {
+        VStack {
+            HStack {
+                Spacer()
+                Button {
+                    model.fetchGasStations()
+                } label: {
+                    Text("⛽")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.5), in: Circle())
+                }
+                .padding(.trailing, 12)
+                .padding(.top, 58)
+            }
+            Spacer()
+        }
+    }
+
+    /// 底部浮层：状态 + 类别结果 + 历史 + 定位按钮 + 去这里 + 搜索框/退出导航
     private var bottomOverlay: some View {
         VStack(spacing: 0) {
             Spacer()
             statusBar
+            categoryBar
             historyBar
             if model.navigating {
                 // 导航中：搜索框替换为退出导航按钮
@@ -205,6 +243,39 @@ struct ContentView: View {
                 goHereBar
                 searchBar
                 locateRow
+            }
+        }
+    }
+
+    /// 类别搜索结果横条（学校/医院/加油站，点击直接规划路线）
+    private var categoryBar: some View {
+        Group {
+            if !model.categoryResults.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(model.categoryResults) { r in
+                            Button {
+                                model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
+                                model.clearCategory()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(displayName(r.name))
+                                        .font(.footnote)
+                                        .bold()
+                                        .lineLimit(1)
+                                    Text("\(model.categoryDistance(r)) · 导航")
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.85))
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.vertical, 4)
             }
         }
     }
@@ -310,7 +381,7 @@ struct ContentView: View {
         .background(.black.opacity(0.18))
     }
 
-    /// 搜索输入行：输入框 + 搜索按钮 + 加油站按钮
+    /// 搜索输入行：输入框（含一键清除 x）+ 搜索按钮
     private var searchInputRow: some View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
@@ -328,6 +399,18 @@ struct ContentView: View {
                         }
                         showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
                     }
+                // 一键清除输入内容（有内容时显示）
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                        suggestions = []
+                        showSuggestions = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -341,19 +424,6 @@ struct ContentView: View {
             } label: {
                 Image(systemName: "arrow.right.circle.fill")
                     .font(.title2)
-                    .foregroundStyle(.white)
-            }
-            .padding(6)
-            .background(.black.opacity(0.55), in: Circle())
-
-            // 加油站按钮：显示市区加油站
-            Button {
-                showSuggestions = false
-                dismissKeyboard()
-                model.fetchGasStations()
-            } label: {
-                Text("⛽")
-                    .font(.title3)
                     .foregroundStyle(.white)
             }
             .padding(6)
@@ -475,11 +545,18 @@ struct ContentView: View {
         return s
     }
 
-    /// v1.12：搜索后地图绿色高亮定位点，等待"去这里"规划路线；找不到走在线模糊搜索
-    /// 支持传入关键词（联想"在线搜索"入口），缺省用搜索框当前文字
+    /// v1.13：搜索学校/医院/加油站 → 附近10公里类别点位高亮+直接导航；
+    /// 其他 → 绿色高亮等待"去这里"；找不到走在线模糊搜索
     private func doSearch(_ q: String? = nil) {
         let q = (q ?? searchText).trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { model.status = "请输入目的地"; return }
+        // 类别搜索：学校/医院/加油站
+        if model.categoryKeyword(q) != nil {
+            model.clearCategory()
+            showSuggestions = false
+            model.fetchCategory(q)
+            return
+        }
         // 支持 纬度,经度
         let parts = q.split(whereSeparator: { $0 == "," || $0 == "，" }).map { $0.trimmingCharacters(in: .whitespaces) }
         if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),

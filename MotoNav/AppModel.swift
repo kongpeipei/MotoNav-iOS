@@ -35,6 +35,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var bgImage: UIImage?
     /// 天气文本（小图标 + 温度，显示在 ⋯ 左侧）
     @Published var weatherText: String?
+    /// 明日天气（最高/最低）
+    @Published var tomorrowText: String?
     /// 搜索预览点（绿色高亮，等待"去这里"）
     @Published var searchPreview: CLLocationCoordinate2D?
     @Published var searchPreviewName = ""
@@ -247,6 +249,104 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.removeObject(forKey: historyKey)
     }
 
+    // MARK: - 类别搜索（学校/医院/加油站，附近10公里）
+
+    /// 类别搜索结果（name + 坐标 + 类别）
+    struct CategoryResult: Identifiable, Hashable {
+        let name: String
+        let lat: Double
+        let lon: Double
+        let kind: String
+        var id: String { "\(kind)|\(name)|\(lat)|\(lon)" }
+    }
+
+    @Published var categoryResults: [CategoryResult] = []
+    /// 类别结果地图刷新计数
+    @Published var categoryTick = 0
+
+    /// 判断关键词是否为类别搜索（学校/医院/加油站），返回类别与 Overpass amenity 匹配式
+    func categoryKeyword(_ q: String) -> (kind: String, amenity: String)? {
+        if q.contains("学校") || q.contains("中学") || q.contains("小学") || q.contains("大学") || q.contains("学院") || q.contains("幼儿园") {
+            return ("学校", "school|kindergarten|college|university")
+        }
+        if q.contains("医院") || q.contains("诊所") || q.contains("卫生") || q.contains("卫生院") {
+            return ("医院", "hospital|clinic|doctors|dentist")
+        }
+        if q.contains("加油站") || q.contains("油站") {
+            return ("加油站", "fuel")
+        }
+        return nil
+    }
+
+    /// 按当前位置拉取附近约10公里内的类别点位并高亮
+    func fetchCategory(_ q: String) {
+        guard let c = categoryKeyword(q) else { return }
+        let center = currentLocation ?? CLLocationCoordinate2D(latitude: 31.86, longitude: 117.28)
+        let dLat = 0.09
+        let dLon = 0.11
+        let bbox = String(format: "%.4f,%.4f,%.4f,%.4f", center.latitude - dLat, center.longitude - dLon, center.latitude + dLat, center.longitude + dLon)
+        let query = "[out:json][timeout:25];(node[\"amenity\"~\"\(c.amenity)\"](\(bbox));way[\"amenity\"~\"\(c.amenity)\"](\(bbox)););out center 80;"
+        status = "正在查找附近10公里\(c.kind)…"
+        Task {
+            let reqURL = URL(string: "https://overpass-api.de/api/interpreter")
+            var req = URLRequest(url: reqURL!)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 25
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+            req.httpBody = "data=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)".data(using: .utf8)
+            guard let (data, _) = try? await URLSession.shared.data(for: req),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let els = root["elements"] as? [[String: Any]] else {
+                status = "查询\(c.kind)失败，请稍后重试"
+                return
+            }
+            let cl = CLLocation(latitude: center.latitude, longitude: center.longitude)
+            var list: [CategoryResult] = []
+            var seen = Set<String>()
+            for e in els {
+                guard let n = ((e["tags"] as? [String: Any])?["name"] as? String)?
+                    .trimmingCharacters(in: .whitespaces), !n.isEmpty else { continue }
+                var lat = e["lat"] as? Double ?? 0
+                var lon = e["lon"] as? Double ?? 0
+                if (lat == 0 || lon == 0), let cc = e["center"] as? [String: Any] {
+                    lat = cc["lat"] as? Double ?? 0
+                    lon = cc["lon"] as? Double ?? 0
+                }
+                guard lat != 0, lon != 0 else { continue }
+                let key = n
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                let dist = cl.distance(from: CLLocation(latitude: lat, longitude: lon))
+                if dist <= 10000 { // 10公里内
+                    list.append(CategoryResult(name: n, lat: lat, lon: lon, kind: c.kind))
+                }
+            }
+            list.sort { a, b in
+                let da = cl.distance(from: CLLocation(latitude: a.lat, longitude: a.lon))
+                let db = cl.distance(from: CLLocation(latitude: b.lat, longitude: b.lon))
+                return da < db
+            }
+            categoryResults = list
+            categoryTick += 1
+            status = list.isEmpty ? "附近10公里未找到\(c.kind)" : "找到 \(list.count) 个\(c.kind)，点击可直接规划路线"
+        }
+    }
+
+    func clearCategory() {
+        categoryResults = []
+        categoryTick += 1
+    }
+
+    /// 类别点距离文本
+    func categoryDistance(_ r: CategoryResult) -> String {
+        guard let cur = currentLocation else { return "" }
+        let d = CLLocation(latitude: cur.latitude, longitude: cur.longitude)
+            .distance(from: CLLocation(latitude: r.lat, longitude: r.lon))
+        if d < 1000 { return "\(Int(d))m" }
+        return String(format: "%.1fkm", d / 1000)
+    }
+
     // MARK: - 天气（Open-Meteo 免费接口）
 
     func fetchWeather() {
@@ -256,18 +356,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             comps.queryItems = [
                 URLQueryItem(name: "latitude", value: String(loc.latitude)),
                 URLQueryItem(name: "longitude", value: String(loc.longitude)),
-                URLQueryItem(name: "current_weather", value: "true")
+                URLQueryItem(name: "current_weather", value: "true"),
+                URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+                URLQueryItem(name: "timezone", value: "Asia%2FShanghai"),
+                URLQueryItem(name: "forecast_days", value: "2")
             ]
             guard let url = comps.url else { return }
             var req = URLRequest(url: url)
             req.timeoutInterval = 12
             req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
             guard let (data, _) = try? await URLSession.shared.data(for: req),
-                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let cw = root["current_weather"] as? [String: Any],
-                  let temp = cw["temperature"] as? Double,
-                  let code = cw["weathercode"] as? Int else { return }
-            weatherText = "\(weatherIcon(code)) \(Int(temp))°"
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            if let cw = root["current_weather"] as? [String: Any],
+               let temp = cw["temperature"] as? Double,
+               let code = cw["weathercode"] as? Int {
+                weatherText = "\(weatherIcon(code)) \(Int(temp))°"
+            }
+            // 明日最高/最低
+            if let daily = root["daily"] as? [String: Any],
+               let max = daily["temperature_2m_max"] as? [Double],
+               let min = daily["temperature_2m_min"] as? [Double],
+               max.count > 1, min.count > 1 {
+                tomorrowText = "明日 \(Int(min[1].rounded()))~\(Int(max[1].rounded()))°"
+            }
         }
     }
 
