@@ -44,14 +44,6 @@ struct ContentView: View {
             if !model.navigating {
                 menuOverlay
             }
-            // 当前定位按钮（非导航中显示；点击清空路线规划回到主页）
-            if !model.navigating {
-                locateOverlay
-            }
-            // 常用地点（家/公司）快捷按钮：仅规划态显示（主页有搜索框时隐藏，高德式）
-            if !model.navigating, !showSearchField, !model.routeChoices.isEmpty {
-                homeWorkOverlay
-            }
             // 天气条（左上角，指南针下方，一行）
             weatherOverlay
             // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
@@ -101,18 +93,6 @@ struct ContentView: View {
                 let n = placeNameNear(coord)
                 model.planRoute(to: n, lat: coord.latitude, lon: coord.longitude)
             }
-            Button("设为家") {
-                let p = Poi(id: 999_991, type: .SPEED, name: "家", lat: coord.latitude, lon: coord.longitude,
-                            radiusM: 50, enabled: true, note: "常用地点-家")
-                model.setHome(p)
-                model.status = "已将当前位置设为家（长按点位可改）"
-            }
-            Button("设为公司") {
-                let p = Poi(id: 999_992, type: .SPEED, name: "公司", lat: coord.latitude, lon: coord.longitude,
-                            radiusM: 50, enabled: true, note: "常用地点-公司")
-                model.setWork(p)
-                model.status = "已将当前位置设为公司（长按点位可改）"
-            }
             Button("取消", role: .cancel) {}
         } message: { coord in
             Text(String(format: "纬度 %.5f\n经度 %.5f", coord.latitude, coord.longitude))
@@ -135,8 +115,6 @@ struct ContentView: View {
                 model.toggleFavorite(p)
                 model.status = model.isFavorite(p) ? "已收藏：\(p.name)" : "已取消收藏：\(p.name)"
             }
-            Button("设为家") { model.setHome(p); model.status = "已将「\(p.name)」设为家" }
-            Button("设为公司") { model.setWork(p); model.status = "已将「\(p.name)」设为公司" }
             Button("编辑该点位") { editPoi = p }
             Button("删除该点位", role: .destructive) {
                 model.deletePoi(id: p.id)
@@ -556,41 +534,6 @@ struct ContentView: View {
         }
     }
 
-    /// 当前定位按钮（中间右侧）+ 其正下方的"清空路线"竖长条（仅"导航到这里"触发后显示）
-    private var locateOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                VStack(spacing: 8) {
-                    // 定位按钮：点击回中跟随，并清空路线规划回到主页（搜索框界面）
-                    Button {
-                        haptic()
-                        goHereName = nil
-                        goHereLat = 0
-                        goHereLon = 0
-                        model.clearPreview()
-                        model.clearRoute()
-                        model.centerOnUser()
-                    } label: {
-                        ZStack {
-                            Circle().fill(.white)
-                            Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
-                            Image(systemName: "scope")
-                                .font(.title3)
-                                .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                        }
-                        .frame(width: 44, height: 44)
-                        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                    }
-                }
-                .padding(.trailing, 18) // 与搜索胶囊内"搜索"按钮居中对齐
-                .offset(y: -57) // 相对中间位置向上提高 2cm
-            }
-            Spacer()
-        }
-    }
-
     /// 搜索预览"去这里" / 方案就绪后"开始导航"按钮（绿色，高德式）
     private var goHereBar: some View {
         Group {
@@ -709,61 +652,35 @@ struct ContentView: View {
             lineWidth: sel ? 2 : 0.8))
     }
 
-    /// 常用地点快捷按钮（家/公司并排，未设置时提示长按地图设置）
-    private var homeWorkOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                HStack(spacing: 8) {
-                    Button {
-                        haptic()
-                        if let h = model.homePlace {
-                            model.fetchRouteChoices(to: h.name, lat: h.lat, lon: h.lon)
-                        } else {
-                            model.status = "请长按地图选点后「设为家」"
-                        }
-                    } label: {
-                        Image(systemName: "house.fill")
-                            .font(.headline)
-                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                            .frame(width: 40, height: 40)
-                            .background(Color.white, in: Circle())
-                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                    }
-                    Button {
-                        haptic()
-                        if let w = model.workPlace {
-                            model.fetchRouteChoices(to: w.name, lat: w.lat, lon: w.lon)
-                        } else {
-                            model.status = "请长按地图选点后「设为公司」"
-                        }
-                    } label: {
-                        Image(systemName: "building.2.fill")
-                            .font(.headline)
-                            .foregroundStyle(.orange)
-                            .frame(width: 40, height: 40)
-                            .background(Color.white, in: Circle())
-                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                    }
-                }
-                .padding(.trailing, 18)
-                .offset(y: -132)
-                .opacity(model.navigating ? 0 : 1)
-            }
-            Spacer()
-        }
-    }
-
-    /// 地图缩放 + / - 按钮（右下角，高德式）
+    /// 地图缩放 + / - 按钮（右下角，高德式；定位按钮在放大按钮上方）
     private var zoomOverlay: some View {
         VStack {
             Spacer()
             HStack {
                 Spacer()
                 VStack(spacing: 6) {
+                    // 当前定位按钮（放大按钮上方，非导航中显示；点击清空路线规划回到主页）
+                    if !model.navigating {
+                        Button {
+                            haptic()
+                            goHereName = nil
+                            goHereLat = 0
+                            goHereLon = 0
+                            model.clearPreview()
+                            model.clearRoute()
+                            model.centerOnUser()
+                        } label: {
+                            ZStack {
+                                Circle().fill(.white)
+                                Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                                Image(systemName: "scope")
+                                    .font(.title3)
+                                    .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                            }
+                            .frame(width: 44, height: 44)
+                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                        }
+                    }
                     Button {
                         haptic()
                         model.zoomInTick += 1
@@ -1317,28 +1234,6 @@ struct PoiDetailSheet: View {
                     }
                 } label: {
                     Label("分享", systemImage: "square.and.arrow.up")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                }
-            }
-            HStack(spacing: 10) {
-                Button {
-                    model.setHome(poi)
-                    model.status = "已将「\(poi.name)」设为家"
-                } label: {
-                    Text("设为家")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                }
-                Button {
-                    model.setWork(poi)
-                    model.status = "已将「\(poi.name)」设为公司"
-                } label: {
-                    Text("设为公司")
                         .font(.footnote.bold())
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
