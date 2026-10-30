@@ -174,6 +174,7 @@ struct ContentView: View {
 
     @State private var pendingCoord: CLLocationCoordinate2D?
     @State private var showTypePicker = false
+    @State private var pickerItem: PhotosPickerItem?
 
     private func addPoiAtPending(type: PoiType) {
         guard let c = pendingCoord else { return }
