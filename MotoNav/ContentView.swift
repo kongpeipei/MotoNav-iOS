@@ -44,8 +44,10 @@ struct ContentView: View {
             if !model.navigating {
                 menuOverlay
             }
-            // 天气条（左上角，指南针下方，一行）
-            weatherOverlay
+            // 天气条（左上角，指南针下方，一行；导航中隐藏，高德导航顶部只留导航信息）
+            if !model.navigating {
+                weatherOverlay
+            }
             // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
             routeBarOverlay
             // 地图缩放 + / - 按钮
@@ -854,10 +856,12 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
-    /// 屏幕最上边的状态提示条（矩形，长度=屏宽不变，高度随行数自适应）
+    /// 屏幕最上边的状态提示条（矩形，长度=屏宽不变，高度随行数自适应；导航中隐藏避免与导航条重复）
     private var topOverlay: some View {
         VStack {
-            statusBar
+            if !model.navigating {
+                statusBar
+            }
             Spacer()
         }
     }
