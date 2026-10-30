@@ -11,6 +11,10 @@ struct ContentView: View {
     @State private var showSuggestions = false
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
+    /// 标记该点：待标记坐标 + 备注输入
+    @State private var pendingMarkCoord: CLLocationCoordinate2D?
+    @State private var showMarkNameAlert = false
+    @State private var markName = ""
     /// 点位详情气泡（点击点位弹出：距离/收藏/分享/导航）
     @State private var poiDetail: Poi?
     @State private var editPoi: Poi?
@@ -91,16 +95,29 @@ struct ContentView: View {
                 pendingCoord = coord
                 showTypePicker = true
             }
-            Button("导航到这里") {
-                let n = placeNameNear(coord)
-                model.planRoute(to: n, lat: coord.latitude, lon: coord.longitude)
+            Button("标记该点") {
+                pendingMarkCoord = coord
+                markName = ""
+                showMarkNameAlert = true
             }
             Button("取消", role: .cancel) {}
-        } message: { coord in
-            Text(String(format: "纬度 %.5f\n经度 %.5f", coord.latitude, coord.longitude))
+        }
+        .alert("标记该点", isPresented: $showMarkNameAlert) {
+            TextField("备注名称（如：前方有大坑 / 事故多发地）", text: $markName)
+            Button("保存标记") {
+                let name = markName.trimmingCharacters(in: .whitespacesAndNewlines)
+                let final = name.isEmpty ? "自定义标记点" : name
+                if let c = pendingMarkCoord {
+                    model.addPoi(type: .CUSTOM, name: final, lat: c.latitude, lon: c.longitude)
+                    model.status = "已标记：\(final)（长按图标可拖动微调位置）"
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("输入备注名称，保存后下次打开 App 依然保留；长按图标可拖动微调位置")
         }
         .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
-            ForEach(PoiType.allCases, id: \.self) { t in
+            ForEach(PoiType.allCases.filter(\.isCamera), id: \.self) { t in
                 Button(t.label) { addPoiAtPending(type: t) }
             }
             Button("取消", role: .cancel) {}

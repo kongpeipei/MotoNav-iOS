@@ -8,6 +8,8 @@ enum PoiType: String, Codable, CaseIterable {
     case RESTRICTION
     case LANE
     case SPEED
+    /// 自定义标记（长按地图「标记该点」添加，备注自定义名称）
+    case CUSTOM
 
     var label: String {
         switch self {
@@ -15,6 +17,7 @@ enum PoiType: String, Codable, CaseIterable {
         case .RESTRICTION: return "限行/禁摩"
         case .LANE: return "压线拍照"
         case .SPEED: return "超速拍照"
+        case .CUSTOM: return "自定义标记"
         }
     }
 
@@ -24,6 +27,7 @@ enum PoiType: String, Codable, CaseIterable {
         case .RESTRICTION: return "限行禁摩路段"
         case .LANE: return "压线违章拍照"
         case .SPEED: return "超速拍照"
+        case .CUSTOM: return "自定义标记"
         }
     }
 
@@ -33,8 +37,12 @@ enum PoiType: String, Codable, CaseIterable {
         case .RESTRICTION: return .systemOrange
         case .LANE: return .systemCyan
         case .SPEED: return .systemOrange.withAlphaComponent(0.85)
+        case .CUSTOM: return .systemPurple
         }
     }
+
+    /// 是否为电警拍照类型（自定义标记不是电警，不出现在「添加违法拍照」类型选择里）
+    var isCamera: Bool { self != .CUSTOM }
 }
 
 /// 单个提醒点位
