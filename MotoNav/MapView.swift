@@ -237,7 +237,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 if v == nil {
                     v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
                 }
-                v?.image = Self.makeUserIcon()
+                v?.image = MapViewRepresentable.makeUserIcon()
                 v?.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
