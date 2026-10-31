@@ -61,7 +61,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var hfPois: [String] = []
 
     /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
-    @Published var amapKey: String {
+    @Published var amapKey: String = "" {
         didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
     }
 
