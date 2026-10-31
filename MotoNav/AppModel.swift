@@ -1203,12 +1203,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(sig)\""
         let auth = Data(authOrigin.utf8).base64EncodedString()
 
-        // WebSocket 连接参数（自定义握手头）
+        // WebSocket 连接参数（自定义握手头：API 要求 (name, value) 元组数组）
         let wsOptions = NWProtocolWebSocket.Options()
         wsOptions.setAdditionalHeaders([
-            "Host": host,
-            "Date": date,
-            "Authorization": auth
+            ("Host", host),
+            ("Date", date),
+            ("Authorization", auth)
         ])
         wsOptions.autoReplyPing = true
         let params = NWParameters.tls
@@ -1233,28 +1233,31 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             speakSystem(text); return
         }
 
+        // 局部状态（非隔离变量，回调闭包捕获）
         var audio = Data()
         var done = false
         var failed = false
-        func finishAudio() {
-            guard !audio.isEmpty, !done else { return }
-            done = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self, mySeq == self.xfSeq else { return }
-                if !self.playXf(audio) {
-                    self.xfDiag = "讯飞音频解析失败，已降级系统语音"
-                    self.speakSystem(text)
+        let finishAudio = { (buf: Data) in
+            if !buf.isEmpty && !done {
+                done = true
+                Task { @MainActor [weak self] in
+                    guard let self = self, mySeq == self.xfSeq else { return }
+                    if !self.playXf(buf) {
+                        self.xfDiag = "讯飞音频解析失败，已降级系统语音"
+                        self.speakSystem(text)
+                    }
                 }
             }
         }
-        func fallback(_ diag: String) {
-            guard !failed else { return }
-            failed = true
-            conn.cancel()
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self, mySeq == self.xfSeq else { return }
-                self.xfDiag = diag
-                self.speakSystem(text)
+        let fallback = { (diag: String) in
+            if !failed {
+                failed = true
+                conn.cancel()
+                Task { @MainActor [weak self] in
+                    guard let self = self, mySeq == self.xfSeq else { return }
+                    self.xfDiag = diag
+                    self.speakSystem(text)
+                }
             }
         }
 
@@ -1267,16 +1270,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             case .failed:
                 fallback("讯飞连接失败（服务未开通或 Key 错误）")
             case .cancelled:
-                finishAudio()
+                finishAudio(audio)
             default:
                 break
             }
         }
 
         func receive() {
-            conn.receiveMessage { data, _, isComplete, error in
+            conn.receiveMessage { data, context, isComplete, error in
                 if let d = data {
-                    let op = (d.metadata as? NWProtocolWebSocket.Metadata)?.opcode
+                    let op = (context?.metadata as? NWProtocolWebSocket.Metadata)?.opcode
                     if op == .binary {
                         audio.append(d)
                     } else if op == .text {
@@ -1292,12 +1295,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                 return
                             }
                             let st = (obj["data"] as? [String: Any])?["status"] as? Int ?? 0
-                            if st == 2 { finishAudio(); conn.cancel() }
+                            if st == 2 { finishAudio(audio); conn.cancel() }
                         }
                     }
                 }
                 if error != nil || isComplete || done {
-                    finishAudio()
+                    finishAudio(audio)
                 } else {
                     receive()
                 }
