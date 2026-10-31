@@ -890,6 +890,17 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
+    /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
+    private var searchBar: some View {
+        VStack(spacing: 4) {
+            searchInputRow
+            if showSuggestions && !suggestions.isEmpty {
+                suggestionsList
+            }
+        }
+        .background(.black.opacity(0.18))
+    }
+
     /// 搜索输入行：高德样式通栏圆角胶囊（放大镜 + 输入 + ✕ + 搜索按钮为一体）
     private var searchInputRow: some View {
         HStack(spacing: 6) {
