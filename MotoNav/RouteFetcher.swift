@@ -178,15 +178,16 @@ enum RouteFetcher {
                     var req = URLRequest(url: url)
                     req.timeoutInterval = 12
                     for _ in 0..<2 {
-                        if let (data, _) = try? await URLSession.shared.data(for: req),
-                           let choice = parseAmap(data, label: label) {
-                            return (label, choice)
-                        }
-                        // v1.53 诊断：高德业务错误（Key 无效/配额/IP 白名单等）
-                        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let info = root["info"] as? String {
-                            let code = root["infocode"] as? String ?? ""
-                            RouteDiagnostics.lastAmapError = "高德\(code): \(info)"
+                        if let (data, _) = try? await URLSession.shared.data(for: req) {
+                            if let choice = parseAmap(data, label: label) {
+                                return (label, choice)
+                            }
+                            // v1.53 诊断：高德业务错误（Key 无效/配额/IP 白名单等）
+                            if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let info = root["info"] as? String {
+                                let code = root["infocode"] as? String ?? ""
+                                RouteDiagnostics.lastAmapError = "高德\(code): \(info)"
+                            }
                         }
                     }
                     return (label, nil)
