@@ -315,12 +315,21 @@ struct ContentView: View {
                 if ok {
                     mapLoadFailed = false
                 } else {
+                    // v1.70：首次失败自动重试一次（弱网/瞬时抖动），二次失败才亮诊断条
+                    if !mapRetried {
+                        mapRetried = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            reloadTick += 1
+                            model.status = "地图加载异常，自动重试…"
+                        }
+                        return
+                    }
                     mapLoadFailed = true
                     let e = err.lowercased()
                     if e.contains("invalid") || e.contains("socode") || e.contains("key") {
-                        mapLoadError = "高德 Key 未生效：请在 lbs.amap.com 控制台确认「iOS 地图 SDK」已开通且安全码为 com.motonav.app.ios（可先退出重进）"
-                    } else if e.contains("network") || e.contains("timed") {
-                        mapLoadError = "网络异常：请检查网络后点重试"
+                        mapLoadError = "高德 Key 未生效：请到 lbs.amap.com 控制台确认「iOS 地图 SDK」服务已开通、已完成实名认证、安全码绑定 com.motonav.app.ios"
+                    } else if e.contains("network") || e.contains("timed") || e.contains("timeout") {
+                        mapLoadError = "地图加载超时/网络异常：请检查网络后点重试"
                     } else {
                         mapLoadError = err
                     }
@@ -674,7 +683,24 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.69")
+                        Text("v1.70")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                    // v1.70：地图诊断（黑屏排障）——显示高德 Key 状态与最近一次加载结果
+                    HStack {
+                        Label("地图诊断", systemImage: mapLoadFailed ? "exclamationmark.triangle" : "checkmark.circle")
+                        Spacer()
+                        Text(mapLoadFailed ? mapLoadError : "地图正常 / 加载中")
+                            .foregroundStyle(mapLoadFailed ? .red : .secondary)
+                            .font(.caption)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Label("高德Key", systemImage: "key.fill")
+                        Spacer()
+                        Text("6fd752…0066")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }

@@ -58,8 +58,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         let map = MAMapView(frame: .zero)
         // 高德 SDK 正式 Key（AppDelegate 已设，此处幂等兜底）
         AMapServices.shared().apiKey = "6fd752bc12caa258f066729617db0066"
+        // v1.70：浅灰兜底背景——瓦片/渲染层未就绪时显示浅灰而非纯黑，便于区分"Key/服务问题"
+        map.backgroundColor = UIColor(white: 0.93, alpha: 1)
         map.showsCompass = false // 使用自绘指南针（左上角）
         map.delegate = context.coordinator
+        // v1.70：加载 watchdog——高德失败回调可能静默不触发，6 秒未完成视为加载卡住
+        context.coordinator.startLoadWatchdog()
         // 当前定位箭头标注（高德 SDK 不启用内置定位，避免双定位；用我们自己的 CLLocationManager 数据）
         let userAnn = UserLocationAnnotation(coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0))
         context.coordinator.userAnnotation = userAnn
@@ -496,12 +500,31 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         /// v1.69 地图加载成功（高德底图渲染就绪）
         func mapViewDidFinishLoadingMap(_ mapView: MAMapView) {
+            cancelLoadWatchdog()
             onMapLoad?(true, "")
         }
 
         /// v1.69 地图加载失败（Key 未生效/网络异常/服务未开通），给出诊断
         func mapViewDidFailLoadingMap(_ mapView: MAMapView, withError error: Error) {
+            cancelLoadWatchdog()
             onMapLoad?(false, error.localizedDescription)
+        }
+
+        // MARK: - v1.70 加载 watchdog（高德失败回调可能静默不触发）
+
+        private var loadWatchdog: Timer?
+
+        func startLoadWatchdog() {
+            cancelLoadWatchdog()
+            loadWatchdog = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
+                self?.loadWatchdog = nil
+                self?.onMapLoad?(false, "TIMEOUT: 地图 6 秒未加载完成")
+            }
+        }
+
+        func cancelLoadWatchdog() {
+            loadWatchdog?.invalidate()
+            loadWatchdog = nil
         }
 
         func mapView(_ mapView: MAMapView, didSelect view: MAAnnotationView) {
