@@ -45,24 +45,32 @@ struct ContentView: View {
     @State private var showVoiceSettings = false
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
     @State private var minimalMap = false
+    /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
+    @State private var uiHidden = false
 
     var body: some View {
         ZStack {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
                 mapLayer
-                // 左上角指南针（手机朝向即指针指向）
-                compassOverlay
-                // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
-                if !model.navigating {
-                    weatherOverlay
+                // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
+                if !uiHidden {
+                    // 左上角指南针（手机朝向即指针指向）
+                    compassOverlay
+                    // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
+                    if !model.navigating {
+                        weatherOverlay
+                    }
+                    // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
+                    routeBarOverlay
+                    // 地图缩放 + / - 按钮
+                    zoomOverlay
+                    // 右上角 GPS 信号按钮
+                    layerTrafficButtons
+                } else if !model.navigating {
+                    // 沉浸模式：仅保留右下角当前定位按钮
+                    locateButtonOnly
                 }
-                // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-                routeBarOverlay
-                // 地图缩放 + / - 按钮
-                zoomOverlay
-                // 图层/路况文字按钮（右上角）
-                layerTrafficButtons
                 // 导航中悬浮退出按钮
                 exitNavOverlay
                 // v1.63 导航态左侧竖排：刷新 / 极简（高德导航特征）
@@ -71,12 +79,15 @@ struct ContentView: View {
                 }
                 // 高德式顶部大数字条（剩余里程/时间，导航中显示）
                 navTopBar
-                bottomOverlay
+                // v1.66：沉浸模式下底部内容（搜索框/规划卡/导航卡）隐藏；导航中导航卡不受影响
+                if !uiHidden || model.navigating {
+                    bottomOverlay
+                }
             } else {
                 settingsPage
             }
-            // 底部选项卡（导航中隐藏，切换界面常驻下方）
-            if !model.navigating {
+            // 底部选项卡（导航中隐藏；沉浸模式 uiHidden 时也隐藏，切换界面常驻下方）
+            if !model.navigating && !uiHidden {
                 bottomTabBar
             }
         }
@@ -179,6 +190,7 @@ struct ContentView: View {
         // 导航中保持屏幕常亮（骑行看导航不被锁屏；退出导航恢复）
         .onChange(of: model.navigating) { nav in
             UIApplication.shared.isIdleTimerDisabled = nav
+            if nav { uiHidden = false } // v1.66：进入导航自动退出沉浸模式，恢复导航 UI
         }
         // 行程总结（到达/退出导航时弹出，高德式行程卡）
         .alert("本次行程", isPresented: Binding(
@@ -255,13 +267,9 @@ struct ContentView: View {
                 model.clearCategory()
             },
             onMapTap: { coord in
-                // 轻点地图空白：该位置下方显示"导航到这里"（目的地名用附近地标，避免"地图选点"）
-                let n = placeNameNear(coord)
-                goHereLabel = "导航去此处"
-                goHereName = n
-                goHereLat = coord.latitude
-                goHereLon = coord.longitude
-                model.setPreview(n, lat: coord.latitude, lon: coord.longitude)
+                // v1.66：轻点地图 = 动态隐藏/显示全部 UI（只留当前定位按钮），高德同款沉浸式；导航中不触发
+                guard !model.navigating else { return }
+                withAnimation(.easeOut(duration: 0.2)) { uiHidden.toggle() }
             },
             minimal: minimalMap
         )
@@ -308,6 +316,38 @@ struct ContentView: View {
         EmptyView()
     }
 
+    /// v1.66 沉浸模式：仅右下角保留当前定位按钮（点击回到当前位置/清空路线）
+    private var locateButtonOnly: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                Button {
+                    haptic()
+                    goHereName = nil
+                    goHereLat = 0
+                    goHereLon = 0
+                    model.clearPreview()
+                    model.clearRoute()
+                    model.centerOnUser()
+                } label: {
+                    ZStack {
+                        Circle().fill(.white)
+                        Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1)
+                        Image(systemName: "scope")
+                            .font(.title3)
+                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    }
+                    .frame(width: 44, height: 44)
+                    .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                }
+                .padding(.trailing, 14)
+                .padding(.bottom, 24)
+            }
+            Spacer()
+        }
+    }
+
     /// 右上角竖排文字按钮：GPS信号 + 图层（高德瓦片）+ 路况（实时路况）
     private var layerTrafficButtons: some View {
         VStack {
@@ -343,7 +383,7 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.trailing, 12)
-                .padding(.top, 40)
+                .padding(.top, 190) // v1.66：移到顶部综合导航条下方，不再被速度卡遮挡
             }
             Spacer()
         }
@@ -545,7 +585,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.65")
+                        Text("v1.66")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1149,7 +1189,7 @@ struct ContentView: View {
                 }
                 .frame(width: 56, height: 56)
                 .padding(.leading, 12)
-                .padding(.top, 40)
+                .padding(.top, 190) // v1.66：移到顶部综合导航条下方，不再被速度卡遮挡
                 Spacer()
             }
             Spacer()

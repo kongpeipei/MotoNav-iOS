@@ -553,13 +553,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
                 if poly === self.underPolyline {
-                    // 白色描边底层（细，路线更贴合道路）
-                    r.strokeColor = .white
-                    r.lineWidth = 7
+                    // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
+                    r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
+                    r.lineWidth = 9
                 } else if poly === self.mainPolyline {
-                    // 推荐路线：草绿色（高德推荐色）
-                    r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
-                    r.lineWidth = 4
+                    // 推荐路线：浅绿内芯（高德绿路线双线效果）
+                    r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
+                    r.lineWidth = 5
                 } else if self.alternatePolylines.contains(where: { $0 === poly }) {
                     // 备选路线：浅绿色虚线
                     r.strokeColor = UIColor(red: 0.60, green: 0.85, blue: 0.62, alpha: 0.95)
