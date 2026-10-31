@@ -1157,7 +1157,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let calibratedKey = "calibratedV146"
             UserDefaults.standard.set(true, forKey: calibratedKey)
             var updated = 0
-            for p in pois where p.isCamera && p.id < 1000 {
+            for p in pois where p.type.isCamera && p.id < 1000 {
                 let d = hypot(p.lat - cur.latitude, p.lon - cur.longitude) * 111000
                 guard d < 3000 else { continue }
                 if UserDefaults.standard.string(forKey: "calib_v146_\(p.id)") != nil { continue }
