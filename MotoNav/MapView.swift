@@ -296,13 +296,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setCenter(CLLocationCoordinate2D(latitude: g.0, longitude: g.1), animated: true)
             }
         }
-        // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
+        // v1.72：2D SDK 无俯仰（骑行导航 2D 顶视即高德骑行风格）；导航不倾斜
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
             context.coordinator.lastPitchState = isNav
-            context.coordinator.setRegionProgrammatically {
-                map.cameraDegree = isNav ? 45 : 0
-            }
         }
         // 缩放按钮（+/-）：按地图中心缩放
         if zoomInTick != context.coordinator.lastZoomInTick {
