@@ -44,6 +44,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
     /// 轻点地图空白处选点（显示"导航到这里"）
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+    /// v1.63 极简模式：隐藏兴趣点/地名/类别标注（高德导航"极简"）
+    let minimal: Bool
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -194,8 +196,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             .compactMap { $0 as? PlaceAnnotation }
             .filter { !wantPlaces.contains($0.place.id) }
             .forEach { map.removeAnnotation($0) }
-        for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
-            map.addAnnotation(PlaceAnnotation(place: pl))
+        if !minimal {
+            for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
+                map.addAnnotation(PlaceAnnotation(place: pl))
+            }
         }
         // 类别搜索结果（学校/医院/加油站）
         let wantCats = Set(categoryResults.map(\.id))
@@ -203,8 +207,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             .compactMap { $0 as? CategoryAnnotation }
             .filter { !wantCats.contains($0.result.id) }
             .forEach { map.removeAnnotation($0) }
-        for r in categoryResults where !map.annotations.contains(where: { ($0 as? CategoryAnnotation)?.result.id == r.id }) {
-            map.addAnnotation(CategoryAnnotation(result: r))
+        if !minimal {
+            for r in categoryResults where !map.annotations.contains(where: { ($0 as? CategoryAnnotation)?.result.id == r.id }) {
+                map.addAnnotation(CategoryAnnotation(result: r))
+            }
         }
         map.removeOverlays(map.overlays)
         context.coordinator.underPolyline = nil
@@ -270,10 +276,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastPitchState = isNav
             map.camera.pitch = isNav ? 55 : 0
         }
-        // 导航中强制深色底图（高德夜间导航效果：深色底图 + 蓝色箭头更醒目）；非导航恢复浅色
+        // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随系统深浅
         if isNav != context.coordinator.lastDarkState {
             context.coordinator.lastDarkState = isNav
-            map.overrideUserInterfaceStyle = isNav ? .dark : .light
+            map.overrideUserInterfaceStyle = isNav ? .dark : nil
         }
         // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
         if zoomInTick != context.coordinator.lastZoomInTick {
@@ -654,52 +660,32 @@ extension MKPolyline {
 }
 
 extension MapViewRepresentable {
-    /// 当前位置图标：高德同款蓝色实心箭头（宽胖箭头 + 圆尾，纯蓝渐变填充，无中心点；
-    /// 定位图标：简洁朝向箭头样式（中心蓝点 + 空心箭头）
+    /// v1.63 精简定位图标：高德同款实心蓝色指向箭头（无光晕/无中心点/无装饰，保留指向功能）
     static func makeUserIcon() -> UIImage {
-        let size: CGFloat = 48
+        let size: CGFloat = 40
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             let c = ctx.cgContext
             let cx = size / 2
-            let cy: CGFloat = 24
-            
-            // 外圈光晕效果
-            let glowPath = UIBezierPath(arcCenter: CGPoint(x: cx, y: cy), radius: 16, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-            c.saveGState()
-            c.setFillColor(UIColor.systemBlue.withAlphaComponent(0.15).cgColor)
-            glowPath.fill()
-            c.restoreGState()
-            
-            // 空心箭头（细边）
+            // 实心宽胖箭头：尖端朝上（=手机/行进朝向），圆润底部
             let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: cx, y: cy - 20))                        // 尖端
-            arrow.addLine(to: CGPoint(x: cx - 10, y: cy + 8))                // 左腰
-            arrow.addLine(to: CGPoint(x: cx, y: cy + 3))                     // 内凹点
-            arrow.addLine(to: CGPoint(x: cx + 10, y: cy + 8))               // 右腰
+            arrow.move(to: CGPoint(x: cx, y: 3))                          // 尖端
+            arrow.addLine(to: CGPoint(x: cx - 11, y: 29))                 // 左腰
+            arrow.addQuadCurve(to: CGPoint(x: cx + 11, y: 29),
+                               controlPoint: CGPoint(x: cx, y: 21))       // 圆润箭尾
             arrow.close()
-            
-            // 白色描边箭头
-            c.setStrokeColor(UIColor.white.cgColor)
-            c.setLineWidth(2.5)
+            // 白色细描边（任何底图上清晰）
+            c.saveGState()
+            c.setLineWidth(2)
             c.setLineJoin(.round)
+            UIColor.white.setStroke()
             c.addPath(arrow.cgPath)
             c.strokePath()
-            
-            // 中心蓝点
-            let dot = UIBezierPath(arcCenter: CGPoint(x: cx, y: cy), radius: 5, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-            c.saveGState()
-            c.setShadow(offset: CGSize(width: 0, height: 2), blur: 3,
-                        color: UIColor.black.withAlphaComponent(0.4).cgColor)
-            UIColor.systemBlue.setFill()
-            dot.fill()
+            // 实心蓝色填充（高德蓝）
+            c.setFillColor(UIColor.systemBlue.cgColor)
+            c.addPath(arrow.cgPath)
+            c.fillPath()
             c.restoreGState()
-            
-            // 中心点白边
-            c.setStrokeColor(UIColor.white.cgColor)
-            c.setLineWidth(1.5)
-            c.addPath(dot.cgPath)
-            c.strokePath()
         }
     }
 }

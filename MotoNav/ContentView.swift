@@ -45,6 +45,8 @@ struct ContentView: View {
     @State private var showSettingsSheet = false
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
+    /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
+    @State private var minimalMap = false
 
     var body: some View {
         ZStack {
@@ -63,6 +65,10 @@ struct ContentView: View {
             layerTrafficButtons
             // 导航中悬浮退出按钮
             exitNavOverlay
+            // v1.63 导航态左侧竖排：刷新 / 极简（高德导航特征）
+            if model.navigating {
+                navSideOverlay
+            }
             // 高德式顶部大数字条（剩余里程/时间，导航中显示）
             navTopBar
             bottomOverlay
@@ -185,6 +191,7 @@ struct ContentView: View {
                 Text("目的地：\(s.destName)\n"
                     + "里程：\(String(format: "%.1f", Double(s.distanceM) / 1000.0)) 公里\n"
                     + "用时：\(s.durationS / 60) 分钟 \(s.durationS % 60) 秒\n"
+                    + "平均速度：\(String(format: "%.1f", s.avgSpeedKmh)) 公里/小时\n"
                     + "沿途抓拍点位：\(s.snapCount) 处")
             }
         }
@@ -255,7 +262,8 @@ struct ContentView: View {
                 goHereLat = coord.latitude
                 goHereLon = coord.longitude
                 model.setPreview(n, lat: coord.latitude, lon: coord.longitude)
-            }
+            },
+            minimal: minimalMap
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -426,6 +434,80 @@ struct ContentView: View {
                 } header: {
                     Text("语音播报")
                 }
+                // v1.63：常用地点分组（家/公司/收藏），主界面不再放快捷按钮
+                Section {
+                    Button {
+                        if let h = model.homePlace {
+                            goHereLabel = "导航去此处"
+                            goHereName = h.name
+                            goHereLat = h.lat
+                            goHereLon = h.lon
+                            showSettingsSheet = false
+                            model.planRoute(to: h.name, lat: h.lat, lon: h.lon)
+                        } else {
+                            model.status = "家未设置：长按地图选点后设为常用"
+                        }
+                    } label: {
+                        HStack {
+                            Label("家", systemImage: "house.fill")
+                            Spacer()
+                            Text(model.homePlace?.name ?? "未设置")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    Button {
+                        if let w = model.workPlace {
+                            goHereLabel = "导航去此处"
+                            goHereName = w.name
+                            goHereLat = w.lat
+                            goHereLon = w.lon
+                            showSettingsSheet = false
+                            model.planRoute(to: w.name, lat: w.lat, lon: w.lon)
+                        } else {
+                            model.status = "公司未设置：长按地图选点后设为常用"
+                        }
+                    } label: {
+                        HStack {
+                            Label("公司", systemImage: "briefcase.fill")
+                            Spacer()
+                            Text(model.workPlace?.name ?? "未设置")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                } header: {
+                    Text("常用地点")
+                }
+                Section {
+                    let favPois = model.pois.filter { model.isFavorite($0) }
+                    if favPois.isEmpty {
+                        Text("暂无收藏点位（点位详情里点⭐收藏）")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    } else {
+                        ForEach(favPois.prefix(8)) { p in
+                            Button {
+                                goHereLabel = "导航去此处"
+                                goHereName = p.name
+                                goHereLat = p.lat
+                                goHereLon = p.lon
+                                showSettingsSheet = false
+                                model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
+                            } label: {
+                                HStack {
+                                    Label(p.name, systemImage: "star.fill")
+                                    Spacer()
+                                    Text(p.type.label)
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("收藏")
+                }
                 Section("搜索设置") {
                     Button {
                         amapKeyInput = model.amapKey
@@ -444,7 +526,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.62")
+                        Text("v1.63")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -513,7 +595,7 @@ struct ContentView: View {
                 snapAlertCard
             }
         }
-        .padding(.bottom, 80) // 给底部选项卡留空间
+        .padding(.bottom, model.navigating ? 16 : 80) // v1.63：导航中无底部选项卡，卡片贴近底部（高德式）
     }
 
     /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 实时速度
@@ -977,6 +1059,55 @@ struct ContentView: View {
         g.impactOccurred()
     }
 
+    /// v1.63 导航态左侧竖排按钮（高德式）：刷新（重新规划路线）/ 极简（隐藏兴趣点）
+    private var navSideOverlay: some View {
+        VStack {
+            HStack {
+                VStack(spacing: 10) {
+                    Button {
+                        haptic()
+                        model.refreshRoute()
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.body.bold())
+                            Text("刷新")
+                                .font(.caption2.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        haptic()
+                        minimalMap.toggle()
+                        model.status = minimalMap ? "极简模式：已隐藏兴趣点标注" : "极简模式：已关闭"
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: "eye.slash")
+                                .font(.body.bold())
+                            Text("极简")
+                                .font(.caption2.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(minimalMap ? Color.blue : Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.leading, 10)
+                .padding(.top, 110)
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+
     /// 分享点位（motonav:// 深链，供好友点击直达）
     private func sharePoi(_ p: Poi) {
         let link = "motonav://\(p.name)@\(p.lat),\(p.lon)"
@@ -1122,7 +1253,8 @@ struct ContentView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
         .frame(height: 52)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 26))
+        // v1.63：跟随系统深浅色（浅色白底/深色深底，夜间骑行不刺眼）
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26))
         .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
         .padding(.horizontal)
         .padding(.vertical, 6)

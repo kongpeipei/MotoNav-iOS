@@ -127,6 +127,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let distanceM: Int
         let durationS: Int
         let snapCount: Int
+        let avgSpeedKmh: Double
     }
     @Published var tripSummary: TripSummary?
 
@@ -784,6 +785,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard !monitoring else { return }
         lm.startUpdatingLocation()
         if CLLocationManager.headingAvailable() {
+            // v1.63：摩托导航手机通常平放/斜放在车把支架，
+            // 默认竖屏朝向计算的 trueHeading 在平放时会偏/失效 → 指定 faceUp 让箭头真正跟随手机朝向
+            lm.headingOrientation = .faceUp
             lm.startUpdatingHeading()
         }
         monitoring = true
@@ -1464,6 +1468,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// v1.63 导航中手动刷新：按当前终点重新规划并保持导航
+    func refreshRoute() {
+        guard destLat != 0 || destLon != 0 else {
+            status = "暂无路线可刷新"
+            return
+        }
+        status = "正在刷新路线…"
+        let wasNavigating = navigating
+        fetchRouteChoices(to: destName, lat: destLat, lon: destLon)
+        if wasNavigating {
+            speak("路线已重新规划", priority: 2)
+        }
+    }
+
     /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）
     func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
         let n = name ?? destName
@@ -1575,7 +1593,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             destName: destName,
             distanceM: routeDistanceM,
             durationS: dur,
-            snapCount: routePois.count)
+            snapCount: routePois.count,
+            avgSpeedKmh: dur > 0 ? (Double(routeDistanceM) / 1000.0) / (Double(dur) / 3600.0) : 0)
         navStart = nil
     }
 
