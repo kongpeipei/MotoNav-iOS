@@ -104,6 +104,38 @@ enum RouteFetcher {
         return nil
     }
 
+    /// v1.65 步行连接段：当前位置 → 起点吸附出入口（OSRM foot 步行路线，GPS 点在停车区/小区内时连到最近道路）；
+    /// 失败返回空数组，调用方回退直线段
+    static func walkPoints(
+        from: CLLocationCoordinate2D,
+        to: CLLocationCoordinate2D
+    ) async -> [CLLocationCoordinate2D] {
+        let dist = CLLocation(latitude: from.latitude, longitude: from.longitude)
+            .distance(from: CLLocation(latitude: to.latitude, longitude: to.longitude))
+        if dist < 8 { return [] } // 起点已在路上，无需步行段
+        let coord = "\(from.longitude),\(from.latitude);\(to.longitude),\(to.latitude)"
+        guard let url = URL(string:
+            "https://router.project-osrm.org/route/v1/foot/\(coord)"
+            + "?overview=full&geometries=geojson"
+        ) else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 10
+        req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
+        for _ in 0..<2 {
+            if let (data, _) = try? await URLSession.shared.data(for: req),
+               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let routes = root["routes"] as? [[String: Any]],
+               let r0 = routes.first,
+               let geom = r0["geometry"] as? [String: Any],
+               let coords = geom["coordinates"] as? [[Double]] {
+                return coords.compactMap { c in
+                    c.count >= 2 ? CLLocationCoordinate2D(latitude: c[1], longitude: c[0]) : nil
+                }
+            }
+        }
+        return []
+    }
+
     /// 获取多条路线方案（alternatives=3），按用时升序 + 分配优点标签
     /// v1.26：增加请求超时与一次重试，公共实例不稳定时降低"直线降级"概率
     /// v1.57：优先使用高德路线规划API，失败回退OSRM

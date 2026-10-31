@@ -288,6 +288,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
     }
 
+    /// v1.65：用当前位置直接设置家/公司（我的页"未设置"时一键设置）
+    func setHomeCoord(_ coord: CLLocationCoordinate2D, name: String = "家") {
+        homePlace = SavedPlace(name: name, lat: coord.latitude, lon: coord.longitude)
+        let ud = UserDefaults.standard
+        if let d = try? JSONEncoder().encode(homePlace) { ud.set(d, forKey: homeKey) }
+    }
+
+    func setWorkCoord(_ coord: CLLocationCoordinate2D, name: String = "公司") {
+        workPlace = SavedPlace(name: name, lat: coord.latitude, lon: coord.longitude)
+        let ud = UserDefaults.standard
+        if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
+    }
+
     // MARK: - 网络查询工具（v1.26：统一超时 + 备用镜像 + 动态搜索范围）
 
     /// 生成动态 bbox 字符串 "minLat,minLon,maxLat,maxLon"。
@@ -1382,8 +1395,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 路线服务不可用时的兜底：画直线示意 + 明确提示（可能横穿禁行区） + 3秒后自动重试
     private func fallbackStraightLine(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D,
-                                      name: String, lat: Double, lon: Double) {
-        route = [from, to]
+                                      name: String, lat: Double, lon: Double, walkLeg: [CLLocationCoordinate2D] = []) {
+        route = walkLeg.isEmpty ? [from, to] : walkLeg + [to]
         routePois = nearbyPoisOnRoute(route)
         routeTurns = []
         routeDistanceM = 0
@@ -1445,19 +1458,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let from = start
         let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            // 起点=当前定位点（蓝箭头，不吸附，避免起点偏移）；终点吸附到最近可通行出入口（失败回退原坐标）
+            // v1.65：起点也吸附到最近车辆出入口，并用步行路线连接当前位置→出入口（GPS在小区/停车场时路线不再悬空）
+            async let sSnap = RouteFetcher.nearest(lat: from.latitude, lon: from.longitude)
             async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
+            let s = await sSnap
             let e = await eSnap
-            let from2 = from
+            let walkLeg = await RouteFetcher.walkPoints(from: from, to: s ?? from)
+            let from2 = s ?? from
             let end2 = e ?? rawEnd
             let choices = await RouteFetcher.fetchAll(from: from2, to: end2, amapKey: amapKey)
             if choices.isEmpty {
-                fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
+                fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon, walkLeg: walkLeg)
             } else {
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
                 let list = choices.map { c -> RouteChoice in
                     let n = nearbyPoisOnRoute(c.points).count
-                    return RouteChoice(points: c.points, distanceM: c.distanceM,
+                    return RouteChoice(points: walkLeg + c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
                                        label: c.label, poiCount: n)
                 }

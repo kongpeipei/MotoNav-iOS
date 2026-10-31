@@ -367,11 +367,11 @@ struct ContentView: View {
         return Color.red
     }
 
-    /// v1.64 底部选项卡：导航 / 我的（白底、缩小胶囊、选中变蓝；切换时选项卡常驻底部）
+    /// v1.65 底部选项卡：导航 / 我的（白底、缩小、选中蓝色铺满整个按钮）
     private var bottomTabBar: some View {
         VStack {
             Spacer()
-            HStack(spacing: 0) {
+            HStack(spacing: 6) {
                 Button {
                     selectedTab = 0
                     haptic()
@@ -383,10 +383,10 @@ struct ContentView: View {
                             .font(.caption)
                             .fontWeight(selectedTab == 0 ? .semibold : .regular)
                     }
-                    .foregroundStyle(selectedTab == 0 ? .blue : .secondary)
+                    .foregroundStyle(selectedTab == 0 ? .white : .secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(selectedTab == 0 ? Color.blue.opacity(0.12) : .clear, in: Capsule())
+                    .background(selectedTab == 0 ? Color.blue : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
 
@@ -401,14 +401,14 @@ struct ContentView: View {
                             .font(.caption)
                             .fontWeight(selectedTab == 1 ? .semibold : .regular)
                     }
-                    .foregroundStyle(selectedTab == 1 ? .blue : .secondary)
+                    .foregroundStyle(selectedTab == 1 ? .white : .secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(selectedTab == 1 ? Color.blue.opacity(0.12) : .clear, in: Capsule())
+                    .background(selectedTab == 1 ? Color.blue : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(height: 54)
             .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 22))
@@ -449,14 +449,18 @@ struct ContentView: View {
                             goHereLon = h.lon
                             selectedTab = 0
                             model.planRoute(to: h.name, lat: h.lat, lon: h.lon)
+                        } else if let loc = model.currentLocation {
+                            // v1.65：未设置时用当前位置一键设置
+                            model.setHomeCoord(loc)
+                            model.status = "已用当前位置设为家"
                         } else {
-                            model.status = "家未设置：长按地图选点后设为常用"
+                            model.status = "等待定位后再设置家"
                         }
                     } label: {
                         HStack {
                             Label("家", systemImage: "house.fill")
                             Spacer()
-                            Text(model.homePlace?.name ?? "未设置")
+                            Text(model.homePlace?.name ?? "未设置（点此用当前位置设置）")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         }
@@ -469,14 +473,17 @@ struct ContentView: View {
                             goHereLon = w.lon
                             selectedTab = 0
                             model.planRoute(to: w.name, lat: w.lat, lon: w.lon)
+                        } else if let loc = model.currentLocation {
+                            model.setWorkCoord(loc)
+                            model.status = "已用当前位置设为公司"
                         } else {
-                            model.status = "公司未设置：长按地图选点后设为常用"
+                            model.status = "等待定位后再设置公司"
                         }
                     } label: {
                         HStack {
                             Label("公司", systemImage: "briefcase.fill")
                             Spacer()
-                            Text(model.workPlace?.name ?? "未设置")
+                            Text(model.workPlace?.name ?? "未设置（点此用当前位置设置）")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         }
@@ -509,6 +516,13 @@ struct ContentView: View {
                                 }
                             }
                         }
+                        .onDelete { idxs in
+                            for i in idxs where i < favPois.count {
+                                let p = favPois[i]
+                                model.toggleFavorite(p)
+                            }
+                            model.status = "已取消收藏"
+                        }
                     }
                 } header: {
                     Text("收藏")
@@ -531,7 +545,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.64")
+                        Text("v1.65")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -599,73 +613,15 @@ struct ContentView: View {
                 // 搜索框始终显示（底部选项卡上方）
                 searchBar
             } else {
+                // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
                 turnAheadCard
-                navInfoCard
                 snapAlertCard
             }
         }
-        .padding(.bottom, model.navigating ? 16 : 80) // v1.63：导航中无底部选项卡，卡片贴近底部（高德式）
+        .padding(.bottom, model.navigating ? 88 : 80) // v1.65：导航中给底部居中"退出导航"留空间
     }
 
-    /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 实时速度
-    /// （剩余里程/时间已移到顶部大数字条 navTopBar）
-    private var navInfoCard: some View {
-        Group {
-            if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
-                HStack(spacing: 12) {
-                    // 左：下一转向（大图标 + 大字路名，高德导航主视觉）
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let t = ns.nextTurn {
-                            HStack(spacing: 8) {
-                                Image(systemName: navTurnIcon(t.modifier))
-                                    .font(.system(size: 34, weight: .bold))
-                                    .foregroundStyle(.white)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("前方\(navDist(ns.distToTurnM))\(navTurnText(t))")
-                                        .font(.title3.bold())
-                                        .foregroundStyle(.white)
-                                    if !t.roadName.isEmpty {
-                                        Text(t.roadName)
-                                            .font(.subheadline.bold())
-                                            .foregroundStyle(.white.opacity(0.92))
-                                    }
-                                }
-                            }
-                            // 车道指引（高德导航侧边车道箭头）
-                            if !t.lanes.isEmpty {
-                                HStack(spacing: 3) {
-                                    ForEach(t.lanes, id: \.self) { lane in
-                                        Image(systemName: navLaneIcon(lane))
-                                            .font(.footnote.bold())
-                                            .foregroundStyle(.white.opacity(0.9))
-                                    }
-                                }
-                            }
-                        } else {
-                            Text("沿当前道路直行")
-                                .font(.title3.bold())
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    Spacer()
-                    // 右：实时速度
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text("\(Int(ns.speedKph))")
-                            .font(.system(size: 34, weight: .heavy))
-                            .foregroundStyle(.white)
-                        Text("km/h")
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal)
-                .padding(.bottom, 4)
-            }
-        }
-    }
+    /// v1.65：原底部转向大卡 navInfoCard 已合并进顶部 navTopBar（道路指示/速度/距离时间三合一）
 
     /// 高德式路口放大示意图：接近下一转向（<200米）时显示交叉路口 + 转弯箭头 + 路名
     private var turnAheadCard: some View {
@@ -993,23 +949,41 @@ struct ContentView: View {
     }
 
     /// 高德式顶部导航条：剩余里程 + 时间 + 下一转向预告（<500米显示，高德顶部主条样式）
+    /// v1.65 顶部导航综合条（高德式合并布局，自上而下不重叠）：
+    /// 第一行：剩余距离 + 剩余时间 + 实时速度；第二行：下一转向指示（图标+距离+路名+车道）
     private var navTopBar: some View {
         VStack {
             if model.navigating, let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
-                VStack(spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
-                            .font(.system(size: 34, weight: .heavy))
-                            .foregroundStyle(.white)
-                        Text("公里")
-                            .font(.caption.bold())
-                            .foregroundStyle(.white.opacity(0.85))
+                VStack(spacing: 8) {
+                    // 第一行：剩余距离 / 剩余时间 / 速度
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
+                                .font(.system(size: 34, weight: .heavy))
+                                .foregroundStyle(.white)
+                            Text("剩余公里")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("\(max(ns.remainS, 0) / 60) 分钟")
+                                .font(.system(size: 24, weight: .heavy))
+                                .foregroundStyle(.white)
+                            Text("剩余时间")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
                         Spacer()
-                        Text("\(max(ns.remainS, 0) / 60) 分钟")
-                            .font(.system(size: 26, weight: .heavy))
-                            .foregroundStyle(.white)
+                        VStack(alignment: .trailing, spacing: 0) {
+                            Text("\(Int(ns.speedKph))")
+                                .font(.system(size: 34, weight: .heavy))
+                                .foregroundStyle(.white)
+                            Text("km/h")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
                     }
-                    // 下一转向预告（高德顶部主条：接近转向时显示"前方X米右转 进入XX路"）
+                    // 第二行：下一转向指示（<500米时显示，高德"前方X米右转 进入XX路"）
                     if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
                         HStack(spacing: 6) {
                             Image(systemName: navTurnIcon(t.modifier))
@@ -1026,9 +1000,20 @@ struct ContentView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    // 车道指引（<500米时随转向显示）
+                    if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0, !t.lanes.isEmpty {
+                        HStack(spacing: 3) {
+                            ForEach(t.lanes, id: \.self) { lane in
+                                Image(systemName: navLaneIcon(lane))
+                                    .font(.footnote.bold())
+                                    .foregroundStyle(.white.opacity(0.9))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.vertical, 10)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal)
                 .padding(.top, 52)
@@ -1037,29 +1022,33 @@ struct ContentView: View {
         }
     }
 
-    /// 导航中悬浮退出按钮（右上角红色胶囊，高德导航式）
-    private var exitNavOverlay: some View {        VStack {
-            HStack {
-                Spacer()
-                if model.navigating {
-                    Button {
-                        haptic()
-                        model.toggleNavigation()
-                    } label: {
-                        Text("退出导航")
-                            .font(.footnote.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color.red, in: Capsule())
-                            .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
-                    }
-                }
-            }
-            .padding(.trailing, 12)
-            .padding(.top, 8)
+    /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
+    private var exitNavOverlay: some View {
+        VStack {
             Spacer()
+            if model.navigating {
+                Button {
+                    haptic()
+                    model.toggleNavigation()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark")
+                            .font(.body.bold())
+                        Text("退出导航")
+                            .font(.body.bold())
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 56)
+                    .padding(.vertical, 15)
+                    .background(Color.red, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+                }
+                .buttonStyle(.plain)
+            }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.bottom, 10)
     }
 
     /// 触感反馈（iOS Haptic）
@@ -1110,7 +1099,7 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.leading, 10)
-                .padding(.top, 110)
+                .padding(.top, 200)
                 Spacer()
             }
             Spacer()
@@ -1661,9 +1650,32 @@ struct PoiDetailSheet: View {
                     .padding(.vertical, 12)
                     .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
             }
+            // v1.65：设为家 / 设为公司（我的页常用地点一键调用）
+            HStack(spacing: 10) {
+                Button {
+                    model.setHome(poi)
+                    onClose(true)
+                } label: {
+                    Label("设为家", systemImage: "house.fill")
+                        .font(.footnote.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+                }
+                Button {
+                    model.setWork(poi)
+                    onClose(true)
+                } label: {
+                    Label("设为公司", systemImage: "briefcase.fill")
+                        .font(.footnote.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
         }
         .padding(20)
-        .presentationDetents([.height(320)])
+        .presentationDetents([.height(380)])
         .onAppear {
             favorite = model.isFavorite(poi)
             if let loc = model.currentLocation {
