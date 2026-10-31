@@ -90,10 +90,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
         context.coordinator.onMapLoad = onMapLoad
-        // v1.69 地图加载失败重试
+        // v1.69 地图加载失败重试（v1.77：2D SDK 无 reloadMap，改触发全图层重绘）
         if reloadTick != context.coordinator.lastReloadTick {
             context.coordinator.lastReloadTick = reloadTick
-            if reloadTick > 0 { map.reloadMap() }
+            if reloadTick > 0 { map.setNeedsDisplay() }
         }
         // 当前定位箭头：坐标（WGS84→GCJ 显示）；变化时重建刷新位置
         if let loc = userLocation {
@@ -269,7 +269,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
         if !context.coordinator.userMoved {
-            map.rotationDegree = CLLocationDirection(heading)
+            map.rotation = CLLocationDirection(heading) // v1.77：2D SDK 属性名 rotation（3D 为 rotationDegree）
         }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
         if navigateFollowTick != context.coordinator.lastNavFollowTick {
