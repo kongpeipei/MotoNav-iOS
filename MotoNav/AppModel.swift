@@ -74,7 +74,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
     /// 高德开放平台 Web 服务 Key（内置兜底 Key；用户可覆盖，保证搜索联想/路线规划始终可用）
     static let builtinAmapKey = "9d596e8799cf037080e4d6ab8764c246"
-    @Published var amapKey: String = Self.builtinAmapKey {
+    @Published var amapKey: String = "9d596e8799cf037080e4d6ab8764c246" {
         didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
     }
 
