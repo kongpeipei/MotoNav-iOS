@@ -42,15 +42,20 @@ struct ContentView: View {
     @State private var showSearchField = false
     /// 搜索框当前高度（手指上下滑动调整）
     @State private var searchHeight: CGFloat = 54
+    /// 底部选项卡：0=导航主页，1=我的
+    @State private var selectedTab = 0
+    /// "我的"页面弹出
+    @State private var showSettingsSheet = false
+    /// 卫星图层开关
+    @State private var showSatellite = false
+    /// 实时路况开关
+    @State private var showTraffic = false
 
     var body: some View {
         ZStack {
             mapLayer
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
-            if !model.navigating {
-                menuOverlay
-            }
             // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
             if !model.navigating {
                 weatherOverlay
@@ -59,16 +64,25 @@ struct ContentView: View {
             routeBarOverlay
             // 地图缩放 + / - 按钮
             zoomOverlay
+            // 图层/路况文字按钮（右上角）
+            layerTrafficButtons
             // 导航中悬浮退出按钮
             exitNavOverlay
             // 高德式顶部大数字条（剩余里程/时间，导航中显示）
             navTopBar
             bottomOverlay
+            // 底部选项卡（导航中隐藏）
+            if !model.navigating {
+                bottomTabBar
+            }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
                 poiDetail = nil
             }
+        }
+        .sheet(isPresented: $showSettingsSheet) {
+            settingsSheet
         }
         .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
@@ -300,30 +314,137 @@ struct ContentView: View {
         }
     }
 
-    /// 右上角 ⋯ 菜单（导入/导出点位数据）
+    /// 右上角 ⋯ 菜单（导入/导出点位数据）- 已迁移到底部"我的"选项卡
     private var menuOverlay: some View {
+        EmptyView()
+    }
+
+    /// 右上角图层/路况文字按钮组
+    private var layerTrafficButtons: some View {
         VStack {
             HStack {
                 Spacer()
-                Menu {
-                    Button("导入 JSON") { showImport = true }
-                    Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
-                    Button(model.amapKey.isEmpty ? "高德搜索Key（可选，填了联想更准）" : "高德搜索Key（已启用）") {
-                        amapKeyInput = model.amapKey
-                        showAmapKeyInput = true
+                VStack(spacing: 8) {
+                    Button {
+                        showSatellite.toggle()
+                    } label: {
+                        Text(showSatellite ? "标准" : "卫星")
+                            .font(.caption.bold())
+                            .foregroundStyle(showSatellite ? .white : .primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(showSatellite ? Color.blue : Color.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title2)
-                        .foregroundStyle(.primary)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showTraffic.toggle()
+                    } label: {
+                        Text("路况")
+                            .font(.caption.bold())
+                            .foregroundStyle(showTraffic ? .white : .primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(showTraffic ? Color.green : Color.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(8)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 .padding(.trailing, 12)
                 .padding(.top, 40)
             }
             Spacer()
+        }
+    }
+
+    /// 底部选项卡：导航 / 我的
+    private var bottomTabBar: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 0) {
+                Button {
+                    selectedTab = 0
+                    haptic()
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "location.north.circle.fill")
+                            .font(.title3)
+                        Text("导航")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(selectedTab == 0 ? .blue : .secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    selectedTab = 1
+                    showSettingsSheet = true
+                    haptic()
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "person.circle.fill")
+                            .font(.title3)
+                        Text("我的")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+            }
+            .background(.ultraThinMaterial)
+            .overlay(Rectangle().frame(height: 0.5).foregroundStyle(.quaternary), alignment: .top)
+            .padding(.bottom, 0)
+        }
+    }
+
+    /// "我的"页面：导入/导出JSON、高德Key设置
+    private var settingsSheet: some View {
+        NavigationStack {
+            List {
+                Section("数据管理") {
+                    Button {
+                        showImport = true
+                    } label: {
+                        Label("导入 JSON 点位", systemImage: "square.and.arrow.down")
+                    }
+                    Button {
+                        exportDoc = JsonFile(text: model.exportPois())
+                        showExport = true
+                    } label: {
+                        Label("导出 JSON 点位", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Section("搜索设置") {
+                    Button {
+                        amapKeyInput = model.amapKey
+                        showAmapKeyInput = true
+                    } label: {
+                        HStack {
+                            Label("高德搜索 Key", systemImage: "key")
+                            Spacer()
+                            Text(model.amapKey.isEmpty ? "未设置" : "已启用")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                }
+                Section("关于") {
+                    HStack {
+                        Label("版本", systemImage: "info.circle")
+                        Spacer()
+                        Text("v1.57")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
+            }
+            .navigationTitle("我的")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
@@ -939,9 +1060,10 @@ struct ContentView: View {
                 .submitLabel(.search)
                 .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
                 .onChange(of: searchText) { newValue in
-                    suggestions = model.searchSuggestions(newValue).map { displayName($0) }
+                    // 只使用高德Web搜索联想，删除本地联想
+                    suggestions = []
                     showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
-                    // 高德搜索逻辑：填写 Key 后输入即实时返回 POI 联想候选（带坐标，点击直接定位）
+                    // 高德搜索逻辑：输入即实时返回 POI 联想候选（带坐标，点击直接定位）
                     onlineTips = []
                     if !model.amapKey.isEmpty {
                         let q = newValue.trimmingCharacters(in: .whitespaces)

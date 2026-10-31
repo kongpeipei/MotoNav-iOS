@@ -61,7 +61,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var hfPois: [String] = []
 
     /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
-    @Published var amapKey: String = "" {
+    @Published var amapKey: String = "9d596e8799cf037080e4d6ab8764c246" {
         didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
     }
 
@@ -1164,7 +1164,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             // 目的地未变才替换（用户可能已改目标）
             guard self.destName == name, self.destLat == lat, self.destLon == lon else { return }
-            let retry = await RouteFetcher.fetchAll(from: from, to: to)
+            let retry = await RouteFetcher.fetchAll(from: from, to: to, amapKey: amapKey)
             if retry.isEmpty { return }
             let list = retry.map { c -> RouteChoice in
                 let n = nearbyPoisOnRoute(c.points).count
@@ -1219,7 +1219,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let e = await eSnap
             let from2 = from
             let end2 = e ?? rawEnd
-            let choices = await RouteFetcher.fetchAll(from: from2, to: end2)
+            let choices = await RouteFetcher.fetchAll(from: from2, to: end2, amapKey: amapKey)
             if choices.isEmpty {
                 fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             } else {
