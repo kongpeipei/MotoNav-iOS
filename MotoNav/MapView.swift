@@ -54,6 +54,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
         map.isRotateEnabled = true  // 双指旋转地图
         map.delegate = context.coordinator
+        // v1.67 高德瓦片底图（纯高德视觉）：插入 .aboveRoads 最底层——
+        // 路线折线/点位标注都叠在瓦片之上（v1.62 灰罩+盖路线问题已修复：
+        // ①层级由 aboveLabels 改 aboveRoads ②未加载瓦片透明露出苹果底图兜底 ③多子域轮询防限流）
+        let amapOverlay = AmapTileOverlay()
+        map.insertOverlay(amapOverlay, at: 0, level: .aboveRoads)
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.6
@@ -280,6 +285,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         if isNav != context.coordinator.lastDarkState {
             context.coordinator.lastDarkState = isNav
             map.overrideUserInterfaceStyle = isNav ? .dark : .unspecified
+            // v1.67 高德瓦片随导航切换夜间样式（style=8 深色 / style=7 浅色）
+            context.coordinator.amapDark = isNav
+            context.coordinator.amapRenderer?.dark = isNav
         }
         // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
         if zoomInTick != context.coordinator.lastZoomInTick {
@@ -337,6 +345,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPitchState: Bool?
         /// 导航深色底图状态记忆
         var lastDarkState: Bool?
+        /// v1.67 高德瓦片 renderer 引用 + 深色（夜间瓦片 style=8）状态
+        var amapRenderer: AmapTileRenderer?
+        var amapDark = false
         /// 路线白色描边底层引用（renderer 区分双层）
         var underPolyline: MKPolyline?
         /// 当前方案主层（草绿色，renderer 区分）
@@ -571,6 +582,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
                 return r
             }
+            if let amap = overlay as? AmapTileOverlay {
+                // v1.67：高德瓦片底图 renderer（浅色 style=7 / 导航深色 style=8 随导航态切换）
+                let renderer = AmapTileRenderer(overlay: amap)
+                amapRenderer = renderer
+                renderer.dark = amapDark
+                return renderer
+            }
             return MKOverlayRenderer(overlay: overlay)
         }
     }
@@ -687,6 +705,133 @@ extension MapViewRepresentable {
             c.fillPath()
             c.restoreGState()
         }
+    }
+}
+
+// MARK: - v1.67 高德瓦片底图（纯高德视觉；GCJ→WGS 重投影 + NSLock 防渲染线程数据竞争闪退）
+// v1.62 曾因灰罩/盖路线移除，本轮修复：①层级 .aboveRoads（路线折线/标注在其上，不再被盖）
+// ②未加载瓦片透明占位（露出苹果底图兜底，不再大片灰色遮挡）③webrd01-04 多子域轮询防限流
+
+/// 高德标准底图瓦片 overlay（世界网格全屏覆盖）
+final class AmapTileOverlay: NSObject, MKOverlay {
+    /// 高德标准底图瓦片模板（公开服务，无需 Key；style=7 日间 / 8 夜间）
+    static let tileURL = "https://webrd0{SD}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style={STYLE}&x={x}&y={y}&z={z}"
+    let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+    let boundingMapRect = MKMapRect.world
+}
+
+/// 瓦片重投影 renderer：在 WGS 网格上逐瓦片请求 GCJ 瓦片并按中心对齐绘制
+/// 关键：cache/pending/inflight 会被主线程（下载回调）与 VectorKit 渲染线程（draw）并发访问，
+/// 必须用 NSLock 保护，否则数据竞争导致 EXC_BAD_ACCESS（真机启动闪退根因）
+final class AmapTileRenderer: MKOverlayRenderer {
+    private static let zMin = 3, zMax = 19
+    private let lock = NSLock()
+    private var cache: [String: UIImage] = [:]
+    private var pending: Set<String> = []
+    private var inflight = 0
+    /// 夜间瓦片（导航中 style=8）
+    var dark = false
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
+        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
+        let n = 1 << z
+        let per = MKMapRect.world.size.width / Double(n)
+        let x0 = max(0, Int(floor(mapRect.minX / per)))
+        let x1 = min(n - 1, Int(floor(mapRect.maxX / per)))
+        let y0 = max(0, Int(floor(mapRect.minY / per)))
+        let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
+        guard x1 >= x0, y1 >= y0 else { return }
+        // v1.67：未加载瓦片不绘制（透明）→ 露出下层苹果底图兜底，杜绝灰罩
+        // GCJ 偏移逐行近似（每行中心点算一次，瓦片内误差可忽略，省 20× 三角函数）
+        let lonMid = ((Double(x0) + Double(x1)) / 2.0 + 0.5) / Double(n) * 360.0 - 180.0
+        var rowGCJ: [Int: (gy: Int, lonDelta: Double)] = [:]
+        for y in y0...y1 {
+            let lat = tileLat(y, z)
+            let g = CoordConv.wgs2gcj(lat, lonMid)
+            rowGCJ[y] = (
+                min(n - 1, max(0, tileY(g.0, z))),
+                g.1 - lonMid
+            )
+        }
+        for x in x0...x1 {
+            let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
+            for y in y0...y1 {
+                guard let r = rowGCJ[y] else { continue }
+                let gx = min(n - 1, max(0, Int(floor((lon + r.lonDelta + 180.0) / 360.0 * Double(n)))))
+                let gy = r.gy
+                let key = "\(dark ? "n" : "d")-\(z)-\(gx)-\(gy)" // 深浅样式分开缓存，切换即时生效
+                let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
+                                                    width: per, height: per))
+                lock.lock()
+                let hit = cache[key]
+                let needFetch = hit == nil && !pending.contains(key)
+                if needFetch { pending.insert(key) }
+                lock.unlock()
+                if let hit, let cg = hit.cgImage {
+                    ctx.draw(cg, in: rect)
+                } else if needFetch {
+                    fetchTile(gx, gy, z, key)
+                }
+            }
+        }
+    }
+
+    private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        lock.lock()
+        if inflight >= 16 {
+            pending.remove(key)
+            lock.unlock()
+            return
+        }
+        // v1.67 多子域轮询：webrd01-04 按瓦片坐标取模，降低单域限流概率
+        let sd = ((x + y) % 4) + 1
+        let style = dark ? "8" : "7"
+        guard let url = URL(string: AmapTileOverlay.tileURL
+            .replacingOccurrences(of: "{SD}", with: "\(sd)")
+            .replacingOccurrences(of: "{STYLE}", with: style)
+            .replacingOccurrences(of: "{x}", with: "\(x)")
+            .replacingOccurrences(of: "{y}", with: "\(y)")
+            .replacingOccurrences(of: "{z}", with: "\(z)")) else {
+            pending.remove(key)
+            lock.unlock()
+            return
+        }
+        inflight += 1
+        lock.unlock()
+        URLSession.shared.dataTask(with: url) { [weak self] data, resp, err in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.lock.lock()
+                self.inflight -= 1
+                if let data, let img = UIImage(data: data) {
+                    self.cache[key] = img
+                    self.pending.remove(key)
+                    if self.cache.count > 200 {
+                        var drop = 50
+                        while drop > 0, let k = self.cache.keys.first {
+                            self.cache.removeValue(forKey: k)
+                            drop -= 1
+                        }
+                    }
+                    self.setNeedsDisplay()
+                } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
+                    self.pending.remove(key) // 失败瓦片：移出待下载，滚动/重绘后自然重试
+                }
+                self.lock.unlock()
+            }
+        }.resume()
+    }
+
+    /// 瓦片 y → 中心纬度（Web Mercator）
+    private func tileLat(_ y: Int, _ z: Int) -> Double {
+        let n = Double(1 << z)
+        return atan(sinh(.pi * (1 - 2.0 * (Double(y) + 0.5) / n))) * 180.0 / .pi
+    }
+    /// 纬度 → 瓦片 y
+    private func tileY(_ lat: Double, _ z: Int) -> Int {
+        let n = Double(1 << z)
+        let r = lat / 180.0 * .pi
+        return Int(floor((1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0 * n))
     }
 }
 
