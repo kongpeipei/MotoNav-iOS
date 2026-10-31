@@ -378,7 +378,7 @@ struct ContentView: View {
         return Color.red
     }
 
-    /// 底部选项卡：导航 / 我的
+    /// 底部选项卡：导航 / 我的（加高版，骑行易点）
     private var bottomTabBar: some View {
         VStack {
             Spacer()
@@ -387,15 +387,17 @@ struct ContentView: View {
                     selectedTab = 0
                     haptic()
                 } label: {
-                    VStack(spacing: 2) {
+                    VStack(spacing: 4) {
                         Image(systemName: "location.north.circle.fill")
-                            .font(.title3)
+                            .font(.title)
                         Text("导航")
-                            .font(.caption2)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
                     }
                     .foregroundStyle(selectedTab == 0 ? .blue : .secondary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 12)
+                    .padding(.bottom, 8)
                 }
                 .buttonStyle(.plain)
 
@@ -404,21 +406,22 @@ struct ContentView: View {
                     showSettingsSheet = true
                     haptic()
                 } label: {
-                    VStack(spacing: 2) {
+                    VStack(spacing: 4) {
                         Image(systemName: "person.circle.fill")
-                            .font(.title3)
+                            .font(.title)
                         Text("我的")
-                            .font(.caption2)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
                     }
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 12)
+                    .padding(.bottom, 8)
                 }
                 .buttonStyle(.plain)
             }
             .background(.ultraThinMaterial)
             .overlay(Rectangle().frame(height: 0.5).foregroundStyle(.quaternary), alignment: .top)
-            .padding(.bottom, 0)
         }
     }
 
@@ -457,7 +460,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.59")
+                        Text("v1.60")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -526,7 +529,7 @@ struct ContentView: View {
                 snapAlertCard
             }
         }
-        .padding(.bottom, 50) // 给底部选项卡留空间
+        .padding(.bottom, 80) // 给底部选项卡留空间
     }
 
     /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 实时速度
@@ -1255,7 +1258,7 @@ struct ContentView: View {
         return .secondary
     }
 
-    /// 历史搜索记录（横滑标签，地址简化显示）
+    /// 历史搜索记录（横滑标签，带清空按钮）
     private var historyBar: some View {
         Group {
             if !model.searchHistory.isEmpty {
@@ -1274,6 +1277,18 @@ struct ContentView: View {
                             .tint(.white)
                             .controlSize(.small)
                         }
+                        // 清空按钮
+                        Button {
+                            model.clearHistory()
+                            model.status = "搜索历史已清空"
+                        } label: {
+                            Text("清空")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.gray)
+                        .controlSize(.small)
                     }
                     .padding(.horizontal)
                 }

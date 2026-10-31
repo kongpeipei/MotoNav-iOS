@@ -655,69 +655,50 @@ extension MKPolyline {
 
 extension MapViewRepresentable {
     /// 当前位置图标：高德同款蓝色实心箭头（宽胖箭头 + 圆尾，纯蓝渐变填充，无中心点；
-    /// 白色细描边 + 底部轻投影保证深色地图上的辨识度；固定朝屏幕上方，地图随手机朝向旋转）
+    /// 定位图标：简洁朝向箭头样式（中心蓝点 + 空心箭头）
     static func makeUserIcon() -> UIImage {
-        let size: CGFloat = 52
+        let size: CGFloat = 48
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             let c = ctx.cgContext
             let cx = size / 2
-            let cy: CGFloat = 26
+            let cy: CGFloat = 24
             
-            // 外圈光晕效果（提升辨识度）
-            let glowPath = UIBezierPath(arcCenter: CGPoint(x: cx, y: cy), radius: 20, startAngle: 0, endAngle: .pi * 2, clockwise: true)
+            // 外圈光晕效果
+            let glowPath = UIBezierPath(arcCenter: CGPoint(x: cx, y: cy), radius: 16, startAngle: 0, endAngle: .pi * 2, clockwise: true)
             c.saveGState()
-            c.setFillColor(UIColor.systemBlue.withAlphaComponent(0.2).cgColor)
+            c.setFillColor(UIColor.systemBlue.withAlphaComponent(0.15).cgColor)
             glowPath.fill()
             c.restoreGState()
             
-            // 第二层光晕
-            let glow2 = UIBezierPath(arcCenter: CGPoint(x: cx, y: cy), radius: 16, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-            c.saveGState()
-            c.setFillColor(UIColor.systemBlue.withAlphaComponent(0.15).cgColor)
-            glow2.fill()
-            c.restoreGState()
-            
-            // 高德式箭头：宽胖主体 + 圆弧尾
+            // 空心箭头（细边）
             let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: cx, y: cy - 24))                        // 尖端
-            arrow.addQuadCurve(to: CGPoint(x: cx - 15, y: cy - 3),
-                               controlPoint: CGPoint(x: cx - 14.5, y: cy - 14)) // 左侧
-            arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 10),
-                         radius: 13, startAngle: .pi, endAngle: 0, clockwise: true) // 圆尾
-            arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 24),
-                               controlPoint: CGPoint(x: cx + 14.5, y: cy - 14)) // 右侧
+            arrow.move(to: CGPoint(x: cx, y: cy - 20))                        // 尖端
+            arrow.addLine(to: CGPoint(x: cx - 10, y: cy + 8))                // 左腰
+            arrow.addLine(to: CGPoint(x: cx, y: cy + 3))                     // 内凹点
+            arrow.addLine(to: CGPoint(x: cx + 10, y: cy + 8))               // 右腰
             arrow.close()
             
-            // 底部轻投影（高德箭头立体感）
-            c.saveGState()
-            c.setShadow(offset: CGSize(width: 0, height: 3), blur: 6,
-                        color: UIColor.black.withAlphaComponent(0.45).cgColor)
-            UIColor(red: 0.12, green: 0.36, blue: 0.95, alpha: 1.0).setFill()
-            arrow.fill()
-            c.restoreGState()
-            
-            // 蓝色渐变填充（顶部浅 → 底部深）
-            c.saveGState()
-            arrow.addClip()
-            let colors = [
-                UIColor(red: 0.5, green: 0.7, blue: 1.0, alpha: 1.0).cgColor,
-                UIColor(red: 0.08, green: 0.32, blue: 0.95, alpha: 1.0).cgColor
-            ] as CFArray
-            if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                     colors: colors, locations: [0.0, 1.0]) {
-                c.drawLinearGradient(grad,
-                                     start: CGPoint(x: cx, y: cy - 24),
-                                     end: CGPoint(x: cx, y: cy + 23),
-                                     options: [])
-            }
-            c.restoreGState()
-            
-            // 白色细描边（高德箭头描边效果，深色底图上清晰）
-            c.setStrokeColor(UIColor.white.withAlphaComponent(0.95).cgColor)
-            c.setLineWidth(2.0)
+            // 白色描边箭头
+            c.setStrokeColor(UIColor.white.cgColor)
+            c.setLineWidth(2.5)
             c.setLineJoin(.round)
             c.addPath(arrow.cgPath)
+            c.strokePath()
+            
+            // 中心蓝点
+            let dot = UIBezierPath(arcCenter: CGPoint(x: cx, y: cy), radius: 5, startAngle: 0, endAngle: .pi * 2, clockwise: true)
+            c.saveGState()
+            c.setShadow(offset: CGSize(width: 0, height: 2), blur: 3,
+                        color: UIColor.black.withAlphaComponent(0.4).cgColor)
+            UIColor.systemBlue.setFill()
+            dot.fill()
+            c.restoreGState()
+            
+            // 中心点白边
+            c.setStrokeColor(UIColor.white.cgColor)
+            c.setLineWidth(1.5)
+            c.addPath(dot.cgPath)
             c.strokePath()
         }
     }
