@@ -44,6 +44,12 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
     /// 轻点地图空白处选点（显示"导航到这里"）
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+    /// 实时路况数据（v1.61 恢复，高德交通态势）
+    let trafficRoads: [TrafficRoad]
+    /// 实时路况开关
+    let showTraffic: Bool
+    /// 高德瓦片底图（v1.61 恢复，GCJ→WGS 重投影）
+    let useAmapTiles: Bool
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -210,6 +216,28 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
+        // v1.61 高德瓦片底图（A 选项）：全删后重插（若开启），renderer 负责 GCJ→WGS 重投影
+        if useAmapTiles {
+            if let o = context.coordinator.amapTileOverlay {
+                if !map.overlays.contains(where: { $0 === o }) {
+                    map.insertOverlay(o, at: 0, level: .aboveLabels)
+                }
+            } else {
+                let o = AmapTileOverlay()
+                context.coordinator.amapTileOverlay = o
+                map.insertOverlay(o, at: 0, level: .aboveLabels)
+            }
+        } else if let o = context.coordinator.amapTileOverlay {
+            map.removeOverlay(o)
+            context.coordinator.amapTileOverlay = nil
+        }
+        // v1.61 实时路况线（先画，路线在其上层；可开关）
+        context.coordinator.trafficPolylines = []
+        for r in trafficRoads where showTraffic && r.coords.count > 1 {
+            let p = MKPolyline(coordinates: r.coords, count: r.coords.count)
+            context.coordinator.trafficPolylines.append((p, r.status))
+            map.addOverlay(p)
+        }
         if route.count > 1 {
             if navigating {
                 // 导航中只画当前路线（草绿双层，高德导航推荐色）
@@ -345,6 +373,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var navLastFollow: CLLocationCoordinate2D?
         /// 程序主动设置区域（避免被标记为用户移动）
         private var programmaticMove = false
+        /// 高德瓦片 overlay（v1.61 恢复）
+        var amapTileOverlay: AmapTileOverlay?
+        /// 实时路况折线（(polyline, status) 1绿2黄3橙4红）
+        var trafficPolylines: [(MKPolyline, Int)] = []
 
         func setRegionProgrammatically(_ block: () -> Void) {
             programmaticMove = true
@@ -543,10 +575,22 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if overlay is AmapTileOverlay {
+                return AmapTileRenderer(overlay: overlay)
+            }
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
-                if poly === self.underPolyline {
+                if let t = self.trafficPolylines.first(where: { $0.0 === poly }) {
+                    // v1.61 路况线：1绿 2黄 3橙 4红（高德路况配色）
+                    switch t.1 {
+                    case 1: r.strokeColor = UIColor(red: 0.25, green: 0.78, blue: 0.35, alpha: 0.75)
+                    case 2: r.strokeColor = UIColor(red: 0.95, green: 0.80, blue: 0.20, alpha: 0.80)
+                    case 3: r.strokeColor = UIColor(red: 1.0, green: 0.55, blue: 0.15, alpha: 0.85)
+                    default: r.strokeColor = UIColor(red: 0.92, green: 0.20, blue: 0.20, alpha: 0.9)
+                    }
+                    r.lineWidth = 5
+                } else if poly === self.underPolyline {
                     // 白色描边底层（细，路线更贴合道路）
                     r.strokeColor = .white
                     r.lineWidth = 7
@@ -701,5 +745,127 @@ extension MapViewRepresentable {
             c.addPath(dot.cgPath)
             c.strokePath()
         }
+    }
+}
+
+// MARK: - v1.61 高德瓦片底图（自 v1.55 恢复；GCJ→WGS 重投影 + NSLock 防渲染线程数据竞争闪退）
+
+/// 高德标准底图瓦片 overlay（世界网格全屏覆盖）
+final class AmapTileOverlay: NSObject, MKOverlay {
+    /// 高德标准底图瓦片模板（公开服务，无需 Key）
+    static let tileURL = "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}"
+    /// coordinate 必须为有效坐标（invalid 会令部分系统不渲染 overlay）
+    let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+    let boundingMapRect = MKMapRect.world
+}
+
+/// 瓦片重投影 renderer：在 WGS 网格上逐瓦片请求 GCJ 瓦片并按中心对齐绘制
+/// 关键：cache/pending/inflight 会被主线程（下载回调）与 VectorKit 渲染线程（draw）并发访问，
+/// 必须用 NSLock 保护，否则数据竞争导致 EXC_BAD_ACCESS（真机启动闪退根因）
+final class AmapTileRenderer: MKOverlayRenderer {
+    private static let zMin = 3, zMax = 19
+    private let lock = NSLock()
+    private var cache: [String: UIImage] = [:]
+    private var pending: Set<String> = []
+    private var inflight = 0
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
+        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
+        let n = 1 << z
+        let per = MKMapRect.world.size.width / Double(n)
+        let x0 = max(0, Int(floor(mapRect.minX / per)))
+        let x1 = min(n - 1, Int(floor(mapRect.maxX / per)))
+        let y0 = max(0, Int(floor(mapRect.minY / per)))
+        let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
+        guard x1 >= x0, y1 >= y0 else { return }
+        ctx.setFillColor(UIColor.systemGray5.cgColor)
+        // 卡顿优化：GCJ 偏移逐行近似（每行中心点算一次，瓦片内误差可忽略，省 20× 三角函数）
+        let lonMid = ((Double(x0) + Double(x1)) / 2.0 + 0.5) / Double(n) * 360.0 - 180.0
+        var rowGCJ: [Int: (gy: Int, lonDelta: Double)] = [:]
+        for y in y0...y1 {
+            let lat = tileLat(y, z)
+            let g = CoordConv.wgs2gcj(lat, lonMid)
+            rowGCJ[y] = (
+                min(n - 1, max(0, tileY(g.0, z))),
+                g.1 - lonMid
+            )
+        }
+        for x in x0...x1 {
+            let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
+            for y in y0...y1 {
+                guard let r = rowGCJ[y] else { continue }
+                let gx = min(n - 1, max(0, Int(floor((lon + r.lonDelta + 180.0) / 360.0 * Double(n)))))
+                let gy = r.gy
+                let key = "\(z)-\(gx)-\(gy)"
+                let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
+                                                    width: per, height: per))
+                // 锁内快照缓存/待下载状态，锁外绘制/下载，杜绝渲染线程与主线程数据竞争
+                lock.lock()
+                let hit = cache[key]
+                let needFetch = hit == nil && !pending.contains(key)
+                if needFetch { pending.insert(key) }
+                lock.unlock()
+                if let hit, let cg = hit.cgImage {
+                    ctx.draw(cg, in: rect)
+                } else {
+                    ctx.fill(rect) // 未下载先浅色占位
+                    if needFetch { fetchTile(gx, gy, z, key) }
+                }
+            }
+        }
+    }
+
+    private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        // 并发限制与 pending 维护全部走锁
+        lock.lock()
+        if inflight >= 16 {
+            pending.remove(key) // 并发满：移出待下载，待下次重绘再试
+            lock.unlock()
+            return
+        }
+        guard let url = URL(string: AmapTileOverlay.tileURL
+            .replacingOccurrences(of: "{x}", with: "\(x)")
+            .replacingOccurrences(of: "{y}", with: "\(y)")
+            .replacingOccurrences(of: "{z}", with: "\(z)")) else {
+            pending.remove(key)
+            lock.unlock()
+            return
+        }
+        inflight += 1
+        lock.unlock()
+        URLSession.shared.dataTask(with: url) { [weak self] data, resp, err in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.lock.lock()
+                self.inflight -= 1
+                if let data, let img = UIImage(data: data) {
+                    self.cache[key] = img
+                    self.pending.remove(key)
+                    if self.cache.count > 200 {
+                        var drop = 50
+                        while drop > 0, let k = self.cache.keys.first {
+                            self.cache.removeValue(forKey: k)
+                            drop -= 1
+                        }
+                    }
+                    self.setNeedsDisplay()
+                } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
+                    self.pending.remove(key) // 失败瓦片：移出待下载，避免永久悬挂
+                }
+                self.lock.unlock()
+            }
+        }.resume()
+    }
+
+    /// 瓦片 y → 中心纬度（Web Mercator）
+    private func tileLat(_ y: Int, _ z: Int) -> Double {
+        let n = Double(1 << z)
+        return atan(sinh(.pi * (1 - 2.0 * (Double(y) + 0.5) / n))) * 180.0 / .pi
+    }
+    /// 纬度 → 瓦片 y
+    private func tileY(_ lat: Double, _ z: Int) -> Int {
+        let n = Double(1 << z)
+        let r = lat / 180.0 * .pi
+        return Int(floor((1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0 * n))
     }
 }

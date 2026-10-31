@@ -1,6 +1,48 @@
 import Foundation
 import CoreLocation
 
+/// 高德瓦片/接口坐标转换（v1.47 独立静态方法，避免 @MainActor 隔离问题）
+enum CoordConv {
+    private static func outOfChina(_ lat: Double, _ lon: Double) -> Bool {
+        if lon < 72.004 || lon > 137.8347 { return true }
+        if lat < 0.8293 || lat > 55.8271 { return true }
+        return false
+    }
+    private static func transformLat(_ x: Double, _ y: Double) -> Double {
+        var ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
+        ret += (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
+        ret += (20.0 * sin(y * .pi) + 40.0 * sin(y / 3.0 * .pi)) * 2.0 / 3.0
+        ret += (160.0 * sin(y / 12.0 * .pi) + 320.0 * sin(y * .pi / 30.0)) * 2.0 / 3.0
+        return ret
+    }
+    private static func transformLon(_ x: Double, _ y: Double) -> Double {
+        var ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+        ret += (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
+        ret += (20.0 * sin(x * .pi) + 40.0 * sin(x / 3.0 * .pi)) * 2.0 / 3.0
+        ret += (150.0 * sin(x / 12.0 * .pi) + 300.0 * sin(x / 30.0 * .pi)) * 2.0 / 3.0
+        return ret
+    }
+    /// WGS-84 → GCJ-02（请求高德接口前转换）
+    static func wgs2gcj(_ lat: Double, _ lon: Double) -> (Double, Double) {
+        if outOfChina(lat, lon) { return (lat, lon) }
+        let dLat = transformLat(lon - 105.0, lat - 35.0)
+        let dLon = transformLon(lon - 105.0, lat - 35.0)
+        let radLat = lat / 180.0 * .pi
+        var magic = sin(radLat)
+        magic = 1 - 0.00669342162296594323 * magic * magic
+        let sqrtMagic = sqrt(magic)
+        let dLat2 = (dLat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtMagic) * .pi)
+        let dLon2 = (dLon * 180.0) / (6378245.0 / sqrtMagic * cos(radLat) * .pi)
+        return (lat + dLat2, lon + dLon2)
+    }
+    /// GCJ-02 → WGS-84（高德接口返回后转换，用于苹果地图显示）
+    static func gcj2wgs(_ lat: Double, _ lon: Double) -> (Double, Double) {
+        if outOfChina(lat, lon) { return (lat, lon) }
+        let (glat, glon) = wgs2gcj(lat, lon)
+        return (lat * 2 - glat, lon * 2 - glon)
+    }
+}
+
 /// 转向步骤：距起点里程(米) + 动作 + 方向修饰 + 转入道路名 + 车道指引 + 位置
 struct RouteTurn {
     let fromStartM: Int

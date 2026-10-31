@@ -23,9 +23,6 @@ struct ContentView: View {
     /// 点位详情气泡（点击点位弹出：距离/收藏/分享/导航）
     @State private var poiDetail: Poi?
     @State private var editPoi: Poi?
-    @State private var showImport = false
-    @State private var exportDoc: JsonFile?
-    @State private var showExport = false
     @State private var typeFilter: Set<PoiType> = Set(PoiType.allCases)
 
     @FocusState private var searchFocused: Bool
@@ -50,6 +47,10 @@ struct ContentView: View {
     @State private var showSatellite = false
     /// 实时路况开关
     @State private var showTraffic = false
+    /// 高德瓦片底图开关（v1.61 恢复）
+    @State private var useAmapTiles = true
+    /// 语音包设置页弹出（"我的"→语音播报）
+    @State private var showVoiceSettings = false
 
     var body: some View {
         ZStack {
@@ -84,29 +85,15 @@ struct ContentView: View {
         .sheet(isPresented: $showSettingsSheet) {
             settingsSheet
         }
+        // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
+        .sheet(isPresented: $showVoiceSettings) {
+            VoiceSettingsSheet(model: model)
+        }
         .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
                 model.updatePoi(id: p.id, type: type, name: name, lat: lat, lon: lon, radiusM: r)
             }
         }
-        .fileImporter(
-            isPresented: $showImport, allowedContentTypes: [.json]
-        ) { result in
-            if case .success(let url) = result,
-               let data = try? Data(contentsOf: url),
-               let text = String(data: data, encoding: .utf8) {
-                let n = model.importPois(text)
-                model.status = "导入成功，新增 \(n) 个点位"
-            } else {
-                model.status = "导入失败：JSON 格式不对"
-            }
-        }
-        .fileExporter(
-            isPresented: $showExport,
-            document: exportDoc ?? JsonFile(text: "[]"),
-            contentType: .json,
-            defaultFilename: "pois"
-        ) { _ in }
         .confirmationDialog("地图选点", isPresented: $showLongPressMenu, presenting: longPressCoord) { coord in
             Button("添加违法拍照") {
                 pendingCoord = coord
@@ -274,7 +261,10 @@ struct ContentView: View {
                 goHereLat = coord.latitude
                 goHereLon = coord.longitude
                 model.setPreview(n, lat: coord.latitude, lon: coord.longitude)
-            }
+            },
+            trafficRoads: model.trafficRoads,
+            showTraffic: showTraffic,
+            useAmapTiles: useAmapTiles
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -319,7 +309,7 @@ struct ContentView: View {
         EmptyView()
     }
 
-    /// 右上角GPS信号按钮
+    /// 右上角竖排文字按钮：GPS信号 + 图层（高德瓦片）+ 路况（实时路况）
     private var layerTrafficButtons: some View {
         VStack {
             HStack {
@@ -349,6 +339,54 @@ struct ContentView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(gpsSignalColor(), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    // v1.61 图层文字按钮：切换高德瓦片底图（默认开）
+                    Button {
+                        haptic()
+                        useAmapTiles.toggle()
+                        model.status = useAmapTiles ? "已开启高德底图" : "已切换苹果底图"
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.3.layers.3d")
+                                .font(.caption2.bold())
+                            Text("图层")
+                                .font(.caption.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(useAmapTiles ? Color.blue : Color.black.opacity(0.45), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    // v1.61 路况文字按钮：拉取并显示实时路况（红黄绿）
+                    Button {
+                        haptic()
+                        showTraffic.toggle()
+                        if showTraffic {
+                            model.status = "正在加载实时路况…"
+                            if let loc = model.currentLocation {
+                                Task {
+                                    await model.fetchTraffic(near: loc, spanMeters: 12000)
+                                    model.status = model.trafficRoads.isEmpty ? "附近暂无路况数据" : "实时路况已显示（\(model.trafficRoads.count) 段）"
+                                }
+                            }
+                        } else {
+                            model.status = "实时路况已关闭"
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "wave.3.right")
+                                .font(.caption2.bold())
+                            Text("路况")
+                                .font(.caption.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(showTraffic ? Color.orange : Color.black.opacity(0.45), in: Capsule())
                         .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
@@ -429,18 +467,21 @@ struct ContentView: View {
     private var settingsSheet: some View {
         NavigationStack {
             List {
-                Section("数据管理") {
+                // v1.61：语音包选项卡（讯飞四川话/普通话女声，从旧版"语音"入口迁入"我的"）
+                Section {
                     Button {
-                        showImport = true
+                        showVoiceSettings = true
                     } label: {
-                        Label("导入 JSON 点位", systemImage: "square.and.arrow.down")
+                        HStack {
+                            Label("语音包", systemImage: "waveform")
+                            Spacer()
+                            Text(model.xfVcnName)
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
                     }
-                    Button {
-                        exportDoc = JsonFile(text: model.exportPois())
-                        showExport = true
-                    } label: {
-                        Label("导出 JSON 点位", systemImage: "square.and.arrow.up")
-                    }
+                } header: {
+                    Text("语音播报")
                 }
                 Section("搜索设置") {
                     Button {
@@ -460,7 +501,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.60")
+                        Text("v1.61")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1550,5 +1591,99 @@ struct PoiDetailSheet: View {
                 distText = "尚未定位"
             }
         }
+    }
+}
+
+/// v1.61 恢复：语音包设置（高德式：语音引擎 + 音色列表 + 喇叭试听 + 选中勾）
+/// 入口："我的"→语音播报
+struct VoiceSettingsSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    private let testText = "前方 500 米右转，进入包公大道，请注意安全"
+    private let voices: [(vcn: String, name: String, sub: String, icon: String)] = [
+        ("xiaorong", "四川话女声 · 小蓉", "亲切川味，导航更有味道", "speaker.wave.3.fill"),
+        ("yezi", "四川话女声 · 叶子", "清亮川腔，推荐", "speaker.wave.2.fill"),
+        ("xiaoyan", "普通话女声 · 晓颜", "标准普通话，字正腔圆", "speaker.wave.2.fill")
+    ]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        UserDefaults.standard.set(false, forKey: "xfEnabled")
+                        model.speak("语音播报已切换为系统语音")
+                    } label: {
+                        HStack {
+                            Image(systemName: "iphone")
+                                .foregroundStyle(.gray)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("系统语音")
+                                    .foregroundStyle(.primary)
+                                Text("iOS 内置中文语音，无需联网")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if !model.xfEnabled { Image(systemName: "checkmark").foregroundStyle(.green) }
+                        }
+                    }
+                } header: {
+                    Text("语音引擎")
+                }
+                Section {
+                    ForEach(voices, id: \.vcn) { v in
+                        HStack(spacing: 8) {
+                            Image(systemName: v.icon)
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(v.name)
+                                    .foregroundStyle(.primary)
+                                Text(v.sub)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button {
+                                model.speak(testText)
+                            } label: {
+                                Image(systemName: "play.circle")
+                                    .font(.title3)
+                                    .foregroundStyle(.tint)
+                            }
+                            .buttonStyle(.borderless)
+                            if model.xfEnabled && model.xfVcn == v.vcn {
+                                Image(systemName: "checkmark").foregroundStyle(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            UserDefaults.standard.set(true, forKey: "xfEnabled")
+                            UserDefaults.standard.set(v.vcn, forKey: "xfVcn")
+                            model.speak("语音已切换为\(v.name)")
+                        }
+                    }
+                } header: {
+                    Text("讯飞在线语音（需联网，新用户送免费额度）")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !model.xfDiag.isEmpty {
+                            Text("诊断：\(model.xfDiag)")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                        Text("音色已内置你的讯飞应用（APPID/Key 已配置）；若提示 11200 请到控制台为该音色开通权限。")
+                    }
+                }
+            }
+            .navigationTitle("语音播报")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.height(430)])
     }
 }

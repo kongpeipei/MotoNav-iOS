@@ -4,12 +4,21 @@ import AVFoundation
 import UserNotifications
 import UIKit
 import ActivityKit
+import CryptoKit
+import Network
 
 extension Notification.Name {
     /// 触发点位提醒（object 为 Poi）
     static let motoAlert = Notification.Name("motoAlert")
     /// 点位列表变化（供 CarPlay 同步）
     static let motoPoisChanged = Notification.Name("motoPoisChanged")
+}
+
+/// 实时路况线段（高德交通态势：1=畅通 2=缓行 3=拥堵 4=严重拥堵）
+struct TrafficRoad {
+    let name: String
+    let status: Int
+    let coords: [CLLocationCoordinate2D]
 }
 
 @MainActor
@@ -63,7 +72,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var hfPois: [String] = []
 
     /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
-    @Published var amapKey: String = "9d596e8799cf037080e4d6ab8764c246" {
+    /// 高德开放平台 Web 服务 Key（内置兜底 Key；用户可覆盖，保证搜索联想/路线规划始终可用）
+    static let builtinAmapKey = "9d596e8799cf037080e4d6ab8764c246"
+    @Published var amapKey: String = Self.builtinAmapKey {
         didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
     }
 
@@ -84,6 +95,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let repo = PoiRepository()
     private let lm = CLLocationManager()
     private let speech = AVSpeechSynthesizer()
+    /// v1.61 恢复：讯飞在线语音合成（真四川话女声，失败自动降级系统语音）
+    private var xfPlayer: AVAudioPlayer?
+    private var xfSeq = 0
+    /// 讯飞诊断（试听/播报失败时显示具体原因，设置页 footer）
+    @Published var xfDiag = ""
+    private var xfConn: NWConnection?
+    /// 语音播报总开关
+    var voiceMuted: Bool { UserDefaults.standard.object(forKey: "voiceMuted") as? Bool ?? false }
+    private var lastSpeakAt = Date.distantPast
+    private var lastSpeakPriority = 0
+    private var lastSpeakText = ""
+    /// 实时路况线段（高德交通态势，v1.61 恢复）
+    @Published var trafficRoads: [TrafficRoad] = []
     /// 违拍提醒 Live Activity（灵动岛/锁屏实时显示前方抓拍点，导航中生效）
     private var liveActivity: Activity<MotoNavAttributes>?
     private var simTimer: Timer?
@@ -204,7 +228,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private override init() {
         super.init()
-        amapKey = UserDefaults.standard.string(forKey: "amapKey") ?? ""
+        // v1.61：内置高德 Key 兜底（用户设置过则用用户的；否则用内置，保证搜索联想/路线规划始终可用）
+        if let saved = UserDefaults.standard.string(forKey: "amapKey"), !saved.isEmpty {
+            amapKey = saved
+        } else {
+            amapKey = Self.builtinAmapKey
+        }
         lm.delegate = self
         lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         pois = repo.load()
@@ -879,14 +908,215 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         distanceM(coord, p.coordinate)
     }
 
-    // MARK: - 语音（四川甜妹：高音调普通话女声 + 四川语气词，系统 TTS 无四川话方言）
+    // MARK: - 语音（讯飞在线四川话女声优先，失败自动降级系统 TTS 川味甜妹）
 
-    func speak(_ text: String) {
+    /// 讯飞开放平台「摩卫士」应用三值（v1.52 用户实名认证后提供，可被 UserDefaults 覆盖）
+    static let xfAppIdDefault = "5ad38c61"
+    static let xfApiKeyDefault = "65eb7d0144b094c4c34be0a1a942f1a5"
+    static let xfApiSecretDefault = "MGI5M2YzOGM3ZDRjNTAyYmM2YWQ1ZDY0"
+    var xfAppId: String { UserDefaults.standard.string(forKey: "xfAppId") ?? Self.xfAppIdDefault }
+    var xfApiKey: String { UserDefaults.standard.string(forKey: "xfApiKey") ?? Self.xfApiKeyDefault }
+    var xfApiSecret: String { UserDefaults.standard.string(forKey: "xfApiSecret") ?? Self.xfApiSecretDefault }
+    /// 音色：xiaorong=四川话女声(小蓉) / xiaoyan=普通话女声(晓颜) / yezi=四川话女声(叶子)
+    var xfVcn: String { UserDefaults.standard.string(forKey: "xfVcn") ?? "xiaorong" }
+    /// 讯飞引擎开关（默认开；设置为 false 用系统语音）
+    var xfEnabled: Bool { UserDefaults.standard.object(forKey: "xfEnabled") as? Bool ?? true }
+    /// 当前音色显示名
+    var xfVcnName: String {
+        switch xfVcn {
+        case "xiaoyan": return "普通话女声·晓颜"
+        case "yezi": return "四川话女声·叶子"
+        default: return "四川话女声·小蓉"
+        }
+    }
+
+    /// 语音播报开关（高德式导航静音按钮）
+    func toggleVoice() {
+        let muted = !voiceMuted
+        UserDefaults.standard.set(muted, forKey: "voiceMuted")
+        if muted {
+            speech.stopSpeaking(at: .immediate)
+            xfPlayer?.stop()
+        } else {
+            speak("语音播报已开启")
+        }
+    }
+
+    private func speakSystem(_ text: String) {
+        // 官方语音包：优先系统最高质量中文语音
         let u = AVSpeechUtterance(string: sweetSichuan(text))
-        u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language == "zh-CN" }
+        u.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue }
+            ?? AVSpeechSynthesisVoice(language: "zh-CN")
         u.rate = 0.48          // 稍慢，更柔
         u.pitchMultiplier = 1.18 // 音调偏高，更甜
         speech.speak(u)
+    }
+
+    /// 讯飞在线语音合成（wss WebSocket + HMAC-SHA256 鉴权，mp3 分片返回）
+    /// v1.52 fix：HTTP POST 调 wss 被网关 403 → NWConnection WebSocket；失败降级系统语音
+    private func speakXf(_ text: String) {
+        let appId = xfAppId, apiKey = xfApiKey, apiSecret = xfApiSecret
+        guard !appId.isEmpty, !apiKey.isEmpty, !apiSecret.isEmpty else {
+            speakSystem(text); return
+        }
+        xfSeq += 1
+        let mySeq = xfSeq
+        let vcn = xfVcn
+        let t = (vcn != "xiaoyan") ? sweetSichuan(text) : text
+
+        // HMAC-SHA256 鉴权头（wss 握手携带 Host/Date/Authorization）
+        let host = "tts-api.xfyun.cn"
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(identifier: "GMT")
+        df.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        let date = df.string(from: Date())
+        let origin = "host: \(host)\ndate: \(date)\nGET /v2/tts HTTP/1.1"
+        let key = SymmetricKey(data: Data(apiSecret.utf8))
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(origin.utf8), using: key)
+        let sig = Data(mac).base64EncodedString()
+        let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(sig)\""
+        let auth = Data(authOrigin.utf8).base64EncodedString()
+
+        // WebSocket 连接参数（API 要求 (name, value) 元组数组）
+        let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.setAdditionalHeaders([
+            ("Host", host),
+            ("Date", date),
+            ("Authorization", auth)
+        ])
+        wsOptions.autoReplyPing = true
+        let params = NWParameters.tls
+        params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+        params.allowLocalEndpointReuse = false
+
+        xfConn?.cancel()
+        let conn = NWConnection(host: NWEndpoint.Host(host), port: 443, using: params)
+        xfConn = conn
+
+        let f1: [String: Any] = [
+            "common": ["app_id": appId],
+            "business": ["aue": "lame", "sfl": 1, "auf": "audio/L16;rate=16000",
+                         "vcn": vcn, "speed": 55, "volume": 60, "pitch": 50,
+                         "tte": "UTF8", "rdn": 0]
+        ]
+        let f2: [String: Any] = [
+            "data": ["status": 2, "text": Data(t.utf8).base64EncodedString()]
+        ]
+        guard let j1 = try? JSONSerialization.data(withJSONObject: f1),
+              let j2 = try? JSONSerialization.data(withJSONObject: f2) else {
+            speakSystem(text); return
+        }
+
+        // 局部状态（非隔离变量，回调闭包捕获）
+        var audio = Data()
+        var done = false
+        var failed = false
+        let finishAudio = { (buf: Data) in
+            if !buf.isEmpty && !done {
+                done = true
+                Task { @MainActor [weak self] in
+                    guard let self = self, mySeq == self.xfSeq else { return }
+                    if !self.playXf(buf) {
+                        self.xfDiag = "讯飞音频解析失败，已降级系统语音"
+                        self.speakSystem(text)
+                    }
+                }
+            }
+        }
+        let fallback = { (diag: String) in
+            if !failed {
+                failed = true
+                conn.cancel()
+                Task { @MainActor [weak self] in
+                    guard let self = self, mySeq == self.xfSeq else { return }
+                    self.xfDiag = diag
+                    self.speakSystem(text)
+                }
+            }
+        }
+
+        conn.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                conn.send(content: j1, completion: .contentProcessed { _ in
+                    conn.send(content: j2, completion: .contentProcessed { _ in })
+                })
+            case .failed:
+                fallback("讯飞连接失败（服务未开通或 Key 错误）")
+            case .cancelled:
+                finishAudio(audio)
+            default:
+                break
+            }
+        }
+
+        func receive() {
+            conn.receiveMessage { data, context, isComplete, error in
+                if let d = data {
+                    let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata)?.opcode
+                    if op == .binary {
+                        audio.append(d)
+                    } else if op == .text {
+                        if let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                            let code = obj["code"] as? Int ?? 0
+                            if code != 0 {
+                                if code == 11200 {
+                                    fallback("音色未授权（11200），请在控制台发音人授权管理添加试用")
+                                } else {
+                                    fallback("讯飞错误码 \(code)")
+                                }
+                                return
+                            }
+                            let st = (obj["data"] as? [String: Any])?["status"] as? Int ?? 0
+                            if st == 2 { finishAudio(audio); conn.cancel() }
+                        }
+                    }
+                }
+                if error != nil || isComplete || done {
+                    finishAudio(audio)
+                } else {
+                    receive()
+                }
+            }
+        }
+        receive()
+        conn.start(queue: .global(qos: .userInitiated))
+    }
+
+    /// 播放讯飞返回的 mp3
+    @discardableResult
+    private func playXf(_ data: Data) -> Bool {
+        xfPlayer?.stop()
+        guard let p = try? AVAudioPlayer(data: data) else { return false }
+        p.volume = 1.0
+        p.prepareToPlay()
+        p.play()
+        xfPlayer = p
+        return true
+    }
+
+    func speak(_ text: String, priority: Int = 0) {
+        guard !voiceMuted else { return }
+        let now = Date()
+        // 播报去重：2.5 秒内不连续播报（转向近提示/到达/超速高优先级可打断）
+        if now.timeIntervalSince(lastSpeakAt) < 2.5 && priority <= lastSpeakPriority {
+            if now.timeIntervalSince(lastSpeakAt) < 1.2 || lastSpeakText == text { return }
+        }
+        if priority > lastSpeakPriority && now.timeIntervalSince(lastSpeakAt) < 6 {
+            speech.stopSpeaking(at: .immediate)
+            xfPlayer?.stop()
+        }
+        lastSpeakAt = now
+        lastSpeakPriority = priority
+        lastSpeakText = text
+        if xfEnabled {
+            speakXf(text)
+        } else {
+            speakSystem(text)
+        }
     }
 
     /// 川味语气词化（先长短语后短词，避免嵌套替换错乱）
@@ -910,6 +1140,47 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             s = s.replacingOccurrences(of: k, with: v)
         }
         return s
+    }
+
+    // MARK: - v1.61 恢复：实时路况（高德交通态势，右上"路况"按钮）
+
+    func fetchTraffic(near center: CLLocationCoordinate2D, spanMeters: Double) async {
+        guard !amapKey.isEmpty else { return }
+        let dLat = spanMeters / 111000.0
+        let dLon = spanMeters / (111000.0 * cos(center.latitude * .pi / 180))
+        let (gLat, gLon) = CoordConv.wgs2gcj(center.latitude, center.longitude)
+        let rect = String(format: "%.5f,%.5f;%.5f,%.5f",
+                          gLon - dLon, gLat - dLat, gLon + dLon, gLat + dLat)
+        guard let url = URL(string:
+            "https://restapi.amap.com/v3/traffic/status/rectangle?key=\(amapKey)&rectangle=\(rect)&level=6&extensions=base"
+        ) else { return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let traffic = root["trafficinfo"] as? [String: Any],
+              let roads = traffic["roads"] as? [[String: Any]]
+        else { return }
+        var out: [TrafficRoad] = []
+        for r in roads {
+            guard let status = r["status"] as? String,
+                  let poly = r["polyline"] as? String else { continue }
+            var pts: [CLLocationCoordinate2D] = []
+            for pair in poly.split(separator: ";") {
+                let ll = pair.split(separator: ",")
+                guard ll.count == 2, let lon = Double(ll[0]), let lat = Double(ll[1]) else { continue }
+                let w = CoordConv.gcj2wgs(lat, lon)
+                pts.append(CLLocationCoordinate2D(latitude: w.0, longitude: w.1))
+            }
+            guard pts.count >= 2 else { continue }
+            out.append(TrafficRoad(
+                name: r["name"] as? String ?? "",
+                status: Int(status) ?? 1,
+                coords: pts))
+        }
+        if !out.isEmpty {
+            trafficRoads = out
+        }
     }
 
     // MARK: - 本地通知
