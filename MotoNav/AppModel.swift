@@ -60,10 +60,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 合肥小区/商铺联想库（内置 + 在线刷新）
     @Published var hfPois: [String] = []
 
-    /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
-    @Published var amapKey: String = "" {
+    /// 高德开放平台 Web 服务 Key（v1.46 起内置官方Key，开箱即用；可在 ⋯ 菜单「高德搜索Key」修改）
+    @Published var amapKey: String = AppModel.builtinAmapKey {
         didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
     }
+    /// 内置高德 Web 服务 Key（用户提供，供搜索联想/路线规划/点位校准使用）
+    static let builtinAmapKey = "9d596e8799cf037080e4d6ab8764c246"
 
     /// 高德「输入提示」联想候选（名称 + 副标题 + 精确坐标）
     struct AmapTip: Identifiable {
@@ -202,10 +204,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private override init() {
         super.init()
-        amapKey = UserDefaults.standard.string(forKey: "amapKey") ?? ""
+        if let saved = UserDefaults.standard.string(forKey: "amapKey"), !saved.isEmpty {
+            amapKey = saved
+        }
         lm.delegate = self
         lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         pois = repo.load()
+        applyCalibrations()
         loadHistory()
         loadHefeiPois()
         loadFavorites()
@@ -789,6 +794,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
             checkNavigation(at: coord)
+            // v1.46：首次定位后，用高德逆地理校准附近抓拍点（吸附到最近道路/路口）
+            if !UserDefaults.standard.bool(forKey: "calibratedV146") {
+                calibrateNearbyPois()
+            }
         }
     }
 
@@ -1109,6 +1118,91 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    // MARK: - 高德点位校准（v1.46）
+
+    /// 逆地理编码：把坐标吸附到最近道路/路口（抓拍点常因数据源偏移偏离道路中心线）
+    private func regeoSnap(lat: Double, lon: Double) async -> (Double, Double)? {
+        guard !amapKey.isEmpty else { return nil }
+        guard let url = URL(string:
+            "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(lon),\(lat)"
+        ) else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 10
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let regeo = root["regeocode"] as? [String: Any]
+        else { return nil }
+        // 优先路口（抓拍多在路口），其次最近道路
+        if let inters = regeo["roadinters"] as? [[String: Any]],
+           let inter = inters.first,
+           let loc = inter["location"] as? String {
+            let parts = loc.split(separator: ",").compactMap { Double($0) }
+            if parts.count == 2 { return (parts[1], parts[0]) }
+        }
+        if let roads = regeo["roads"] as? [[String: Any]], !roads.isEmpty {
+            // 取 distance 最近的（regeo 已按距离排序）
+            let road = roads[0]
+            if let loc = road["location"] as? String {
+                let parts = loc.split(separator: ",").compactMap { Double($0) }
+                if parts.count == 2 { return (parts[1], parts[0]) }
+            }
+        }
+        return nil
+    }
+
+    /// 启动后一次性校准 3km 内抓拍点（QPS 限速 0.4s/个，结果持久化防版本升级覆盖）
+    func calibrateNearbyPois() {
+        Task {
+            guard let cur = currentLocation else { return }
+            let calibratedKey = "calibratedV146"
+            UserDefaults.standard.set(true, forKey: calibratedKey)
+            var updated = 0
+            for p in pois where p.isCamera && p.id < 1000 {
+                let d = hypot(p.lat - cur.latitude, p.lon - cur.longitude) * 111000
+                guard d < 3000 else { continue }
+                if UserDefaults.standard.string(forKey: "calib_v146_\(p.id)") != nil { continue }
+                if let (nlat, nlon) = await regeoSnap(lat: p.lat, lon: p.lon) {
+                    // 位移超过 80m 才视为校准（避免微小抖动）
+                    if hypot(nlat - p.lat, nlon - p.lon) * 111000 > 80 {
+                        UserDefaults.standard.set("\(nlat),\(nlon)", forKey: "calib_v146_\(p.id)")
+                        updated += 1
+                    } else {
+                        UserDefaults.standard.set("\(p.lat),\(p.lon)", forKey: "calib_v146_\(p.id)")
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 400_000_000) // 高德 QPS 3 限速
+            }
+            if updated > 0 {
+                applyCalibrations()
+                status = "已用高德校准 \(updated) 个附近抓拍点（吸附到最近道路/路口）"
+            }
+        }
+    }
+
+    /// 把已校准坐标应用回当前点位（防内置点位升级被覆盖回原坐标）
+    func applyCalibrations() {
+        let def = UserDefaults.standard
+        var newList = pois
+        var changed = false
+        for i in newList.indices {
+            let p = newList[i]
+            if let s = def.string(forKey: "calib_v146_\(p.id)") {
+                let parts = s.split(separator: ",").compactMap { Double($0) }
+                if parts.count == 2, parts[0] != p.lat || parts[1] != p.lon {
+                    newList[i] = Poi(id: p.id, type: p.type, name: p.name,
+                                     lat: parts[0], lon: parts[1],
+                                     radiusM: p.radiusM, enabled: p.enabled,
+                                     note: p.note, isCustom: p.isCustom)
+                    changed = true
+                }
+            }
+        }
+        if changed {
+            pois = newList
+            NotificationCenter.default.post(name: .motoPoisChanged, object: nil)
+        }
+    }
+
     /// 右下角定位按钮：地图回中
     func centerOnUser() {
         locateTick += 1
@@ -1131,7 +1225,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let e = await eSnap
             let from2 = from
             let end2 = e ?? rawEnd
-            let r = await RouteFetcher.fetch(from: from2, to: end2)
+            let r = await RouteFetcher.fetch(from: from2, to: end2, amapKey: amapKey)
             if let r = r {
                 route = r.points
                 routeTurns = r.turns
@@ -1164,7 +1258,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             // 目的地未变才替换（用户可能已改目标）
             guard self.destName == name, self.destLat == lat, self.destLon == lon else { return }
-            let retry = await RouteFetcher.fetchAll(from: from, to: to)
+            let retry = await RouteFetcher.fetchAll(from: from, to: to, amapKey: amapKey)
             if retry.isEmpty { return }
             let list = retry.map { c -> RouteChoice in
                 let n = nearbyPoisOnRoute(c.points).count
@@ -1219,7 +1313,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let e = await eSnap
             let from2 = from
             let end2 = e ?? rawEnd
-            let choices = await RouteFetcher.fetchAll(from: from2, to: end2)
+            let choices = await RouteFetcher.fetchAll(from: from2, to: end2, amapKey: amapKey)
             if choices.isEmpty {
                 fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             } else {
@@ -1374,7 +1468,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
             if let r = await RouteFetcher.fetch(
                 from: from2,
-                to: end2) {
+                to: end2,
+                amapKey: amapKey) {
                 route = r.points
                 routeTurns = r.turns
                 routeDistanceM = r.distanceM

@@ -7,7 +7,6 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var searchText = ""
-    @State private var suggestions: [String] = []
     @State private var showSuggestions = false
     /// 高德「输入提示」联想候选（填写高德 Key 后启用，点击直接定位跳转）
     @State private var onlineTips: [AppModel.AmapTip] = []
@@ -912,14 +911,11 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
-    /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
+    /// 目的地搜索框（高德式搜索：输入即实时高德 POI 联想；导航时被退出按钮替代）
     private var searchBar: some View {
         VStack(spacing: 4) {
             searchInputRow
-            if showSuggestions && !suggestions.isEmpty {
-                suggestionsList
-            }
-            // 高德 POI 联想候选（填写高德 Key 后显示，点击直接定位）
+            // 高德 POI 联想候选（v1.46：联想只使用高德 Web，点击直接定位）
             if showSuggestions && !onlineTips.isEmpty {
                 onlineTipsList
             }
@@ -939,24 +935,21 @@ struct ContentView: View {
                 .submitLabel(.search)
                 .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
                 .onChange(of: searchText) { newValue in
-                    suggestions = model.searchSuggestions(newValue).map { displayName($0) }
                     showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
-                    // 高德搜索逻辑：填写 Key 后输入即实时返回 POI 联想候选（带坐标，点击直接定位）
                     onlineTips = []
-                    if !model.amapKey.isEmpty {
-                        let q = newValue.trimmingCharacters(in: .whitespaces)
-                        guard !q.isEmpty else { return }
-                        Task {
-                            let tips = await model.amapInputTips(q)
-                            if searchText == newValue { onlineTips = tips }
-                        }
+                    let q = newValue.trimmingCharacters(in: .whitespaces)
+                    guard !q.isEmpty else { return }
+                    // v1.46：搜索联想只使用高德 Web「输入提示」，返回真实 POI 候选（带坐标，点击直接定位）
+                    Task {
+                        let tips = await model.amapInputTips(q)
+                        if searchText == newValue { onlineTips = tips }
                     }
                 }
             // 一键清除输入内容（有内容时显示）
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
-                    suggestions = []
+                    onlineTips = []
                     showSuggestions = false
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -996,22 +989,6 @@ struct ContentView: View {
                 }
         )
         .padding(.vertical, 6)
-    }
-
-    /// 联想下拉列表
-    private var suggestionsList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(suggestions.enumerated()), id: \.offset) { idx, s in
-                    suggestionButton(idx, s)
-                }
-            }
-        }
-        .frame(maxHeight: 200)
-        .background(.bar)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
-        .padding(.horizontal)
     }
 
     /// 高德联想候选列表（名称 + 地址副标题 + 定位图标；点击直接定位跳转，高德式搜索体验）
@@ -1067,51 +1044,6 @@ struct ContentView: View {
         .padding(.horizontal)
     }
 
-    /// 联想条目按钮（含分隔线）
-    private func suggestionButton(_ idx: Int, _ s: String) -> some View {
-        VStack(spacing: 0) {
-            Button {
-                searchFocused = false
-                showSuggestions = false
-                if s.hasPrefix("🔍") {
-                    let q = extractOnlineQuery(s)
-                    doSearch(q)
-                } else {
-                    searchText = s
-                    doSearch()
-                }
-            } label: {
-                suggestionRow(s)
-            }
-            .buttonStyle(.plain)
-            Divider()
-        }
-    }
-
-    /// 联想条目行（收藏 ⭐ 优先展示，点击用原名）
-    private func suggestionRow(_ s: String) -> some View {
-        let isFav = !s.hasPrefix("🔍") && model.favorites.values.contains(s)
-        return HStack {
-            Image(systemName: suggestionIcon(s))
-                .foregroundStyle(suggestionIconColor(s))
-            Text(isFav ? "⭐ \(s)" : s).foregroundStyle(.primary)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-    }
-
-    private func suggestionIcon(_ s: String) -> String {
-        if s.hasPrefix("🔍") { return "magnifyingglass" }
-        return "mappin.and.ellipse"
-    }
-
-    private func suggestionIconColor(_ s: String) -> Color {
-        if s.hasPrefix("🔍") { return .orange }
-        return .secondary
-    }
-
     /// 历史搜索记录（横滑标签，地址简化显示）
     private var historyBar: some View {
         Group {
@@ -1160,14 +1092,6 @@ struct ContentView: View {
             if d < bestD { bestD = d; best = pl }
         }
         return best?.name ?? "地图选点"
-    }
-
-    /// 从「🔍 在线搜索「XX」」提取 XX
-    private func extractOnlineQuery(_ s: String) -> String {
-        if let start = s.firstIndex(of: "「"), let end = s.lastIndex(of: "」"), start < end {
-            return String(s[s.index(after: start)..<end])
-        }
-        return s
     }
 
     /// v1.13：搜索学校/医院/加油站 → 附近10公里类别点位高亮+直接导航；
