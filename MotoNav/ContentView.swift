@@ -56,6 +56,8 @@ struct ContentView: View {
     @State private var mapLoadFailed = false
     @State private var mapLoadError = ""
     @State private var reloadTick = 0
+    /// v1.70：加载失败自动重试一次（避免弱网/瞬时失败直接弹条）
+    @State private var mapRetried = false
 
     var body: some View {
         ZStack {
