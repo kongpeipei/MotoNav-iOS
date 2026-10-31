@@ -44,6 +44,12 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
     /// 轻点地图空白处选点（显示"导航到这里"）
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+    /// v1.49 图层类型（标准/卫星）
+    var mapType: MKMapType = .standard
+    /// v1.49 实时路况线（高德红黄绿）
+    var trafficRoads: [TrafficRoad] = []
+    /// v1.49 历史轨迹（灰色虚线，回放）
+    var tripTrackLine: [CLLocationCoordinate2D] = []
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -71,6 +77,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
+        // v1.49 图层切换（标准/卫星）
+        if map.mapType != mapType {
+            map.mapType = mapType
+        }
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
         if locateTick != context.coordinator.lastLocateTick {
             context.coordinator.lastLocateTick = locateTick
@@ -210,6 +220,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
+        // v1.49 路况线（先画，路线在其上层）
+        context.coordinator.trafficPolylines = []
+        for r in trafficRoads where r.coords.count > 1 {
+            let p = MKPolyline(coordinates: r.coords, count: r.coords.count)
+            context.coordinator.trafficPolylines.append((p, r.status))
+            map.addOverlay(p)
+        }
+        // v1.49 历史轨迹回放（灰色虚线，最底层）
+        if tripTrackLine.count > 1 {
+            let tp = MKPolyline(coordinates: tripTrackLine, count: tripTrackLine.count)
+            context.coordinator.tripPolyline = tp
+            map.addOverlay(tp)
+        }
         if route.count > 1 {
             if navigating {
                 // 导航中只画当前路线（草绿双层，高德导航推荐色）
@@ -337,6 +360,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var mainPolyline: MKPolyline?
         /// 备选方案折线（浅绿色虚线，renderer 区分）
         var alternatePolylines: [MKPolyline] = []
+        /// v1.49 路况折线（(polyline, status)）
+        var trafficPolylines: [(MKPolyline, Int)] = []
+        /// v1.49 历史轨迹折线（灰色虚线）
+        var tripPolyline: MKPolyline?
         /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
         var userMoved = false
         /// 导航跟随触发记忆
@@ -546,7 +573,21 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
-                if poly === self.underPolyline {
+                // v1.49 历史轨迹：灰色虚线（最底）
+                if poly === self.tripPolyline {
+                    r.strokeColor = UIColor.gray.withAlphaComponent(0.8)
+                    r.lineWidth = 5
+                    r.lineDashPattern = [10, 8]
+                } else if let t = self.trafficPolylines.first(where: { $0.0 === poly }) {
+                    // v1.49 路况线：1绿 2黄 3橙 4红（高德路况配色）
+                    switch t.1 {
+                    case 1: r.strokeColor = UIColor(red: 0.25, green: 0.78, blue: 0.35, alpha: 0.75)
+                    case 2: r.strokeColor = UIColor(red: 0.95, green: 0.80, blue: 0.20, alpha: 0.80)
+                    case 3: r.strokeColor = UIColor(red: 1.0, green: 0.55, blue: 0.15, alpha: 0.85)
+                    default: r.strokeColor = UIColor(red: 0.92, green: 0.20, blue: 0.20, alpha: 0.9)
+                    }
+                    r.lineWidth = 5
+                } else if poly === self.underPolyline {
                     // 白色描边底层（细，路线更贴合道路）
                     r.strokeColor = .white
                     r.lineWidth = 7

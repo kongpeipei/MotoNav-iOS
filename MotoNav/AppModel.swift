@@ -12,6 +12,28 @@ extension Notification.Name {
     static let motoPoisChanged = Notification.Name("motoPoisChanged")
 }
 
+/// 实时路况路段（高德交通态势，status: 1畅通 2缓行 3拥堵 4严重拥堵）
+struct TrafficRoad {
+    let name: String
+    let status: Int
+    let coords: [CLLocationCoordinate2D]
+}
+
+/// CLLocationCoordinate2D Codable（轨迹历史持久化）
+extension CLLocationCoordinate2D: Codable {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(latitude: try c.decode(Double.self, forKey: .latitude),
+                  longitude: try c.decode(Double.self, forKey: .longitude))
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(latitude, forKey: .latitude)
+        try c.encode(longitude, forKey: .longitude)
+    }
+    enum CodingKeys: String, CodingKey { case latitude, longitude }
+}
+
 @MainActor
 final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = AppModel()
@@ -138,6 +160,44 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 实时速度（m/s，来自定位，导航卡显示 km/h）
     @Published var currentSpeed = 0.0
 
+    // MARK: - v1.49 摩托车模式 / 超速提醒 / 实时路况 / 轨迹 / 附近油站
+
+    /// 摩托车专属模式（开启后：路线经过限行/禁摩点前置提醒，高德摩托导航式）
+    @Published var motoMode: Bool {
+        didSet { UserDefaults.standard.set(motoMode, forKey: "moto_mode") }
+    }
+    /// 超速提醒阈值 km/h（0 = 关闭）
+    @Published var speedLimit: Int {
+        didSet { UserDefaults.standard.set(speedLimit, forKey: "speed_limit") }
+    }
+    /// 实时路况（高德交通态势 rectangle，画红黄绿路况线）
+    @Published var trafficRoads: [TrafficRoad] = []
+    /// 导航中前方最近加油站/充电桩（轻提示，导航卡下小字）
+    @Published var nearStationText = ""
+    /// 导航轨迹记录（每 ~5 秒一个点）
+    @Published var tripTrack: [CLLocationCoordinate2D] = []
+    private var lastTrackAt = Date(timeIntervalSince1970: 0)
+    private var lastStationCheck = Date(timeIntervalSince1970: 0)
+    /// 轨迹历史（UserDefaults JSON，最多 20 条）
+    struct TripRecord: Codable {
+        let name: String
+        let date: String
+        let distanceM: Int
+        let durationS: Int
+        let points: [CLLocationCoordinate2D]
+    }
+    private let tripTracksKey = "trip_tracks"
+    var tripTracks: [TripRecord] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: tripTracksKey),
+                  let list = try? JSONDecoder().decode([TripRecord].self, from: data)
+            else { return [] }
+            return list
+        }
+    }
+    /// 历史轨迹是否已加入地图（当前显示的轨迹索引）
+    @Published var shownTripIdx = -1
+
     private let historyKey = "search_history"
     private let historyLimit = 10
     private let hfKey = "hf_pois"
@@ -214,6 +274,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private override init() {
+        self.motoMode = UserDefaults.standard.object(forKey: "moto_mode") as? Bool ?? true
+        self.speedLimit = UserDefaults.standard.object(forKey: "speed_limit") as? Int ?? 80
         super.init()
         if let saved = UserDefaults.standard.string(forKey: "amapKey"), !saved.isEmpty {
             amapKey = saved
@@ -877,6 +939,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
             checkNavigation(at: coord)
+            // v1.49：导航轨迹记录（每 5 秒一个点）
+            if navigating {
+                let now = Date()
+                if now.timeIntervalSince(lastTrackAt) > 5 {
+                    lastTrackAt = now
+                    tripTrack.append(coord)
+                }
+            }
             // v1.47：节流更新当前道路名（高德逆地理，45秒/300米）
             await maybeUpdateCurrentRoad()
             // v1.46：首次定位后，用高德逆地理校准附近抓拍点（吸附到最近道路/路口）
@@ -919,15 +989,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
             if let p = nearest {
                 let stage = alertStage[p.id] ?? 0
-                if nd <= 500 && stage < 1 {
+                // v1.49 摩托车模式：限行/禁摩点 800 米前置强提醒（高德摩托导航式）
+                if motoMode, p.type == .RESTRICTION, nd <= 800, stage < 1 {
+                    alertStage[p.id] = 1
+                    status = "⚠️ 前方约\(Int(nd))米进入限行/禁摩区域：\(p.name)，注意绕行"
+                    speak("前方约\(Int(nd))米进入限行禁摩区域，\(p.name)，请注意绕行", priority: 1)
+                } else if nd <= 500 && stage < 1 {
                     alertStage[p.id] = 1
                     status = "前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意"
-                    speak("前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意")
+                    speak("前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意", priority: 0)
                     updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
                 } else if nd <= 300 && stage < 2 {
                     alertStage[p.id] = 2
                     status = "接近\(p.type.voicePrefix)点位：\(p.name)，请减速"
-                    speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速")
+                    speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速", priority: 0)
                     updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
                 } else if nd <= p.radiusM && stage < 3 {
                     alertStage[p.id] = 3
@@ -955,7 +1030,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let msg = "前方约\(Int(distance))米\(p.type.voicePrefix)，\(p.name)，请提前减速、注意信号灯"
         status = msg
         selectedPoi = p
-        speak(msg)
+        speak(msg, priority: 0)
         postLocalNotification(p, distance: distance)
         NotificationCenter.default.post(name: .motoAlert, object: p)
     }
@@ -974,6 +1049,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 导航语音播报开关（v1.48 高德式静音按钮）
     @Published var voiceMuted = false
+    /// v1.49 播报去重状态
+    private var lastSpeakAt = Date(timeIntervalSince1970: 0)
+    private var lastSpeakPriority = 0
+    private var lastSpeakText = ""
     func toggleVoice() {
         voiceMuted.toggle()
         if !voiceMuted {
@@ -983,10 +1062,25 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func speak(_ text: String) {
+    func speak(_ text: String, priority: Int = 0) {
         guard !voiceMuted else { return }
+        let now = Date()
+        // v1.49 播报去重：2.5 秒内不连续播报（转向近提示/到达/超速高优先级可打断）
+        if now.timeIntervalSince(lastSpeakAt) < 2.5 && priority <= lastSpeakPriority {
+            if now.timeIntervalSince(lastSpeakAt) < 1.2 || lastSpeakText == text { return }
+        }
+        if priority > lastSpeakPriority && now.timeIntervalSince(lastSpeakAt) < 6 {
+            speech.stopSpeaking(at: .immediate)
+        }
+        lastSpeakAt = now
+        lastSpeakPriority = priority
+        lastSpeakText = text
+        // v1.49 官方语音包：优先系统最高质量中文语音（iOS 增强音色）
         let u = AVSpeechUtterance(string: sweetSichuan(text))
-        u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language == "zh-CN" }
+        u.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue }
+            ?? AVSpeechSynthesisVoice(language: "zh-CN")
         u.rate = 0.48          // 稍慢，更柔
         u.pitchMultiplier = 1.18 // 音调偏高，更甜
         speech.speak(u)
@@ -1249,11 +1343,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
               let name = first["name"] as? String, !name.isEmpty
         else { return }
         currentRoad = name
-        // v1.48：导航中换路时语音播报（"沿XX路行驶"），20 秒内不重复吵
+        // v1.48/v1.49：导航中换路播报"沿XX路行驶"——仅当 900 米内无转向时播，避免与转向播报重复
         if navigating, name != lastRoadSpokenName, now.timeIntervalSince(lastRoadSpokenAt) > 20 {
-            lastRoadSpokenName = name
-            lastRoadSpokenAt = now
-            speak("沿\(name)行驶")
+            let hasSoonTurn = routeTurns.contains { distanceM(loc, $0.coordinate) < 900 }
+            if !hasSoonTurn {
+                lastRoadSpokenName = name
+                lastRoadSpokenAt = now
+                speak("沿\(name)行驶", priority: 0)
+            }
         }
     }
 
@@ -1552,6 +1649,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             navigating = false
             UIApplication.shared.isIdleTimerDisabled = false // 恢复自动锁屏
             navigateFollowTick += 1
+            saveTripTrack()
             finishTrip()
             endLiveActivity()
             speak("导航结束")
@@ -1565,8 +1663,21 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             alertStage = [:]
             offRouteCount = 0
             arriveAnnounced = false
+            tripTrack = []
+            lastTrackAt = Date(timeIntervalSince1970: 0)
+            shownTripIdx = -1
             startMonitoring()
             startLiveActivity(destName: destName)
+            // v1.49 摩托车模式：路线经过限行/禁摩点 → 开始前提醒
+            if motoMode {
+                let forbidden = pois.filter { p in
+                    p.type == .RESTRICTION && p.enabled && route.contains { distanceM($0, p.coordinate) < 250 }
+                }
+                if !forbidden.isEmpty {
+                    speak("当前路线经过\(forbidden.count)处限行禁摩区域，请注意绕行", priority: 1)
+                    status = "⚠️ 路线经过\(forbidden.count)处限行/禁摩区域，请注意绕行"
+                }
+            }
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
         }
@@ -1617,6 +1728,105 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         navStart = nil
     }
 
+    /// 保存本次导航轨迹（v1.49，最近 20 条）
+    private func saveTripTrack() {
+        guard tripTrack.count >= 3 else { return }
+        let date = DateFormatter()
+        date.dateFormat = "MM-dd HH:mm"
+        let rec = TripRecord(
+            name: destName.isEmpty ? "骑行轨迹" : destName,
+            date: date.string(from: Date()),
+            distanceM: routeDistanceM,
+            durationS: Int(Date().timeIntervalSince(navStart ?? Date())) ,
+            points: tripTrack)
+        var list = tripTracks
+        list.insert(rec, at: 0)
+        if list.count > 20 { list = Array(list.prefix(20)) }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: tripTracksKey)
+        }
+    }
+
+    func deleteTripTrack(_ idx: Int) {
+        var list = tripTracks
+        if idx >= 0 && idx < list.count { list.remove(at: idx) }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: tripTracksKey)
+        }
+        if shownTripIdx == idx { shownTripIdx = -1 }
+    }
+
+    // MARK: - v1.49 实时路况（高德交通态势）
+
+    /// 拉取当前地图视野路况（rectangle 区域，返回红/黄/绿路况线；个人 Key 可用，失败静默）
+    func fetchTraffic(near center: CLLocationCoordinate2D, spanMeters: Double) async {
+        guard !amapKey.isEmpty else { return }
+        let dLat = spanMeters / 111000.0
+        let dLon = spanMeters / (111000.0 * cos(center.latitude * .pi / 180))
+        let (gLat, gLon) = CoordConv.wgs2gcj(center.latitude, center.longitude)
+        let rect = String(format: "%.5f,%.5f;%.5f,%.5f",
+                          gLon - dLon, gLat - dLat, gLon + dLon, gLat + dLat)
+        guard let url = URL(string:
+            "https://restapi.amap.com/v3/traffic/status/rectangle?key=\(amapKey)&rectangle=\(rect)&level=6&extensions=base"
+        ) else { return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let traffic = root["trafficinfo"] as? [String: Any],
+              let roads = traffic["roads"] as? [[String: Any]]
+        else { return }
+        var out: [TrafficRoad] = []
+        for r in roads {
+            guard let status = r["status"] as? String,
+                  let poly = r["polyline"] as? String else { continue }
+            var pts: [CLLocationCoordinate2D] = []
+            for pair in poly.split(separator: ";") {
+                let ll = pair.split(separator: ",")
+                guard ll.count == 2, let lon = Double(ll[0]), let lat = Double(ll[1]) else { continue }
+                let w = CoordConv.gcj2wgs(lat, lon)
+                pts.append(CLLocationCoordinate2D(latitude: w.0, longitude: w.1))
+            }
+            guard pts.count >= 2 else { continue }
+            out.append(TrafficRoad(
+                name: r["name"] as? String ?? "",
+                status: Int(status) ?? 1,
+                coords: pts))
+        }
+        if !out.isEmpty {
+            trafficRoads = out
+        }
+    }
+
+    // MARK: - v1.49 超速提醒 / 前方油站充电
+
+    private var lastSpeedAnnounceAt = Date(timeIntervalSince1970: 0)
+
+    /// 导航中超速语音提醒（60 秒节流；阈值 0 = 关闭）
+    func checkSpeeding(at coord: CLLocationCoordinate2D) {
+        guard navigating, speedLimit > 0 else { return }
+        let kph = currentSpeed * 3.6
+        guard kph > Double(speedLimit) + 5 else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastSpeedAnnounceAt) > 60 else { return }
+        lastSpeedAnnounceAt = now
+        speak("您已超速，当前时速\(Int(kph))公里，请减速", priority: 1)
+        status = "⚠️ 超速：当前 \(Int(kph)) km/h（限 \(speedLimit)）"
+    }
+
+    /// 导航中每 10 分钟检查前方 3km 加油站/充电桩（轻提示）
+    func checkNearbyStation() async {
+        guard navigating, !amapKey.isEmpty, let loc = currentLocation else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastStationCheck) > 600 else { return }
+        lastStationCheck = now
+        let pois = await amapAround(lat: loc.latitude, lon: loc.longitude, keyword: "加油站")
+        if pois.isEmpty { return }
+        if let s = pois.first {
+            nearStationText = "前方3km内加油站：\(s.name)（距\(s.distance)m）"
+        }
+    }
+
     /// 偏离路线检测：距路线折线 >80m 连续 3 次且距上次重规划 >25s → 自动重规划并播报
     private func rerouteIfOffTrack(at coord: CLLocationCoordinate2D) {
         guard navigating, route.count >= 2 else { offRouteCount = 0; return }
@@ -1657,6 +1867,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func checkNavigation(at coord: CLLocationCoordinate2D) {
         guard navigating else { return }
         rerouteIfOffTrack(at: coord)
+        // v1.49 超速提醒 + 前方油站/充电桩检查（节流）
+        checkSpeeding(at: coord)
+        Task { await checkNearbyStation() }
         // 到达判定用路线终点（吸附后的"最近出入口"），与路线绘制一致
         let toDest: Double
         if let last = route.last {
@@ -1665,7 +1878,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             toDest = distanceM(coord, CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
         }
         if toDest < 100 {
-            speak("已到达目的地，\(destName)，导航结束")
+            speak("已到达目的地，\(destName)，导航结束", priority: 2)
             status = "已到达：\(destName)"
             navigating = false
             UIApplication.shared.isIdleTimerDisabled = false
@@ -1678,7 +1891,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // 接近终点播报（高德式：剩余500米提示即将到达）
         if toDest < 500 && !arriveAnnounced {
             arriveAnnounced = true
-            speak("前方即将到达目的地，\(destName)")
+            speak("前方即将到达目的地，\(destName)", priority: 1)
         } else if toDest > 800 {
             arriveAnnounced = false
         }
@@ -1696,11 +1909,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if best < 900 && !farAnnounced.contains(idx) {
                 farAnnounced.insert(idx)
                 let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
-                speak("前方\(Int(best))米\(text)\(road)")
+                speak("前方\(Int(best))米\(text)\(road)", priority: 0)
                 status = "导航：前方\(Int(best))米\(text)\(road) · 余\(Int(toDest / 1000))公里"
             } else if best < 150 {
                 lastTurnSpoken = idx
-                speak("\(text)，距您\(Int(best))米")
+                speak("\(text)，距您\(Int(best))米", priority: 1)
                 status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
             }
         }

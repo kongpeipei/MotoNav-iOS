@@ -18,6 +18,14 @@ struct ContentView: View {
     @State private var aroundPois: [AppModel.AmapPoi] = []
     @State private var aroundKeyword = "加油站"
     @State private var showAround = false
+    /// v1.49：规划态搜索改用独立全屏 sheet（搜索框只在首页出现）
+    @State private var showSearchSheet = false
+    /// v1.49：图层切换（标准/卫星）
+    @State private var mapType: MKMapType = .standard
+    /// v1.49：历史轨迹列表
+    @State private var showTripList = false
+    @State private var showOfflineMapHint = false
+    @State private var trafficTimerStarted = false
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
     /// 标记该点：待标记坐标 + 备注输入
@@ -143,6 +151,37 @@ struct ContentView: View {
                     .presentationDetents([.medium, .large])
             }
         }
+        // v1.49：规划态搜索 sheet（全屏，搜索框只在首页出现）
+        .sheet(isPresented: $showSearchSheet) {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    searchInputRow
+                    if showSuggestions && !onlineTips.isEmpty {
+                        onlineTipsList
+                    }
+                    Spacer()
+                }
+                .navigationTitle("搜索目的地")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { showSearchSheet = false; dismissKeyboard() }
+                    }
+                }
+            }
+            .presentationDetents([.large])
+        }
+        // v1.49：历史轨迹列表（骑行回放）
+        .sheet(isPresented: $showTripList) {
+            tripListSheet
+                .presentationDetents([.medium, .large])
+        }
+        // v1.49：离线地图引导（iOS 17+ 系统离线地图）
+        .alert("离线地图（系统）", isPresented: $showOfflineMapHint) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text("iOS 17 及以上可在系统「设置 → 地图 → 离线地图 → 下载新地图」选择合肥下载。下载后本 App 在无网络时也能显示地图与导航底图（实时路况/在线搜索仍需网络）。")
+        }
         .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
             ForEach(PoiType.allCases.filter(\.isCamera), id: \.self) { t in
                 Button(t.label) { addPoiAtPending(type: t) }
@@ -175,10 +214,14 @@ struct ContentView: View {
         } message: { p in
             Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
         }
+        // v1.49：导航深色常亮（高德导航夜间效果），主界面跟随系统深浅色
+        .preferredColorScheme(model.navigating ? .dark : nil)
         .onAppear {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
+            // v1.49：首页定时刷新实时路况（60 秒）
+            startTrafficTimer()
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
         .onChange(of: scenePhase) { phase in
@@ -237,6 +280,10 @@ struct ContentView: View {
             navigating: model.navigating,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
+            // v1.49：图层切换 / 实时路况 / 历史轨迹回放
+            mapType: mapType,
+            trafficRoads: model.trafficRoads,
+            tripTrackLine: shownTripPoints,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -328,6 +375,39 @@ struct ContentView: View {
                 Menu {
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
+                    // v1.49：摩托车模式开关（禁摩前置提醒）
+                    Toggle(isOn: Binding(
+                        get: { model.motoMode },
+                        set: { model.motoMode = $0 }
+                    )) {
+                        Label("摩托车模式（禁摩提醒）", systemImage: "motorcycle.fill")
+                    }
+                    // v1.49：超速提醒阈值
+                    Menu {
+                        ForEach([60, 70, 80, 100], id: \.self) { v in
+                            Button(model.speedLimit == v ? "\(v) km/h ✓" : "\(v) km/h") {
+                                model.speedLimit = v
+                                model.status = "超速提醒阈值设为 \(v) km/h"
+                            }
+                        }
+                        Button(model.speedLimit == 0 ? "关闭 ✓" : "关闭") {
+                            model.speedLimit = 0
+                            model.status = "超速提醒已关闭"
+                        }
+                    } label: {
+                        Label("超速提醒：\(model.speedLimit == 0 ? "关" : "\(model.speedLimit) km/h")", systemImage: "speedometer")
+                    }
+                    // v1.49：图层切换（标准/卫星）
+                    Button(mapType == .standard ? "图层：标准（当前）" : "图层：标准") {
+                        mapType = .standard
+                    }
+                    Button(mapType == .satelliteFlyover || mapType == .satellite ? "图层：卫星（当前）" : "图层：卫星") {
+                        mapType = .satelliteFlyover
+                    }
+                    // v1.49：骑行轨迹
+                    Button("骑行轨迹（\(model.tripTracks.count)条）") { showTripList = true }
+                    // v1.49：离线地图引导
+                    Button("离线地图（系统）") { showOfflineMapHint = true }
                     Button(model.amapKey.isEmpty ? "高德搜索Key（可选，填了联想更准）" : "高德搜索Key（已启用）") {
                         amapKeyInput = model.amapKey
                         showAmapKeyInput = true
@@ -352,10 +432,11 @@ struct ContentView: View {
         VStack {
             HStack {
                 Spacer()
-                if !model.navigating, !model.routeChoices.isEmpty, !showSearchField {
+                if !model.navigating, !model.routeChoices.isEmpty {
                     Button {
                         haptic()
-                        showSearchField = true
+                        // v1.49：规划态点击顶部胶囊 → 独立搜索 sheet（主页面不再出现搜索框）
+                        showSearchSheet = true
                         searchFocused = true
                     } label: {
                         HStack(spacing: 6) {
@@ -397,8 +478,8 @@ struct ContentView: View {
                 historyBar
                 routeChoiceList
                 goHereBar
-                // 规划态隐藏底部搜索框（顶部路线胶囊提供重新搜索入口），避免底部三层拥挤
-                if showSearchField || model.routeChoices.isEmpty {
+                // v1.49：搜索框只在首页出现（无路线规划时）；规划态/导航态主页面无搜索框
+                if model.routeChoices.isEmpty {
                     searchBar
                 }
             } else {
@@ -469,6 +550,16 @@ struct ContentView: View {
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal)
                 .padding(.bottom, 4)
+                // v1.49：前方 3km 内加油站/充电桩轻提示（导航卡下小字）
+                if !model.nearStationText.isEmpty {
+                    Text(model.nearStationText)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.35), in: Capsule())
+                        .padding(.bottom, 4)
+                }
             }
         }
     }
@@ -1054,6 +1145,7 @@ struct ContentView: View {
                             searchFocused = false
                             showSuggestions = false
                             dismissKeyboard()
+                            showSearchSheet = false
                             model.setPreview(tip.name, lat: tip.lat, lon: tip.lon)
                             goHereLabel = "导航去此处"
                             goHereName = tip.name
@@ -1158,8 +1250,75 @@ struct ContentView: View {
         }
     }
 
-    private func aroundSheet(_ pl: PlaceLabel) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// v1.49：历史轨迹列表（骑行轨迹回放/删除）
+    private var tripListSheet: some View {
+        NavigationStack {
+            List {
+                if model.tripTracks.isEmpty {
+                    Text("暂无骑行轨迹。完成一次导航后自动保存（最多 20 条）")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(model.tripTracks.enumerated()), id: \.offset) { idx, t in
+                    Button {
+                        model.shownTripIdx = idx
+                        model.status = "正在回放：\(t.name)（\(t.date)）"
+                        showTripList = false
+                        model.fitTick += 1
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(t.name).font(.subheadline.bold())
+                                Text("\(t.date) · \(String(format: "%.1f", Double(t.distanceM) / 1000.0))公里 · \(t.durationS / 60)分钟")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if model.shownTripIdx == idx {
+                                Image(systemName: "eye.fill").foregroundStyle(.green)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            model.deleteTripTrack(idx)
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("骑行轨迹")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showTripList = false }
+                }
+            }
+        }
+    }
+
+    /// v1.49：当前回放轨迹的点（灰色虚线显示在地图）
+    private var shownTripPoints: [CLLocationCoordinate2D] {
+        let list = model.tripTracks
+        guard model.shownTripIdx >= 0 && model.shownTripIdx < list.count else { return [] }
+        return list[model.shownTripIdx].points
+    }
+
+    /// v1.49：首页定时刷新实时路况（60 秒，以当前位置为中心；只启动一次）
+    private func startTrafficTimer() {
+        guard !trafficTimerStarted else { return }
+        trafficTimerStarted = true
+        let center = model.currentLocation
+            ?? CLLocationCoordinate2D(latitude: 31.8206, longitude: 117.2272) // 合肥中心
+        Task { await model.fetchTraffic(near: center, spanMeters: 8000) }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            let c = model.currentLocation
+                ?? CLLocationCoordinate2D(latitude: 31.8206, longitude: 117.2272)
+            Task { await model.fetchTraffic(near: c, spanMeters: 8000) }
+        }
+    }
+
+    private func aroundSheet(_ pl: PlaceLabel) -> some View {        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(pl.name)
