@@ -55,8 +55,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 高德 SDK 正式 Key（AppDelegate 已设，此处幂等兜底）
         AMapServices.shared().apiKey = "6fd752bc12caa258f066729617db0066"
         map.showsCompass = false // 使用自绘指南针（左上角）
-        map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
-        map.isRotateEnabled = true  // 双指旋转地图
         map.delegate = context.coordinator
         // 当前定位箭头标注（高德 SDK 不启用内置定位，避免双定位；用我们自己的 CLLocationManager 数据）
         let userAnn = UserLocationAnnotation(coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0))
@@ -322,7 +320,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// MAPolyline 构造（Swift 指针接口）
     private func polyline(_ pts: [CLLocationCoordinate2D]) -> MAPolyline {
         var coords = pts
-        return MAPolyline(coordinates: &coords, count: coords.count)
+        return MAPolyline(coordinates: &coords, count: UInt(coords.count))
     }
 
     final class Coordinator: NSObject, MAMapViewDelegate, UIGestureRecognizerDelegate {
@@ -575,7 +573,7 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MAMapView, rendererFor overlay: MAOverlay) -> MAOverlayRenderer? {
             guard let poly = overlay as? MAPolyline else { return nil }
-            let r = MAPolylineRenderer(polyline: poly)
+            let r = MAPolylineRenderer(polyline: poly)!
             r.lineWidth = 4
             if poly === self.underPolyline {
                 // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
@@ -586,10 +584,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
                 r.lineWidth = 5
             } else if self.alternatePolylines.contains(where: { $0 === poly }) {
-                // 备选路线：浅绿色虚线
+                // 备选路线：浅绿色（高德 11.x 无公开虚线类型，用实线浅绿区分）
                 r.strokeColor = UIColor(red: 0.60, green: 0.85, blue: 0.62, alpha: 0.95)
                 r.lineWidth = 4
-                r.lineDashType = .square
             } else {
                 r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
                 r.lineWidth = 4
