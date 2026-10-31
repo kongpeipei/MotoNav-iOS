@@ -249,19 +249,32 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 天气条：左上角（指南针下方），一行液态玻璃胶囊（不再遮挡右上角状态文字）
-    /// 天气条：屏幕最上边（原提醒条位置，一行液态玻璃胶囊；导航中隐藏）
+    /// 天气条：屏幕最上边居中一行（与左上角指南针分离不重复；导航中隐藏，高德导航顶部只留导航信息）
     private var weatherOverlay: some View {
         VStack {
             HStack {
-                if let w = model.weatherText, let t = model.tomorrowText {
-                    Text("\(w) · 明日\(t)")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(.leading, 12)
+                Spacer()
+                if let w = model.weatherText {
+                    HStack(spacing: 6) {
+                        // 当前天气：图标+温度加粗，降水/风为小字
+                        Text(w)
+                            .font(.footnote.bold())
+                            .foregroundStyle(.primary)
+                        if let t = model.tomorrowText {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            // 明日：小字次要色
+                            Text(t)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
                 }
                 Spacer()
             }
