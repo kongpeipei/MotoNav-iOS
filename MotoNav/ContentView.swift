@@ -101,8 +101,8 @@ struct ContentView: View {
             } else {
                 settingsPage
             }
-            // 底部选项卡（导航中隐藏；沉浸模式 uiHidden 时也隐藏，切换界面常驻下方）
-            if !model.navigating && !uiHidden {
+            // v1.80 底部选项卡：仅"我的"页保留（导航主页已合并进底部主卡片，导航/我的按钮在卡片内）
+            if !model.navigating && !uiHidden && selectedTab == 1 {
                 bottomTabBar
             }
         }
@@ -449,43 +449,37 @@ struct ContentView: View {
 
     /// 右上角竖排文字按钮：GPS信号 + 图层（高德瓦片）+ 路况（实时路况）
     private var layerTrafficButtons: some View {
-        VStack {
-            HStack {
-                Spacer()
-                VStack(spacing: 8) {
-                    // GPS信号显示按钮
-                    Button {
-                        // 点击显示定位精度详情
-                        let acc = model.locationAccuracy
-                        let signalLevel: String
-                        if acc <= 10 {
-                            signalLevel = "强（\(Int(acc))米）"
-                        } else if acc <= 50 {
-                            signalLevel = "中（\(Int(acc))米）"
-                        } else {
-                            signalLevel = "弱（\(Int(acc))米）"
-                        }
-                        model.status = "GPS信号：\(signalLevel)"
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "scope")
-                                .font(.caption2.bold())
-                            Text(gpsSignalText())
-                                .font(.caption.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(gpsSignalColor(), in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+        // v1.80 GPS 按钮可自由拖动，位置持久化（下次打开保持）
+        DraggableFloat(key: "gps", defaultPos: CGPoint(x: 0.86, y: 0.24)) {
+            VStack(spacing: 8) {
+                // GPS信号显示按钮
+                Button {
+                    // 点击显示定位精度详情
+                    let acc = model.locationAccuracy
+                    let signalLevel: String
+                    if acc <= 10 {
+                        signalLevel = "强（\(Int(acc))米）"
+                    } else if acc <= 50 {
+                        signalLevel = "中（\(Int(acc))米）"
+                    } else {
+                        signalLevel = "弱（\(Int(acc))米）"
                     }
-                    .buttonStyle(.plain)
+                    model.status = "GPS信号：\(signalLevel)"
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "scope")
+                            .font(.caption2.bold())
+                        Text(gpsSignalText())
+                            .font(.caption.bold())
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(gpsSignalColor(), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 }
-                .padding(.trailing, 12)
-                // v1.69：非导航固定天气条下方（上移）；导航固定在顶部速度卡下方，位置不变不与速度卡重叠
-                .padding(.top, model.navigating ? 270 : 116)
+                .buttonStyle(.plain)
             }
-            Spacer()
         }
     }
     
@@ -761,8 +755,8 @@ struct ContentView: View {
                 }
                 routeChoiceList
                 goHereBar
-                // 搜索框始终显示（底部选项卡上方）
-                searchBar
+                // v1.80 搜索框 + 导航/我的 合并为一个整体卡片
+                bottomMainCard
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
                 turnAheadCard
@@ -939,26 +933,8 @@ struct ContentView: View {
                         .padding(.horizontal)
                 }
                 .padding(.bottom, 4)
-            } else if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
-                Button {
-                    haptic()
-                    showSearchField = false
-                    model.fetchRouteChoices(to: goHereName ?? "地图选点", lat: goHereLat, lon: goHereLon)
-                    goHereName = nil
-                    goHereLat = 0
-                    goHereLon = 0
-                    model.clearPreview()
-                } label: {
-                    Text(goHereLabel)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
-                        .padding(.horizontal)
-                }
-                .padding(.bottom, 4)
             }
+            // v1.80 已移除选点"导航去此处"按钮（首页底部卡片化，选点导航入口精简）
         }
     }
 
@@ -1270,41 +1246,35 @@ struct ContentView: View {
 
     /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
     private var compassOverlay: some View {
-        VStack {
-            HStack {
-                ZStack {
-                    Circle().fill(.ultraThinMaterial)
-                    Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
-                    // 红色指北针（随手机朝向旋转）
-                    Image(systemName: "location.north.fill")
-                        .font(.title3)
-                        .foregroundStyle(.red)
-                        .rotationEffect(.degrees(model.heading))
-                    // 四方位：北（上）东（右）南（下）西（左）
-                    Text("北")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.red)
-                        .offset(y: -20)
-                    Text("东")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                        .offset(x: 19)
-                    Text("南")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                        .offset(y: 20)
-                    Text("西")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                        .offset(x: -19)
-                }
-                .frame(width: 56, height: 56)
-                .padding(.leading, 12)
-                // v1.69：非导航固定天气条下方（上移）；导航固定在顶部速度卡下方，位置不变不与速度卡重叠
-                .padding(.top, model.navigating ? 270 : 116)
-                Spacer()
+        // v1.80 指南针可自由拖动，位置持久化（下次打开保持）
+        DraggableFloat(key: "compass", defaultPos: CGPoint(x: 0.10, y: 0.24)) {
+            ZStack {
+                Circle().fill(.ultraThinMaterial)
+                Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
+                // 红色指北针（随手机朝向旋转）
+                Image(systemName: "location.north.fill")
+                    .font(.title3)
+                    .foregroundStyle(.red)
+                    .rotationEffect(.degrees(model.heading))
+                // 四方位：北（上）东（右）南（下）西（左）
+                Text("北")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.red)
+                    .offset(y: -20)
+                Text("东")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.secondary)
+                    .offset(x: 19)
+                Text("南")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.secondary)
+                    .offset(y: 20)
+                Text("西")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.secondary)
+                    .offset(x: -19)
             }
-            Spacer()
+            .frame(width: 56, height: 56)
         }
     }
 
@@ -1320,9 +1290,9 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
-    /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
-    private var searchBar: some View {
-        VStack(spacing: 4) {
+    /// v1.80 首页底部主卡片：搜索框 + 导航/我的 合并为一个整体卡片
+    private var bottomMainCard: some View {
+        VStack(spacing: 8) {
             searchInputRow
             // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
             if searchFocused && searchText.isEmpty {
@@ -1335,8 +1305,56 @@ struct ContentView: View {
             if showSuggestions && !onlineTips.isEmpty {
                 onlineTipsList
             }
+            tabButtonsRow
         }
-        .background(.black.opacity(0.18))
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .padding(.horizontal, 14)
+    }
+
+    /// v1.80 导航/我的 选项卡按钮行（合并进底部主卡片；"我的"页仍保留独立选项卡可切回）
+    private var tabButtonsRow: some View {
+        HStack(spacing: 6) {
+            Button {
+                selectedTab = 0
+                haptic()
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: selectedTab == 0 ? "location.north.circle.fill" : "location.north.circle")
+                        .font(.body)
+                    Text("导航")
+                        .font(.caption)
+                        .fontWeight(selectedTab == 0 ? .semibold : .regular)
+                }
+                .foregroundStyle(selectedTab == 0 ? .white : .secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(selectedTab == 0 ? Color.blue : .clear, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                selectedTab = 1
+                haptic()
+            } label: {
+                VStack(spacing: 3) {
+                    Image(systemName: selectedTab == 1 ? "person.fill" : "person")
+                        .font(.body)
+                    Text("我的")
+                        .font(.caption)
+                        .fontWeight(selectedTab == 1 ? .semibold : .regular)
+                }
+                .foregroundStyle(selectedTab == 1 ? .white : .secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(selectedTab == 1 ? Color.blue : .clear, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     /// v1.69 搜索面板：快捷卡片行 + 高德样式历史记录
@@ -2091,5 +2109,45 @@ struct VoiceSettingsSheet: View {
             }
         }
         .presentationDetents([.height(430)])
+    }
+}
+
+/// v1.80 可拖动悬浮控件：位置以 0-1 归一化持久化到 UserDefaults，下次打开还原
+private struct DraggableFloat<Content: View>: View {
+    let key: String
+    @ViewBuilder let content: Content
+    @State private var pos: CGPoint
+    @State private var dragging = false
+
+    init(key: String, defaultPos: CGPoint, @ViewBuilder content: () -> Content) {
+        self.key = key
+        self.content = content()
+        let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
+        let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
+        _pos = State(initialValue: CGPoint(x: x ?? defaultPos.x, y: y ?? defaultPos.y))
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            content
+                .position(x: pos.x * geo.size.width, y: pos.y * geo.size.height)
+                .shadow(color: .black.opacity(dragging ? 0.3 : 0.12), radius: 8, y: 3)
+                .scaleEffect(dragging ? 1.08 : 1.0)
+                .animation(.easeOut(duration: 0.12), value: dragging)
+                .gesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { v in
+                            dragging = true
+                            pos = CGPoint(
+                                x: min(0.96, max(0.04, v.location.x / geo.size.width)),
+                                y: min(0.96, max(0.04, v.location.y / geo.size.height)))
+                        }
+                        .onEnded { _ in
+                            dragging = false
+                            UserDefaults.standard.set(pos.x, forKey: "\(key).x")
+                            UserDefaults.standard.set(pos.y, forKey: "\(key).y")
+                        }
+                )
+        }
     }
 }
