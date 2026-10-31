@@ -769,7 +769,8 @@ final class PreviewAnnotation: NSObject, MKAnnotation {
 final class AmapTileOverlay: NSObject, MKOverlay {
     /// 高德标准底图瓦片模板（公开服务，无需 Key）
     static let tileURL = "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}"
-    let coordinate = kCLLocationCoordinate2DInvalid
+    /// v1.52：coordinate 必须为有效坐标（世界网格全屏覆盖，取世界中心；invalid 会令部分系统不渲染 overlay）
+    let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
     let boundingMapRect = MKMapRect.world
 }
 

@@ -1523,6 +1523,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 高德「输入提示」联想：输入关键字实时返回 POI 候选（名称+副标题+精确坐标），需用户填写高德 Web 服务 Key
+    /// v1.52 搜索联想本地兜底：高德在线联想失败/无网 → 本地合肥地点库（600+ 地标/小区/路名）
+    func localFallbackTips(_ q: String) -> [AmapTip] {
+        guard !q.isEmpty else { return [] }
+        let matches = placeLabels.filter { $0.name.localizedCaseInsensitiveContains(q) }
+        guard !matches.isEmpty else { return [] }
+        return Array(matches.prefix(8)).map {
+            AmapTip(name: $0.name, sub: "合肥 · 本地地点", lat: $0.lat, lon: $0.lon)
+        }
+    }
+
     func amapInputTips(_ q: String) async -> [AmapTip] {
         guard !amapKey.isEmpty, !q.isEmpty else { return [] }
         let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""

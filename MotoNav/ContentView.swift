@@ -1093,16 +1093,88 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
-    /// 目的地搜索框（高德式搜索：输入即实时高德 POI 联想；导航时被退出按钮替代）
+    /// 目的地搜索框（高德式搜索：输入即实时高德 POI 联想；未输入显示推荐地区；导航时被退出按钮替代）
     private var searchBar: some View {
         VStack(spacing: 4) {
             searchInputRow
-            // 高德 POI 联想候选（v1.46：联想只使用高德 Web，点击直接定位）
-            if showSuggestions && !onlineTips.isEmpty {
-                onlineTipsList
+            // v1.52 搜索推荐：未输入 → 热门目的地/最近常搜（高德式推荐地区）；输入 → 高德 POI 联想
+            if showSuggestions {
+                if !onlineTips.isEmpty {
+                    onlineTipsList
+                } else if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    recommendedList
+                }
             }
         }
         .background(.black.opacity(0.18))
+    }
+
+    /// v1.52 推荐地区列表（点击搜索框未输入时显示：最近常搜 + 合肥热门，高德式）
+    private var recommendedList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if !model.recentHot.isEmpty {
+                    HStack {
+                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.orange)
+                        Text("最近常搜").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
+                    ForEach(model.recentHot.prefix(5), id: \.name) { pl in
+                        row(icon: "clock.arrow.circlepath", color: .orange, name: displayName(pl.name), sub: "合肥 · 最近搜索", place: pl)
+                    }
+                }
+                HStack {
+                    Image(systemName: "flame.fill").font(.caption2).foregroundStyle(.orange)
+                    Text("合肥热门目的地").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
+                ForEach(model.hotPlaces, id: \.name) { pl in
+                    row(icon: "mappin.circle.fill", color: .green, name: displayName(pl.name), sub: "合肥 · 热门目的地", place: pl)
+                }
+            }
+        }
+        .frame(maxHeight: 220)
+        .background(.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+        .padding(.horizontal)
+    }
+
+    /// 推荐/热门地点行（点击直接定位跳转，与高德联想同一交互）
+    private func row(icon: String, color: Color, name: String, sub: String, place: PlaceLabel) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                searchFocused = false
+                showSuggestions = false
+                dismissKeyboard()
+                showSearchSheet = false
+                model.setPreview(place.name, lat: place.lat, lon: place.lon)
+                goHereLabel = "导航去此处"
+                goHereName = place.name
+                goHereLat = place.lat
+                goHereLon = place.lon
+                model.addHistory(place.name)
+                model.fitTick += 1
+                model.status = "已定位到「\(place.name)」，点「导航去此处」规划路线"
+            } label: {
+                HStack {
+                    Image(systemName: icon).foregroundStyle(color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(name).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
+                        Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.up.right.circle").foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider()
+        }
     }
 
     /// 搜索输入行：高德样式通栏圆角胶囊（放大镜 + 输入 + ✕ + 搜索按钮为一体）
@@ -1117,15 +1189,22 @@ struct ContentView: View {
                 .submitLabel(.search)
                 .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
                 .onChange(of: searchText) { newValue in
-                    showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+                    showSuggestions = true
                     onlineTips = []
                     let q = newValue.trimmingCharacters(in: .whitespaces)
                     guard !q.isEmpty else { return }
                     // v1.46：搜索联想只使用高德 Web「输入提示」，返回真实 POI 候选（带坐标，点击直接定位）
                     Task {
                         let tips = await model.amapInputTips(q)
-                        if searchText == newValue { onlineTips = tips }
+                        if searchText == newValue {
+                            // v1.52：高德联想空/失败 → 本地合肥地点库兜底（保证搜索框始终有推荐）
+                            onlineTips = tips.isEmpty ? model.localFallbackTips(q) : tips
+                        }
                     }
+                }
+                .onChange(of: searchFocused) { f in
+                    // v1.52：点击搜索框即显示推荐地区（未输入时）
+                    if f { showSuggestions = true }
                 }
             // 一键清除输入内容（有内容时显示）
             if !searchText.isEmpty {
@@ -1636,35 +1715,35 @@ struct VoiceSettingsSheet: View {
                 }
                 Section("讯飞在线语音（需联网，新用户送免费额度）") {
                     ForEach(voices, id: \.vcn) { v in
-                        Button {
+                        HStack(spacing: 8) {
+                            Image(systemName: v.icon)
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(v.name)
+                                    .foregroundStyle(.primary)
+                                Text(v.sub)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            // 喇叭试听（独立按钮，避免嵌套 Button）
+                            Button {
+                                model.speak(testText)
+                            } label: {
+                                Image(systemName: "play.circle")
+                                    .font(.title3)
+                                    .foregroundStyle(.tint)
+                            }
+                            .buttonStyle(.borderless)
+                            if model.xfEnabled && model.xfVcn == v.vcn {
+                                Image(systemName: "checkmark").foregroundStyle(.green)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
                             UserDefaults.standard.set(true, forKey: "xfEnabled")
                             UserDefaults.standard.set(v.vcn, forKey: "xfVcn")
                             model.speak("语音已切换为\(v.name)")
-                        } label: {
-                            HStack {
-                                Image(systemName: v.icon)
-                                    .foregroundStyle(.green)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(v.name)
-                                        .foregroundStyle(.primary)
-                                    Text(v.sub)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                // 喇叭试听
-                                Button {
-                                    model.speak(testText)
-                                } label: {
-                                    Image(systemName: "play.circle")
-                                        .font(.title3)
-                                        .foregroundStyle(.tint)
-                                }
-                                .buttonStyle(.borderless)
-                                if model.xfEnabled && model.xfVcn == v.vcn {
-                                    Image(systemName: "checkmark").foregroundStyle(.green)
-                                }
-                            }
                         }
                     }
                 } footer: {
