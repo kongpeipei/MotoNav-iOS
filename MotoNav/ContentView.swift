@@ -990,7 +990,7 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .background(on ? Color(red: 0.16, green: 0.38, blue: 1.0) : Color(.systemBackground), in: Capsule())
-            .overlay(Capsule().stroke(on ? Color.clear : .quaternary, lineWidth: 0.8))
+            .overlay(Capsule().stroke(on ? Color.clear : Color(.systemGray4), lineWidth: 0.8))
         }
         .buttonStyle(.plain)
     }
