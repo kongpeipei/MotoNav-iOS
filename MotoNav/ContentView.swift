@@ -402,8 +402,11 @@ struct ContentView: View {
                     searchBar
                 }
             } else {
+                // v1.48：接近转向（<200米）只显示路口放大图，避免与下一转向卡重复
                 turnAheadCard
-                navInfoCard
+                if !turnAheadVisible() {
+                    navInfoCard
+                }
                 snapAlertCard
             }
         }
@@ -444,7 +447,8 @@ struct ContentView: View {
                                 }
                             }
                         } else {
-                            Text("沿当前道路直行")
+                            // v1.48：无下一转向时显示当前道路（高德式"沿XX路直行"）
+                            Text(model.currentRoad.isEmpty ? "沿当前道路直行" : "沿\(model.currentRoad)直行")
                                 .font(.title3.bold())
                                 .foregroundStyle(.white)
                         }
@@ -469,11 +473,20 @@ struct ContentView: View {
         }
     }
 
+    /// 导航中是否显示路口放大图（接近下一转向 <200米，v1.48 与下一转向卡去重）
+    private func turnAheadVisible() -> Bool {
+        guard let ns = model.navigationStatus(at: model.currentLocation),
+              let t = ns.nextTurn, ns.distToTurnM < 200
+        else { return false }
+        return true
+    }
+
     /// 高德式路口放大示意图：接近下一转向（<200米）时显示交叉路口 + 转弯箭头 + 路名
     private var turnAheadCard: some View {
         Group {
-            if let ns = model.navigationStatus(at: model.currentLocation),
-               let t = ns.nextTurn, ns.distToTurnM < 200 {
+            if turnAheadVisible(),
+               let ns = model.navigationStatus(at: model.currentLocation),
+               let t = ns.nextTurn {
                 ZStack {
                     // 当前道路（垂直）
                     Rectangle().fill(.white.opacity(0.92))
@@ -827,6 +840,12 @@ struct ContentView: View {
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if !model.currentRoad.isEmpty {
+                        // v1.48：无转向预告时显示当前道路（实时道路播报文字）
+                        Text("沿\(model.currentRoad) 直行")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white.opacity(0.95))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -839,11 +858,24 @@ struct ContentView: View {
         }
     }
 
-    /// 导航中悬浮退出按钮（右上角红色胶囊，高德导航式）
+    /// 导航中悬浮右上角：语音播报开关 + 退出导航（v1.48 新增高德式静音按钮）
     private var exitNavOverlay: some View {        VStack {
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
                 if model.navigating {
+                    // 语音播报开关（高德导航标配）
+                    Button {
+                        haptic()
+                        model.toggleVoice()
+                    } label: {
+                        Image(systemName: model.voiceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.footnote.bold())
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(model.voiceMuted ? Color.gray.opacity(0.75) : Color.black.opacity(0.55),
+                                        in: Circle())
+                            .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
+                    }
                     Button {
                         haptic()
                         model.toggleNavigation()

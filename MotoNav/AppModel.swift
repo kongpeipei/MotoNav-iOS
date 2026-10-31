@@ -972,7 +972,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 语音（四川甜妹：高音调普通话女声 + 四川语气词，系统 TTS 无四川话方言）
 
+    /// 导航语音播报开关（v1.48 高德式静音按钮）
+    @Published var voiceMuted = false
+    func toggleVoice() {
+        voiceMuted.toggle()
+        if !voiceMuted {
+            speak("语音播报已开启")
+        } else {
+            speech.stopSpeaking(at: .immediate)
+        }
+    }
+
     func speak(_ text: String) {
+        guard !voiceMuted else { return }
         let u = AVSpeechUtterance(string: sweetSichuan(text))
         u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
         u.rate = 0.48          // 稍慢，更柔
@@ -1212,6 +1224,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var currentRoad = ""
     private var lastRoadUpdate = Date(timeIntervalSince1970: 0)
     private var lastRoadCoord: CLLocationCoordinate2D?
+    /// v1.48 导航态道路播报节流
+    private var lastRoadSpokenAt = Date(timeIntervalSince1970: 0)
+    private var lastRoadSpokenName = ""
 
     func maybeUpdateCurrentRoad() async {
         guard !amapKey.isEmpty, let loc = currentLocation else { return }
@@ -1234,6 +1249,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
               let name = first["name"] as? String, !name.isEmpty
         else { return }
         currentRoad = name
+        // v1.48：导航中换路时语音播报（"沿XX路行驶"），20 秒内不重复吵
+        if navigating, name != lastRoadSpokenName, now.timeIntervalSince(lastRoadSpokenAt) > 20 {
+            lastRoadSpokenName = name
+            lastRoadSpokenAt = now
+            speak("沿\(name)行驶")
+        }
     }
 
     /// 高德「输入提示」联想：输入关键字实时返回 POI 候选（名称+副标题+精确坐标），需用户填写高德 Web 服务 Key
