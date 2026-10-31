@@ -15,6 +15,8 @@ struct ContentView: View {
     @State private var searchExpanded = false
     /// v1.81 点击联想地点主体后：地图高亮该点并显示地点信息卡
     @State private var tipCard: AppModel.AmapTip?
+    /// v1.81.2 退出导航确认态：点状态卡左侧×后切换为"退出导航/取消"两按钮
+    @State private var showExitConfirm = false
     @State private var tipRoad: String?
     /// v1.81 地点所属区域（AOI）：名称 + 多边形（地图蓝虚线框住）
     @State private var tipAoiName: String?
@@ -117,6 +119,10 @@ struct ContentView: View {
             if !model.navigating && !uiHidden && selectedTab == 1 {
                 bottomTabBar
             }
+        }
+        // v1.81.3 新一次导航开始时重置退出确认态
+        .onChange(of: model.navigating) { _, nv in
+            if nv { showExitConfirm = false }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
@@ -785,29 +791,74 @@ struct ContentView: View {
     /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         // v1.81.2 底部每张卡均可自由拖动，位置持久化（默认贴底序列）
+        // v1.81.3 地点卡/路线规划卡出现时隐藏搜索主卡；两卡左滑关闭后恢复
         ZStack {
             if !model.navigating {
                 if let t = tipCard {
-                    // v1.81.1 地点信息卡独占底部：隐藏类别条/历史/方案卡/去这里，只留卡片+搜索卡片
-                    DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66)) { tipInfoCard(t) }
+                    DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66),
+                                   onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
+                } else if !model.routeChoices.isEmpty {
+                    // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡）
+                    DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.60),
+                                   onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
                 } else {
-                    // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
                     // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
                     if !(searchFocused && searchText.isEmpty) {
                         DraggableFloat(key: "historybar", defaultPos: CGPoint(x: 0.5, y: 0.30)) { historyBar }
                     }
-                    DraggableFloat(key: "routechoices", defaultPos: CGPoint(x: 0.5, y: 0.52)) { routeChoiceList }
-                    DraggableFloat(key: "gohere", defaultPos: CGPoint(x: 0.5, y: 0.62)) { goHereBar }
                 }
-                // v1.80 搜索框 + 导航/我的 合并为一个整体卡片
-                DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88)) { bottomMainCard }
+                // 搜索主卡：地点卡或路线规划卡出现时隐藏
+                if tipCard == nil && model.routeChoices.isEmpty {
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88)) { bottomMainCard }
+                }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
                 DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.70)) { turnAheadCard }
                 DraggableFloat(key: "snapalert", defaultPos: CGPoint(x: 0.5, y: 0.80)) { snapAlertCard }
             }
         }
+    }
+
+    /// v1.81.3 左滑关闭地点信息卡（搜索主卡自动恢复）
+    private func closeTipCard() {
+        tipCard = nil
+        tipRoad = nil
+        tipAoiName = nil
+        tipPolygon = nil
+    }
+
+    /// v1.81.3 左滑关闭路线规划卡（清掉路线方案，搜索主卡自动恢复）
+    private func closeRoutePlan() {
+        model.route = []
+        model.routePois = []
+        model.routeTurns = []
+        model.routeChoices = []
+    }
+
+    /// v1.81.3 路线规划卡：头部 + 方案选项卡 + 绿色开始导航，白底圆角（样式同地点卡）
+    private var routePlanCard: some View {
+        VStack(spacing: 10) {
+            routeChoiceHeader
+            routeChoiceCards
+            Button {
+                haptic()
+                model.toggleNavigation()
+            } label: {
+                Text("开始导航")
+                    .font(.headline.bold())
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(Color(.systemBackground).opacity(0.95), in: RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .padding(.horizontal, 14)
     }
 
     /// v1.65：原底部转向大卡 navInfoCard 已合并进顶部 navTopBar（道路指示/速度/距离时间三合一）
@@ -1195,31 +1246,96 @@ struct ContentView: View {
 
     /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
     private var exitNavOverlay: some View {
-        // v1.81.2 去垂直 Spacer：位置由 DraggableFloat 自由定位
+        // v1.81.3 高德同款白底黑字导航状态卡（用时/里程/红绿灯/抓拍/预计到达）
+        // 左侧小× → 切换为"退出导航/取消"两按钮确认
         VStack {
             if model.navigating {
-                Button {
-                    haptic()
-                    model.toggleNavigation()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "xmark")
-                            .font(.body.bold())
-                        Text("退出导航")
-                            .font(.body.bold())
+                if showExitConfirm {
+                    HStack(spacing: 10) {
+                        Button {
+                            haptic()
+                            showExitConfirm = false
+                            model.toggleNavigation()
+                        } label: {
+                            Text("退出导航")
+                                .font(.headline.bold())
+                                .foregroundStyle(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            haptic()
+                            showExitConfirm = false
+                        } label: {
+                            Text("取消")
+                                .font(.headline.bold())
+                                .foregroundStyle(.black)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 56)
-                    .padding(.vertical, 15)
-                    .background(Color.red, in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+                    .padding(.horizontal, 14)
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+                } else if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
+                    let minTxt = "\(max(ns.remainS, 0) / 60)"
+                    let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
+                    let lights = model.routeTurns.count
+                    let snaps = model.routePois.count
+                    let arrive = Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0)))
+                    let af = DateFormatter()
+                    af.dateFormat = "HH:mm"
+                    HStack(spacing: 0) {
+                        Button {
+                            haptic()
+                            showExitConfirm = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(.black.opacity(0.45))
+                                .padding(.horizontal, 10)
+                        }
+                        .buttonStyle(.plain)
+                        exitCellDivider
+                        exitStatusCell(minTxt, "分钟")
+                        exitCellDivider
+                        exitStatusCell(kmTxt, "公里")
+                        exitCellDivider
+                        exitStatusCell("\(lights)", "红绿灯")
+                        exitCellDivider
+                        exitStatusCell("\(snaps)", "抓拍")
+                        exitCellDivider
+                        exitStatusCell(af.string(from: arrive), "到达")
+                    }
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+                    .padding(.horizontal, 14)
                 }
-                .buttonStyle(.plain)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 10)
+    }
+
+    /// 退出导航状态卡分格
+    private var exitCellDivider: some View {
+        Divider().frame(height: 34)
+    }
+
+    /// 退出导航状态卡单格（大字+小标签，白底黑字）
+    private func exitStatusCell(_ big: String, _ small: String) -> some View {
+        VStack(spacing: 1) {
+            Text(big)
+                .font(.system(size: 19, weight: .heavy))
+                .foregroundStyle(.black)
+            Text(small)
+                .font(.caption2)
+                .foregroundStyle(.black.opacity(0.55))
+        }
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 
     /// 触感反馈（iOS Haptic）
@@ -1430,18 +1546,10 @@ struct ContentView: View {
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
-                Button {
-                    tipCard = nil
-                    tipRoad = nil
-                    tipAoiName = nil
-                    tipPolygon = nil
-                    model.clearPreview()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
+                // v1.81.3 右上角关闭按钮移除，改为整卡左滑关闭
+                Text("左滑关闭")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             HStack(spacing: 12) {
                 if let d = distText(t.lat, t.lon) {
@@ -2401,14 +2509,18 @@ struct VoiceSettingsSheet: View {
 }
 
 /// v1.80 可拖动悬浮控件：位置以 0-1 归一化持久化到 UserDefaults，下次打开还原
+/// v1.81.2 支持 onSwipeLeft：向左大幅滑动（>80pt 且横向为主）触发回调关闭，否则正常拖动记忆
 private struct DraggableFloat<Content: View>: View {
     let key: String
+    var onSwipeLeft: (() -> Void)? = nil
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var dragging = false
 
-    init(key: String, defaultPos: CGPoint, @ViewBuilder content: () -> Content) {
+    init(key: String, defaultPos: CGPoint, onSwipeLeft: (() -> Void)? = nil,
+         @ViewBuilder content: () -> Content) {
         self.key = key
+        self.onSwipeLeft = onSwipeLeft
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -2430,10 +2542,16 @@ private struct DraggableFloat<Content: View>: View {
                                 x: min(0.96, max(0.04, v.location.x / geo.size.width)),
                                 y: min(0.96, max(0.04, v.location.y / geo.size.height)))
                         }
-                        .onEnded { _ in
+                        .onEnded { v in
                             dragging = false
-                            UserDefaults.standard.set(pos.x, forKey: "\(key).x")
-                            UserDefaults.standard.set(pos.y, forKey: "\(key).y")
+                            if let onSwipeLeft = onSwipeLeft,
+                               v.translation.width < -80,
+                               abs(v.translation.width) > abs(v.translation.height) {
+                                onSwipeLeft()
+                            } else {
+                                UserDefaults.standard.set(pos.x, forKey: "\(key).x")
+                                UserDefaults.standard.set(pos.y, forKey: "\(key).y")
+                            }
                         }
                 )
         }
