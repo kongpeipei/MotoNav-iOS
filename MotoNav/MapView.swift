@@ -279,7 +279,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随系统深浅
         if isNav != context.coordinator.lastDarkState {
             context.coordinator.lastDarkState = isNav
-            map.overrideUserInterfaceStyle = isNav ? .dark : nil
+            map.overrideUserInterfaceStyle = isNav ? .dark : .unspecified
         }
         // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
         if zoomInTick != context.coordinator.lastZoomInTick {
