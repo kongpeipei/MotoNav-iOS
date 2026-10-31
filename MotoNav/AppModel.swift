@@ -1982,7 +1982,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         fetchRouteChoices(to: n, lat: la, lon: lo)
     }
 
-    /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）    func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
+    /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）
+    func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
         let n = name ?? destName
         route = c.points
         routeTurns = c.turns
