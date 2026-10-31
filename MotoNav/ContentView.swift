@@ -58,35 +58,6 @@ struct ContentView: View {
     @State private var reloadTick = 0
     /// v1.70：加载失败自动重试一次（避免弱网/瞬时失败直接弹条）
     @State private var mapRetried = false
-    /// v1.74：高德地图瓦片域自检（nil=未测；true=可达；false=不可达）
-    @State private var mapNetOK: Bool?
-    /// v1.76：高德天气/搜索域自检（对照用：该域始终可达则说明是地图域被拦截）
-    @State private var mapApiOK: Bool?
-    /// v1.76：网络自检双域对照——wprd0x 是 3D SDK 实际瓦片域（黑屏直接相关）；
-    /// restapi.amap.com 是天气/搜索域（App 内其它功能一直正常）。
-    /// 若"瓦片域不可达 + 天气域可达"→ 网络拦截了 is.autonavi.com（代理/VPN/运营商），黑屏根源。
-    private func checkMapNetwork() {
-        let tile = URL(string: "https://wprd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=211&y=97&z=8")!
-        var tr = URLRequest(url: tile, timeoutInterval: 8)
-        tr.cachePolicy = .reloadIgnoringCacheData
-        URLSession.shared.dataTask(with: tr) { data, _, _ in
-            DispatchQueue.main.async {
-                mapNetOK = (data?.count ?? 0) > 5000
-            }
-        }.resume()
-        let api = URL(string: "https://restapi.amap.com/v3/weather/weatherInfo?key=6fd752bc12caa258f066729617db0066&city=110000")!
-        var ar = URLRequest(url: api, timeoutInterval: 8)
-        ar.cachePolicy = .reloadIgnoringCacheData
-        URLSession.shared.dataTask(with: ar) { data, _, _ in
-            DispatchQueue.main.async {
-                if let d = data, let s = String(data: d, encoding: .utf8), s.contains("infocode") {
-                    mapApiOK = true
-                } else {
-                    mapApiOK = false
-                }
-            }
-        }.resume()
-    }
 
     var body: some View {
         ZStack {
@@ -243,8 +214,6 @@ struct ContentView: View {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
-            // v1.74：地图服务器网络自检（区分"网络问题"与"Key/渲染问题"）
-            checkMapNetwork()
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
         .onChange(of: scenePhase) { phase in
@@ -720,32 +689,7 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
-                    // v1.70：地图诊断（黑屏排障）——显示高德 Key 状态与最近一次加载结果
-                    HStack {
-                        Label("地图诊断", systemImage: mapLoadFailed ? "exclamationmark.triangle" : "checkmark.circle")
-                        Spacer()
-                        Text(mapLoadFailed ? mapLoadError : "地图加载正常 / 等待中")
-                            .foregroundStyle(mapLoadFailed ? .red : .secondary)
-                            .font(.caption)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    // v1.74：高德地图瓦片域自检（黑屏排障第一步：网络是否拦截高德地图域）
-                    HStack {
-                        Label("地图瓦片网络", systemImage: mapNetOK == false ? "wifi.slash" : "checkmark.circle")
-                        Spacer()
-                        Text(mapNetOK == nil ? "检测中…" : (mapNetOK == true ? "可达" : "不可达"))
-                            .foregroundStyle(mapNetOK == false ? .red : .secondary)
-                            .font(.caption)
-                    }
-                    // v1.76：天气/搜索域对照（若此域可达而瓦片域不可达 → 代理/防火墙拦截 is.autonavi.com）
-                    HStack {
-                        Label("高德接口", systemImage: mapApiOK == false ? "wifi.slash" : "checkmark.circle")
-                        Spacer()
-                        Text(mapApiOK == nil ? "检测中…" : (mapApiOK == true ? "可达" : "不可达"))
-                            .foregroundStyle(mapApiOK == false ? .red : .secondary)
-                            .font(.caption)
-                    }
+                    // v1.80：移除黑屏排障诊断项（地图诊断/瓦片网络/高德接口）——黑屏已根治闭环
                     HStack {
                         Label("高德Key", systemImage: "key.fill")
                         Spacer()
