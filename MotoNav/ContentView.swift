@@ -333,7 +333,7 @@ struct ContentView: View {
                             .foregroundStyle(showSatellite ? .white : .primary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(showSatellite ? Color.blue : Color.ultraThinMaterial, in: Capsule())
+                            .background(showSatellite ? Color.blue : Color.black.opacity(0.3), in: Capsule())
                             .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
@@ -346,7 +346,7 @@ struct ContentView: View {
                             .foregroundStyle(showTraffic ? .white : .primary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(showTraffic ? Color.green : Color.ultraThinMaterial, in: Capsule())
+                            .background(showTraffic ? Color.green : Color.black.opacity(0.3), in: Capsule())
                             .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
