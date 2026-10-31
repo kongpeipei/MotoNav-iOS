@@ -76,30 +76,32 @@ struct ContentView: View {
                 mapLayer
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
                 if !uiHidden {
-                    // 左上角指南针（手机朝向即指针指向）
+                    // v1.81.2 指南针/天气/路线胶囊/缩放/GPS/图层交通 均可自由拖动，位置持久化
                     compassOverlay
                     // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
                     if !model.navigating {
-                        weatherOverlay
+                        DraggableFloat(key: "weather", defaultPos: CGPoint(x: 0.5, y: 0.05)) { weatherOverlay }
                     }
                     // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-                    routeBarOverlay
-                    // 地图缩放 + / - 按钮
-                    zoomOverlay
-                    // 右上角 GPS 信号按钮
+                    DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
+                    // 地图缩放 + / - 按钮（含当前定位按钮）
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.34)) { zoomOverlay }
+                    // 右上角 GPS 信号按钮（内部已可拖动）
                     layerTrafficButtons
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
                 }
-                // 导航中悬浮退出按钮
-                exitNavOverlay
-                // v1.63 导航态左侧竖排：刷新 / 极简（高德导航特征）
+                // 导航中悬浮退出按钮（可拖动）
                 if model.navigating {
-                    navSideOverlay
+                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84)) { exitNavOverlay }
                 }
-                // 高德式顶部大数字条（剩余里程/时间，导航中显示）
-                navTopBar
+                // v1.63 导航态左侧竖排：刷新 / 极简（可拖动）
+                if model.navigating {
+                    DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { navSideOverlay }
+                }
+                // 高德式顶部大数字条（剩余里程/时间，导航中显示；可拖动）
+                DraggableFloat(key: "navtop", defaultPos: CGPoint(x: 0.5, y: 0.13)) { navTopBar }
                 // v1.66：沉浸模式下底部内容（搜索框/规划卡/导航卡）隐藏；导航中导航卡不受影响
                 if !uiHidden || model.navigating {
                     bottomOverlay
@@ -782,31 +784,30 @@ struct ContentView: View {
 
     /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        // v1.81.2 底部每张卡均可自由拖动，位置持久化（默认贴底序列）
+        ZStack {
             if !model.navigating {
                 if let t = tipCard {
                     // v1.81.1 地点信息卡独占底部：隐藏类别条/历史/方案卡/去这里，只留卡片+搜索卡片
-                    tipInfoCard(t)
+                    DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66)) { tipInfoCard(t) }
                 } else {
                     // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
-                    categoryBar
+                    DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
                     // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
                     if !(searchFocused && searchText.isEmpty) {
-                        historyBar
+                        DraggableFloat(key: "historybar", defaultPos: CGPoint(x: 0.5, y: 0.30)) { historyBar }
                     }
-                    routeChoiceList
-                    goHereBar
+                    DraggableFloat(key: "routechoices", defaultPos: CGPoint(x: 0.5, y: 0.52)) { routeChoiceList }
+                    DraggableFloat(key: "gohere", defaultPos: CGPoint(x: 0.5, y: 0.62)) { goHereBar }
                 }
                 // v1.80 搜索框 + 导航/我的 合并为一个整体卡片
-                bottomMainCard
+                DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88)) { bottomMainCard }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
-                turnAheadCard
-                snapAlertCard
+                DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.70)) { turnAheadCard }
+                DraggableFloat(key: "snapalert", defaultPos: CGPoint(x: 0.5, y: 0.80)) { snapAlertCard }
             }
         }
-        .padding(.bottom, model.navigating ? 88 : 80) // v1.65：导航中给底部居中"退出导航"留空间
     }
 
     /// v1.65：原底部转向大卡 navInfoCard 已合并进顶部 navTopBar（道路指示/速度/距离时间三合一）
@@ -1060,8 +1061,8 @@ struct ContentView: View {
 
     /// 地图缩放 + / - 按钮（右下角，高德式；定位按钮在放大按钮上方）
     private var zoomOverlay: some View {
+        // v1.81.2 去垂直 Spacer：位置由 DraggableFloat 自由定位（HStack Spacer 仅负责右侧对齐）
         VStack {
-            Spacer()
             HStack {
                 Spacer()
                 VStack(spacing: 6) {
@@ -1194,8 +1195,8 @@ struct ContentView: View {
 
     /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
     private var exitNavOverlay: some View {
+        // v1.81.2 去垂直 Spacer：位置由 DraggableFloat 自由定位
         VStack {
-            Spacer()
             if model.navigating {
                 Button {
                     haptic()
