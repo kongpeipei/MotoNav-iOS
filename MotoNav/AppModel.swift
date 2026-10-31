@@ -18,6 +18,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     @Published var pois: [Poi] = []
     @Published var currentLocation: CLLocationCoordinate2D?
+    /// 定位精度（米），越小信号越好
+    @Published var locationAccuracy: CLLocationAccuracy = 0
     @Published var monitoring = false
     @Published var simulating = false
     @Published var status = "等待定位…"
@@ -785,6 +787,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let coord = loc.coordinate
         Task { @MainActor in
             currentLocation = coord
+            locationAccuracy = loc.horizontalAccuracy
             currentSpeed = loc.speed > 0 ? loc.speed : 0
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
@@ -1084,7 +1087,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func amapInputTips(_ q: String) async -> [AmapTip] {
         guard !amapKey.isEmpty, !q.isEmpty else { return [] }
         let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        guard let url = URL(string: "https://restapi.amap.com/v3/assistant/inputtips?key=\(amapKey)&keywords=\(enc)&city=%E5%90%88%E8%82%A5&citylimit=true") else { return [] }
+        // 不限制城市，全国范围搜索，优先返回当前位置附近结果
+        guard let url = URL(string: "https://restapi.amap.com/v3/assistant/inputtips?key=\(amapKey)&keywords=\(enc)&datatype=all") else { return [] }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],

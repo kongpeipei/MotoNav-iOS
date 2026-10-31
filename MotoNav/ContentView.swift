@@ -319,7 +319,7 @@ struct ContentView: View {
         EmptyView()
     }
 
-    /// 右上角GPS信号文字按钮组
+    /// 右上角GPS信号按钮
     private var layerTrafficButtons: some View {
         VStack {
             HStack {
@@ -327,18 +327,29 @@ struct ContentView: View {
                 VStack(spacing: 8) {
                     // GPS信号显示按钮
                     Button {
-                        // 点击显示定位精度信息
-                        if let loc = model.currentLocation {
-                            model.status = "GPS位置：\(String(format: "%.5f, %.5f", loc.latitude, loc.longitude))"
+                        // 点击显示定位精度详情
+                        let acc = model.locationAccuracy
+                        let signalLevel: String
+                        if acc <= 10 {
+                            signalLevel = "强（\(Int(acc))米）"
+                        } else if acc <= 50 {
+                            signalLevel = "中（\(Int(acc))米）"
+                        } else {
+                            signalLevel = "弱（\(Int(acc))米）"
                         }
+                        model.status = "GPS信号：\(signalLevel)"
                     } label: {
-                        Text("GPS")
-                            .font(.caption.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.blue, in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                        HStack(spacing: 4) {
+                            Image(systemName: "scope")
+                                .font(.caption2.bold())
+                            Text(gpsSignalText())
+                                .font(.caption.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(gpsSignalColor(), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }
@@ -347,6 +358,24 @@ struct ContentView: View {
             }
             Spacer()
         }
+    }
+    
+    /// GPS信号文字
+    private func gpsSignalText() -> String {
+        let acc = model.locationAccuracy
+        if acc <= 0 { return "定位中" }
+        if acc <= 10 { return "GPS·强" }
+        if acc <= 50 { return "GPS·中" }
+        return "GPS·弱"
+    }
+    
+    /// GPS信号颜色
+    private func gpsSignalColor() -> Color {
+        let acc = model.locationAccuracy
+        if acc <= 0 { return Color.gray }
+        if acc <= 10 { return Color.green }
+        if acc <= 50 { return Color.orange }
+        return Color.red
     }
 
     /// 底部选项卡：导航 / 我的
@@ -428,7 +457,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.58")
+                        Text("v1.59")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1038,13 +1067,13 @@ struct ContentView: View {
         .background(.black.opacity(0.18))
     }
 
-    /// 搜索输入行：高德样式通栏圆角胶囊（放大镜 + 输入 + ✕ + 搜索按钮为一体）
+    /// 搜索输入行：高德样式白底大圆角（放大镜 + 输入 + ✕ + 搜索按钮为一体）
     private var searchInputRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
-            TextField("搜索目的地", text: $searchText)
+                .foregroundStyle(.gray)
+            TextField("查找地点、公交、地铁", text: $searchText)
                 .font(.subheadline)
                 .focused($searchFocused)
                 .submitLabel(.search)
@@ -1073,10 +1102,20 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.gray)
                 }
                 .buttonStyle(.plain)
             }
+            // 麦克风图标
+            Button {
+                // 语音搜索（暂未实现）
+                model.status = "语音搜索功能开发中"
+            } label: {
+                Image(systemName: "mic.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.gray)
+            }
+            .buttonStyle(.plain)
             // 搜索按钮（与输入框同一胶囊内，右侧）
             Button {
                 showSuggestions = false
@@ -1086,27 +1125,19 @@ struct ContentView: View {
                 Text("搜索")
                     .font(.subheadline.bold())
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
+                    .background(Color(red: 0.0, green: 0.75, blue: 0.95), in: Capsule())
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .frame(height: searchHeight)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 2))
-        .overlay(RoundedRectangle(cornerRadius: 2).stroke(.white.opacity(0.35), lineWidth: 0.8))
+        .frame(height: 52)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 26))
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
         .padding(.horizontal)
-        .gesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    var h = 54 + value.translation.height
-                    h = min(max(h, 48), 170)
-                    if abs(h - searchHeight) > 1 { searchHeight = h }
-                }
-        )
         .padding(.vertical, 6)
     }
 
