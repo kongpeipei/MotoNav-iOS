@@ -26,6 +26,8 @@ struct ContentView: View {
     @State private var showTripList = false
     @State private var showOfflineMapHint = false
     @State private var trafficTimerStarted = false
+    /// v1.51：高德瓦片底图（A 选项，默认开：底图与路线同源消除偏差）
+    @State private var useAmapTiles = true
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
     /// 标记该点：待标记坐标 + 备注输入
@@ -337,7 +339,9 @@ struct ContentView: View {
                 haptic()
                 model.setPreview(pl.name, lat: pl.lat, lon: pl.lon)
                 model.planRoute(to: pl.name, lat: pl.lat, lon: pl.lon)
-            }
+            },
+            // v1.51：高德瓦片底图（A 选项）
+            useAmapTiles: useAmapTiles
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -420,6 +424,10 @@ struct ContentView: View {
                     }
                     Button(mapType == .satelliteFlyover || mapType == .satellite ? "图层：卫星（当前）" : "图层：卫星") {
                         mapType = .satelliteFlyover
+                    }
+                    // v1.51：底图数据源（高德瓦片=与高德路线同源，A 选项）
+                    Toggle(isOn: $useAmapTiles) {
+                        Label("底图：高德瓦片（贴合路线）", systemImage: "map.fill")
                     }
                     // v1.49：骑行轨迹
                     Button("骑行轨迹（\(model.tripTracks.count)条）") { showTripList = true }

@@ -59,6 +59,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var recentHot: [PlaceLabel] = []
     var hotTick: Int = 0
     var onHotPlaceSelect: ((PlaceLabel) -> Void)?
+    /// v1.51 高德瓦片底图（A 选项：底图与高德路线同源，消除路网偏差）
+    var useAmapTiles: Bool = false
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -278,6 +280,31 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
+        // v1.51 高德瓦片底图（A 选项）：全删后重插（若开启），boundingMapRect 已带 GCJ→WGS 常数校正
+        if useAmapTiles {
+            if let o = context.coordinator.amapTileOverlay {
+                if !map.overlays.contains(where: { $0 === o }) {
+                    map.insertOverlay(o, at: 0, level: .aboveLabels)
+                }
+            } else {
+                let o = AmapTileOverlay(urlTemplate: AmapTileOverlay.tileURL)
+                o.canReplaceMapContent = true
+                o.minimumZ = 3
+                o.maximumZ = 19
+                // 合肥中心 WGS→GCJ 偏差换算成 MKMapPoint（x≈+4088, y≈+1754）
+                let shift = MKMapPoint(
+                    x: 4087.9, y: 1754.3)
+                o.boundingMapRect = MKMapRect(
+                    x: -shift.x, y: -shift.y,
+                    width: MKMapRect.world.size.width,
+                    height: MKMapRect.world.size.height)
+                context.coordinator.amapTileOverlay = o
+                map.insertOverlay(o, at: 0, level: .aboveLabels)
+            }
+        } else if let o = context.coordinator.amapTileOverlay {
+            map.removeOverlay(o)
+            context.coordinator.amapTileOverlay = nil
+        }
         // v1.49 路况线（先画，路线在其上层）
         context.coordinator.trafficPolylines = []
         for r in trafficRoads where r.coords.count > 1 {
@@ -405,6 +432,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// v1.50 概览/热门重建记忆
         var lastNavOverviewTick = 0
         var lastHotTick = 0
+        /// v1.51 高德瓦片 overlay
+        var amapTileOverlay: AmapTileOverlay?
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
@@ -702,6 +731,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
                 return r
             }
+            if let tile = overlay as? MKTileOverlay {
+                // v1.51 高德瓦片：必须返回专用 renderer，否则瓦片不绘制
+                return MKTileOverlayRenderer(tileOverlay: tile)
+            }
             return MKOverlayRenderer(overlay: overlay)
         }
     }
@@ -742,6 +775,14 @@ final class PreviewAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     var title: String? { "搜索目标" }
+}
+
+/// v1.51 高德在线瓦片底图（公开免费瓦片 webrd*.is.autonavi.com，无 Key）。
+/// 瓦片为 GCJ-02 网格，boundingMapRect 带常数校正（合肥中心偏移）使其与 WGS 地图对齐，
+/// 底图与高德路线/高德路网同源，消除"路线不在道路上"的路网偏差。
+final class AmapTileOverlay: MKTileOverlay {
+    /// 高德标准底图瓦片模板（公开服务，无需 Key）
+    static let tileURL = "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}"
 }
 
 /// v1.50 热门/最近常搜索地点标注（点击直接规划路线）
