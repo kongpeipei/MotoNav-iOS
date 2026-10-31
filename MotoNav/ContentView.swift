@@ -776,7 +776,7 @@ struct ContentView: View {
                         .padding(.horizontal)
                 }
                 .padding(.bottom, 4)
-            } else if goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
+            } else if model.isPlanning || goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
                     haptic()
                     showSearchField = false
@@ -786,14 +786,22 @@ struct ContentView: View {
                     goHereLon = 0
                     model.clearPreview()
                 } label: {
-                    Text(goHereLabel)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
-                        .padding(.horizontal)
+                    HStack(spacing: 6) {
+                        if model.isPlanning {
+                            ProgressView().tint(.white)
+                            Text("规划路线中…")
+                        } else {
+                            Text(goHereLabel)
+                        }
+                    }
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal)
                 }
+                .disabled(model.isPlanning)
                 .padding(.bottom, 4)
             }
         }
@@ -1118,10 +1126,19 @@ struct ContentView: View {
                         Image(systemName: "star.fill").font(.caption2).foregroundStyle(.orange)
                         Text("最近常搜").font(.caption).foregroundStyle(.secondary)
                         Spacer()
+                        // v1.52：一键清空最近常搜（高德式）
+                        Button {
+                            model.clearHistory()
+                            model.status = "最近常搜已清空"
+                        } label: {
+                            Text("清空").font(.caption).foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
                     ForEach(model.recentHot.prefix(5), id: \.name) { pl in
-                        row(icon: "clock.arrow.circlepath", color: .orange, name: displayName(pl.name), sub: "合肥 · 最近搜索", place: pl)
+                        row(icon: "clock.arrow.circlepath", color: .orange, name: displayName(pl.name), sub: "合肥 · 最近搜索", place: pl,
+                            onDelete: { model.removeHistory(pl.name) })
                     }
                 }
                 HStack {
@@ -1142,37 +1159,51 @@ struct ContentView: View {
         .padding(.horizontal)
     }
 
-    /// 推荐/热门地点行（点击直接定位跳转，与高德联想同一交互）
-    private func row(icon: String, color: Color, name: String, sub: String, place: PlaceLabel) -> some View {
+    /// 推荐/热门地点行（点击直接定位跳转，与高德联想同一交互；onDelete 非空显示删除按钮）
+    private func row(icon: String, color: Color, name: String, sub: String, place: PlaceLabel, onDelete: (() -> Void)? = nil) -> some View {
         VStack(spacing: 0) {
-            Button {
-                searchFocused = false
-                showSuggestions = false
-                dismissKeyboard()
-                showSearchSheet = false
-                model.setPreview(place.name, lat: place.lat, lon: place.lon)
-                goHereLabel = "导航去此处"
-                goHereName = place.name
-                goHereLat = place.lat
-                goHereLon = place.lon
-                model.addHistory(place.name)
-                model.fitTick += 1
-                model.status = "已定位到「\(place.name)」，点「导航去此处」规划路线"
-            } label: {
-                HStack {
-                    Image(systemName: icon).foregroundStyle(color)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(name).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
-                        Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            HStack {
+                Button {
+                    searchFocused = false
+                    showSuggestions = false
+                    dismissKeyboard()
+                    showSearchSheet = false
+                    model.setPreview(place.name, lat: place.lat, lon: place.lon)
+                    goHereLabel = "导航去此处"
+                    goHereName = place.name
+                    goHereLat = place.lat
+                    goHereLon = place.lon
+                    model.addHistory(place.name)
+                    model.fitTick += 1
+                    model.status = "已定位到「\(place.name)」，点「导航去此处」规划路线"
+                } label: {
+                    HStack {
+                        Image(systemName: icon).foregroundStyle(color)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(name).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
+                            Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        Image(systemName: "arrow.up.right.circle").foregroundStyle(.tertiary)
                     }
-                    Spacer()
-                    Image(systemName: "arrow.up.right.circle").foregroundStyle(.tertiary)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                if let onDelete {
+                    // v1.52：最近常搜单条删除（垃圾桶）
+                    Button {
+                        onDelete()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 4)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
             Divider()
         }
     }

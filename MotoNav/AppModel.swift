@@ -679,6 +679,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.set(searchHistory, forKey: historyKey)
     }
 
+    func removeHistory(_ name: String) {
+        searchHistory.removeAll { $0 == name }
+        UserDefaults.standard.set(searchHistory, forKey: historyKey)
+    }
+
     func clearHistory() {
         searchHistory = []
         UserDefaults.standard.removeObject(forKey: historyKey)
@@ -1117,6 +1122,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 导航语音播报开关（v1.48 高德式静音按钮）
     @Published var voiceMuted = false
+    /// v1.52 路线规划中（点击"导航去此处"后的视觉反馈）
+    @Published var isPlanning = false
     /// v1.49 播报去重状态
     private var lastSpeakAt = Date(timeIntervalSince1970: 0)
     private var lastSpeakPriority = 0
@@ -1786,6 +1793,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routeChoices = []
         fitTick += 1
         status = "路线服务不可用，直线仅为示意（可能横穿不可通行区域），正在自动重试…"
+        isPlanning = false
         Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             // 目的地未变才替换（用户可能已改目标）
@@ -1834,6 +1842,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             status = "请先定位后再规划路线"
             return
         }
+        isPlanning = true
         destName = name; destLat = lat; destLon = lon
         addHistory(name)
         status = "正在规划到「\(name)」…"
@@ -1881,6 +1890,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     }
                 }
             }
+            isPlanning = false
         }
     }
 
