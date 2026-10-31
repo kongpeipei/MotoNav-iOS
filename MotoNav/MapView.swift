@@ -63,6 +63,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onHotPlaceSelect: ((PlaceLabel) -> Void)?
     /// v1.51 高德瓦片底图（A 选项：底图与高德路线同源，消除路网偏差）
     var useAmapTiles: Bool = false
+    /// v1.56 极简模式：隐藏小区/商铺标注与类别点（高德导航"极简"）
+    var minimal: Bool = false
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -276,23 +278,27 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(GasAnnotation(id: key, coordinate: c))
             }
         }
-        // 小区/商铺名称标签
-        let wantPlaces = Set(placeLabels.map(\.id))
+        // 小区/商铺名称标签（极简模式隐藏，高德"极简"）
+        let wantPlaces = minimal ? Set<String>() : Set(placeLabels.map(\.id))
         map.annotations
             .compactMap { $0 as? PlaceAnnotation }
             .filter { !wantPlaces.contains($0.place.id) }
             .forEach { map.removeAnnotation($0) }
-        for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
-            map.addAnnotation(PlaceAnnotation(place: pl))
+        if !minimal {
+            for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
+                map.addAnnotation(PlaceAnnotation(place: pl))
+            }
         }
-        // 类别搜索结果（学校/医院/加油站）
-        let wantCats = Set(categoryResults.map(\.id))
+        // 类别搜索结果（学校/医院/加油站；极简模式隐藏）
+        let wantCats = minimal ? Set<String>() : Set(categoryResults.map(\.id))
         map.annotations
             .compactMap { $0 as? CategoryAnnotation }
             .filter { !wantCats.contains($0.result.id) }
             .forEach { map.removeAnnotation($0) }
-        for r in categoryResults where !map.annotations.contains(where: { ($0 as? CategoryAnnotation)?.result.id == r.id }) {
-            map.addAnnotation(CategoryAnnotation(result: r))
+        if !minimal {
+            for r in categoryResults where !map.annotations.contains(where: { ($0 as? CategoryAnnotation)?.result.id == r.id }) {
+                map.addAnnotation(CategoryAnnotation(result: r))
+            }
         }
         map.removeOverlays(map.overlays)
         context.coordinator.underPolyline = nil

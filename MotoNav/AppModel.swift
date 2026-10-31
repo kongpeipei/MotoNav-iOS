@@ -1972,8 +1972,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）
-    func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
+    /// v1.56 出行方式切换 / 导航刷新：按当前目的地重新规划
+    func replanCurrent() {
+        guard destLat != 0, destLon != 0, !destName.isEmpty else {
+            status = "暂无目的地，请先搜索地点"
+            return
+        }
+        let n = destName, la = destLat, lo = destLon
+        fetchRouteChoices(to: n, lat: la, lon: lo)
+    }
+
+    /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）    func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
         let n = name ?? destName
         route = c.points
         routeTurns = c.turns

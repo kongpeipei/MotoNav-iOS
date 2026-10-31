@@ -64,6 +64,10 @@ struct ContentView: View {
     @State private var showTraffic = true
     /// v1.55 搜索面板"收藏夹"入口
     @State private var showFavSheet = false
+    /// v1.56 路线详情（分步指引 sheet）
+    @State private var showRouteDetail = false
+    /// v1.56 极简模式（隐藏道路标注，高德导航"极简"）
+    @State private var minimalMap = false
 
     var body: some View {
         ZStack {
@@ -83,6 +87,8 @@ struct ContentView: View {
             zoomOverlay
             // v1.54 高德式右侧竖排控制钮（图层/路况/语音/缩放）
             mapControlsOverlay
+            // v1.56 高德式左侧竖排（导航中：刷新路线 / 极简模式）
+            navLeftOverlay
             // 导航中悬浮退出按钮
             exitNavOverlay
             // 高德式顶部大数字条（剩余里程/时间，导航中显示）
@@ -168,8 +174,7 @@ struct ContentView: View {
             }
         }
         // v1.55：搜索面板"收藏夹"（列出收藏点位，点击直接导航）
-        .sheet(isPresented: $showFavSheet) {
-            NavigationStack {
+        .sheet(isPresented: $showFavSheet) {            NavigationStack {
                 let favs = model.pois.filter { model.isFavorite($0) }
                 List {
                     if favs.isEmpty {
@@ -194,6 +199,61 @@ struct ContentView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("关闭") { showFavSheet = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        // v1.56：路线详情（选中方案分步指引，高德式底部按钮）
+        .sheet(isPresented: $showRouteDetail) {
+            NavigationStack {
+                let c = model.routeChoices.indices.contains(model.selectedRouteIdx) ? model.routeChoices[model.selectedRouteIdx] : nil
+                List {
+                    if let c {
+                        Section {
+                            HStack {
+                                Text("\(c.durationS / 60) 分钟")
+                                Text("·")
+                                Text(c.distanceM < 1000 ? "\(c.distanceM)米" : String(format: "%.1f公里", Double(c.distanceM) / 1000.0))
+                                Text("·")
+                                Text("抓拍\(c.poiCount)处")
+                            }
+                            .font(.subheadline.bold())
+                        } header: {
+                            Text("方案概览")
+                        }
+                        Section {
+                            if c.turns.isEmpty {
+                                Text("暂无分步指引（直线示意路线）").foregroundStyle(.secondary)
+                            } else {
+                                ForEach(Array(c.turns.enumerated()), id: \.offset) { i, t in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: navTurnIcon(t.modifier))
+                                            .font(.body.bold())
+                                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                                            .frame(width: 24)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(navTurnText(t) + (t.roadName.isEmpty ? "" : " 进入 \(t.roadName)"))
+                                                .font(.subheadline)
+                                            Text("距起点 \(navDist(t.fromStartM))")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
+                        } header: {
+                            Text("分步指引")
+                        }
+                    } else {
+                        Text("暂无路线")
+                    }
+                }
+                .navigationTitle("路线详情")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { showRouteDetail = false }
                     }
                 }
             }
@@ -389,7 +449,9 @@ struct ContentView: View {
                 model.planRoute(to: pl.name, lat: pl.lat, lon: pl.lon)
             },
             // v1.51：高德瓦片底图（A 选项）
-            useAmapTiles: useAmapTiles
+            useAmapTiles: useAmapTiles,
+            // v1.56：极简模式（隐藏道路标注）
+            minimal: minimalMap
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -803,19 +865,34 @@ struct ContentView: View {
     private var goHereBar: some View {
         Group {
             if !model.routeChoices.isEmpty {
-                // 方案已选 → 绿色"开始导航"
-                Button {
-                    haptic()
-                    model.toggleNavigation()
-                } label: {
-                    Text("开始导航")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
-                        .padding(.horizontal)
+                // 方案已选 → 高德式底部：路线详情 + 绿色"开始导航"
+                HStack(spacing: 8) {
+                    Button {
+                        haptic()
+                        showRouteDetail = true
+                    } label: {
+                        Text("路线详情")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        haptic()
+                        model.toggleNavigation()
+                    } label: {
+                        Text("开始导航")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal)
                 .padding(.bottom, 4)
             } else if model.isPlanning || goHereName != nil || (goHereLat != 0 && goHereLon != 0) {
                 Button {
@@ -862,22 +939,60 @@ struct ContentView: View {
         }
     }
 
-    /// 规划头部（高德式：出发地 → 目的地）
+    /// 规划头部（高德式：出发地 → 目的地 + 出行方式 Tab：摩托/驾车）
     private var routeChoiceHeader: some View {
-        HStack {
-            Text("我的位置")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Image(systemName: "arrow.right")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(model.destName)
-                .font(.caption.bold())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            Spacer()
+        VStack(spacing: 7) {
+            HStack {
+                Text("我的位置")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "arrow.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(model.destName)
+                    .font(.caption.bold())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+            // v1.56 高德式出行方式 Tab（切换后按当前目的地重新规划）
+            HStack(spacing: 8) {
+                modeTab(icon: "car.fill", name: "驾车", on: !model.motoMode) {
+                    if model.motoMode {
+                        model.motoMode = false
+                        model.replanCurrent()
+                    }
+                }
+                modeTab(icon: "motorcycle.fill", name: "摩托", on: model.motoMode) {
+                    if !model.motoMode {
+                        model.motoMode = true
+                        model.replanCurrent()
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 4)
+    }
+
+    /// 出行方式 Tab 小块（高德式选中蓝底）
+    private func modeTab(icon: String, name: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            haptic()
+            action()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.caption.bold())
+                Text(name).font(.caption.bold())
+            }
+            .foregroundStyle(on ? .white : .primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(on ? Color(red: 0.16, green: 0.38, blue: 1.0) : Color(.systemBackground), in: Capsule())
+            .overlay(Capsule().stroke(on ? Color.clear : .quaternary, lineWidth: 0.8))
+        }
+        .buttonStyle(.plain)
     }
 
     /// 横排方案卡（高德式并列）
@@ -915,6 +1030,15 @@ struct ContentView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
+            // v1.56 高德式路况色进度条（绿通畅/黄缓行/红拥堵分段示意）
+            HStack(spacing: 2) {
+                Rectangle().fill(Color.green.opacity(0.85)).frame(maxWidth: .infinity)
+                Rectangle().fill(Color.yellow.opacity(0.9)).frame(width: 26)
+                Rectangle().fill(Color.red.opacity(0.85)).frame(width: 12)
+            }
+            .frame(height: 4)
+            .clipShape(Capsule())
+            .padding(.top, 3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
@@ -1063,7 +1187,7 @@ struct ContentView: View {
                             .foregroundStyle(.white)
                     }
                     // 下一转向预告（高德顶部主条：接近转向时显示"前方X米右转 进入XX路"）
-                    if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
+                    if let t = ns.nextTurn, ns.distToTurnM < 900, ns.distToTurnM > 0 {
                         HStack(spacing: 6) {
                             Image(systemName: navTurnIcon(t.modifier))
                                 .font(.subheadline.bold())
@@ -1094,6 +1218,51 @@ struct ContentView: View {
             }
             Spacer()
         }
+    }
+
+    /// v1.56 导航中左侧竖排（高德式：刷新 / 极简）
+    private var navLeftOverlay: some View {
+        VStack {
+            Spacer()
+            if model.navigating {
+                VStack(spacing: 12) {
+                    // 刷新（按当前位置+目的地重新规划）
+                    Button {
+                        haptic()
+                        model.replanCurrent()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.body)
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(.white.opacity(0.45), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    // 极简（隐藏道路标注）
+                    Button {
+                        haptic()
+                        minimalMap.toggle()
+                        model.status = minimalMap ? "极简模式：已隐藏道路标注" : "已恢复道路标注"
+                    } label: {
+                        Image(systemName: minimalMap ? "viewfinder.circle.fill" : "viewfinder.circle")
+                            .font(.body)
+                            .foregroundStyle(minimalMap ? Color.blue : .white)
+                            .frame(width: 38, height: 38)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(.white.opacity(0.45), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.leading, 8)
+                .padding(.bottom, 170)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .allowsHitTesting(model.navigating)
     }
 
     /// 导航中悬浮右上角：语音播报开关 + 退出导航（v1.48 新增高德式静音按钮）
