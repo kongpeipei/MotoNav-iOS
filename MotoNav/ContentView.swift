@@ -222,6 +222,12 @@ struct ContentView: View {
             model.checkClipboard()
             // v1.49：首页定时刷新实时路况（60 秒）
             startTrafficTimer()
+            // v1.50：热门/常搜地点标注刷新
+            model.hotTick += 1
+        }
+        // v1.50：搜索历史变化 → 刷新常搜地点高亮
+        .onReceive(model.$searchHistory) { _ in
+            model.hotTick += 1
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
         .onChange(of: scenePhase) { phase in
@@ -320,7 +326,18 @@ struct ContentView: View {
             // v1.49：图层切换 / 实时路况 / 历史轨迹回放
             mapType: mapType,
             trafficRoads: model.trafficRoads,
-            tripTrackLine: shownTripPoints
+            tripTrackLine: shownTripPoints,
+            // v1.50：定位连接线 / 导航全程概览 / 热门与常搜地点
+            locLinkLine: locLinkLine,
+            navOverviewTick: model.navOverviewTick,
+            hotPlaces: model.hotPlaces,
+            recentHot: model.recentHot,
+            hotTick: model.hotTick,
+            onHotPlaceSelect: { pl in
+                haptic()
+                model.setPreview(pl.name, lat: pl.lat, lon: pl.lon)
+                model.planRoute(to: pl.name, lat: pl.lat, lon: pl.lon)
+            }
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -1302,6 +1319,13 @@ struct ContentView: View {
         let list = model.tripTracks
         guard model.shownTripIdx >= 0 && model.shownTripIdx < list.count else { return [] }
         return list[model.shownTripIdx].points
+    }
+
+    /// v1.50：定位连接线（定位点→路线投影点，导航中把车"贴"到路上，高德式步行导航线）
+    private var locLinkLine: [CLLocationCoordinate2D] {
+        guard model.navigating, let loc = model.currentLocation,
+              let proj = model.projectedOntoRoute(loc) else { return [] }
+        return [loc, proj]
     }
 
     /// v1.49：首页定时刷新实时路况（60 秒，以当前位置为中心；只启动一次）

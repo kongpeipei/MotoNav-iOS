@@ -197,6 +197,67 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     /// 历史轨迹是否已加入地图（当前显示的轨迹索引）
     @Published var shownTripIdx = -1
+    /// v1.50：合肥热门目的地（多数人高频搜索，地图橙色星标高亮）
+    @Published var hotTick = 0
+    /// v1.50：开始导航时一次"全程概览"（模仿高德导航起步缩小到合适视野）
+    @Published var navOverviewTick = 0
+
+    /// 合肥热门目的地（WGS-84 硬编码，点击直接规划路线）
+    let hotPlaces: [PlaceLabel] = [
+        PlaceLabel(name: "合肥站", lat: 31.8831, lon: 117.3092),
+        PlaceLabel(name: "合肥南站", lat: 31.7979, lon: 117.2903),
+        PlaceLabel(name: "新桥机场", lat: 31.9863, lon: 116.9765),
+        PlaceLabel(name: "淮河路步行街", lat: 31.8661, lon: 117.2877),
+        PlaceLabel(name: "之心城", lat: 31.8523, lon: 117.2641),
+        PlaceLabel(name: "天鹅湖", lat: 31.8108, lon: 117.2268),
+        PlaceLabel(name: "罍街", lat: 31.8428, lon: 117.3011),
+        PlaceLabel(name: "逍遥津公园", lat: 31.8693, lon: 117.2911),
+        PlaceLabel(name: "万象城", lat: 31.8095, lon: 117.2203),
+        PlaceLabel(name: "融创乐园", lat: 31.6975, lon: 117.2241)
+    ]
+
+    /// 最近常搜索地点（历史记录中能匹配到坐标的 → 与热门一起高亮）
+    var recentHot: [PlaceLabel] {
+        searchHistory.compactMap { name in
+            if let h = hotPlaces.first(where: { $0.name == name }) { return h }
+            if let l = searchLandmarks.first(where: { $0.name == name || $0.aliases.contains(name) }) {
+                return PlaceLabel(name: l.name, lat: l.lat, lon: l.lon)
+            }
+            return nil
+        }
+    }
+
+    /// 一条路线折线上经过的限行/禁摩点数量（禁摩优选用）
+    func restrictionCountOn(_ pts: [CLLocationCoordinate2D]) -> Int {
+        pois.filter { p in
+            p.type == .RESTRICTION && p.enabled && allPoiEnabled
+                && pts.contains { distanceM($0, p.coordinate) < 250 }
+        }.count
+    }
+
+    /// 定位点到路线折线的最短投影点（高德式步行导航"定位连接线"终点，把车"贴"到路上）
+    func projectedOntoRoute(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D? {
+        guard route.count >= 2 else { return nil }
+        var best: CLLocationCoordinate2D?
+        var bestD = Double.greatestFiniteMagnitude
+        for i in 0 ..< (route.count - 1) {
+            let a = route[i], b = route[i + 1]
+            let p = projectPoint(c, onto: a, b)
+            let d = distanceM(c, p)
+            if d < bestD { bestD = d; best = p }
+        }
+        return best
+    }
+
+    /// 点到线段的垂足（经纬度平面近似，小范围精度足够）
+    private func projectPoint(_ p: CLLocationCoordinate2D, onto a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        let dx = b.latitude - a.latitude
+        let dy = b.longitude - a.longitude
+        let denom = dx * dx + dy * dy
+        guard denom > 0 else { return a }
+        let t = min(max(((p.latitude - a.latitude) * dx + (p.longitude - a.longitude) * dy) / denom, 0), 1)
+        return CLLocationCoordinate2D(latitude: a.latitude + t * dx, longitude: a.longitude + t * dy)
+    }
 
     private let historyKey = "search_history"
     private let historyLimit = 10
@@ -1586,15 +1647,30 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             } else {
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
-                let list = choices.map { c -> RouteChoice in
+                var list = choices.map { c -> RouteChoice in
                     let n = nearbyPoisOnRoute(c.points).count
                     return RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
                                        label: c.label, poiCount: n)
                 }
+                // v1.50（用户点名"真正避开禁摩"）：摩托车模式下把"经过禁摩点最少"的方案提到最前
+                if motoMode {
+                    list.sort {
+                        restrictionCountOn($0.points) < restrictionCountOn($1.points)
+                    }
+                }
                 routeChoices = list
                 selectedRouteIdx = 0
                 applyRouteChoice(list[0], name: name)
+                // v1.50：摩托车模式禁摩方案提示
+                if motoMode {
+                    let rc = restrictionCountOn(list[0].points)
+                    if rc == 0 {
+                        status = "路线已避开限行/禁摩区域（摩托模式）"
+                    } else {
+                        status = "⚠️ 各方案均经过 \(rc) 处限行/禁摩区域，请谨慎通行或提前绕行"
+                    }
+                }
             }
         }
     }
@@ -1668,6 +1744,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             shownTripIdx = -1
             startMonitoring()
             startLiveActivity(destName: destName)
+            // v1.50：开始导航先"全程概览"（高德起步视野），随后定位按钮/跟随再切近景
+            navOverviewTick += 1
+            locateTick += 1
             // v1.49 摩托车模式：路线经过限行/禁摩点 → 开始前提醒
             if motoMode {
                 let forbidden = pois.filter { p in

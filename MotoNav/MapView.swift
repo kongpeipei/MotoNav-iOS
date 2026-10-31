@@ -50,6 +50,15 @@ struct MapViewRepresentable: UIViewRepresentable {
     var trafficRoads: [TrafficRoad] = []
     /// v1.49 历史轨迹（灰色虚线，回放）
     var tripTrackLine: [CLLocationCoordinate2D] = []
+    /// v1.50 定位连接线（定位点→路线投影点，高德式步行导航线）
+    var locLinkLine: [CLLocationCoordinate2D] = []
+    /// v1.50 全程概览请求（开始导航时缩小到合适视野）
+    var navOverviewTick: Int = 0
+    /// v1.50 热门目的地 / 最近常搜索地点（橙色星标高亮）
+    var hotPlaces: [PlaceLabel] = []
+    var recentHot: [PlaceLabel] = []
+    var hotTick: Int = 0
+    var onHotPlaceSelect: ((PlaceLabel) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -97,6 +106,55 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setRegion(
                     MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
                     animated: false)
+            }
+        }
+        // v1.50 开始导航"全程概览"：缩小到覆盖整条路线（高德起步视野）
+        if navOverviewTick != context.coordinator.lastNavOverviewTick {
+            context.coordinator.lastNavOverviewTick = navOverviewTick
+            if navOverviewTick > 0, route.count > 1 {
+                context.coordinator.userMoved = false
+                context.coordinator.setRegionProgrammatically {
+                    var rect = MKMapRect.null
+                    for c in route {
+                        let p = MKMapPoint(c)
+                        rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                    }
+                    map.setVisibleMapRect(rect,
+                        edgePadding: UIEdgeInsets(top: 90, left: 50, bottom: 90, right: 50),
+                        animated: true)
+                    // 概览 1.2 秒后自动回到近景跟随（高德：起步概览→驾驶跟随）
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        map.userTrackingMode = .followWithHeading
+                        map.camera.pitch = 55
+                    }
+                }
+            }
+        }
+        // v1.50 定位连接线（定位点→路线投影点，高德式步行导航线；导航中随定位实时更新）
+        var needLink = false
+        if navigating, locLinkLine.count == 2 {
+            let a = MKMapPoint(locLinkLine[0]), b = MKMapPoint(locLinkLine[1])
+            let r = MKPolyline(points: [a, b], count: 2)
+            if let old = context.coordinator.locLinkPolyline {
+                map.removeOverlay(old)
+            }
+            context.coordinator.locLinkPolyline = r
+            map.addOverlay(r)
+            needLink = true
+        }
+        if !needLink, let old = context.coordinator.locLinkPolyline {
+            map.removeOverlay(old)
+            context.coordinator.locLinkPolyline = nil
+        }
+        // v1.50 热门/最近搜索地点：橙色星标高亮（hotTick 变化时重建）
+        if hotTick != context.coordinator.lastHotTick {
+            context.coordinator.lastHotTick = hotTick
+            let olds = map.annotations.filter { $0 is HotAnnotation }
+            map.removeAnnotations(olds)
+            var marks = Set<String>()
+            let all = hotPlaces + recentHot
+            for h in all where marks.insert(h.name).inserted {
+                map.addAnnotation(HotAnnotation(name: h.name, lat: h.lat, lon: h.lon))
             }
         }
         // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回；包含全部方案路线）
@@ -341,6 +399,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+        var onHotPlaceSelect: ((PlaceLabel) -> Void)?
+        /// v1.50 定位连接线折线
+        var locLinkPolyline: MKPolyline?
+        /// v1.50 概览/热门重建记忆
+        var lastNavOverviewTick = 0
+        var lastHotTick = 0
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
@@ -478,6 +542,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             } else if let ca = view.annotation as? CategoryAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onCategorySelect?(ca.result)
+            } else if let ha = view.annotation as? HotAnnotation {
+                // v1.50 热门/最近常搜索地点：点击直接规划路线
+                mapView.deselectAnnotation(view.annotation, animated: false)
+                let pl = PlaceLabel(name: ha.name, lat: ha.coordinate.latitude, lon: ha.coordinate.longitude)
+                onHotPlaceSelect?(pl)
             }
         }
 
@@ -522,6 +591,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.titleVisibility = .hidden
                 return v
             }
+            // v1.50 热门/最近常搜索地点：橙色星标
+            if let ha = annotation as? HotAnnotation {
+                let id = "hot"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? HotAnnotationView
+                    ?? HotAnnotationView(annotation: ha, reuseIdentifier: id)
+                v.title = ha.name
+                v.canShowCallout = false
+                return v
+            }
             if let pla = annotation as? PlaceAnnotation {
                 let id = "place"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
@@ -550,6 +628,19 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
+            // v1.50 重中之重：抓拍类点位用自定义"红底白相机+呼吸光圈"高亮标，
+            // 任何底图/缩放/深色模式下都醒目，且 displayPriority=.required 永不被系统隐藏
+            if pa.poi.type.isCamera {
+                let id = "cam"
+                if let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? CameraMarkerView {
+                    v.annotation = pa
+                    v.canShowCallout = true
+                    return v
+                }
+                let v = CameraMarkerView(annotation: pa, reuseIdentifier: id)
+                v.canShowCallout = true
+                return v
+            }
             let id = "poi"
             let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
                 ?? MKMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
@@ -573,6 +664,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
+                // v1.50 定位连接线：亮黄 3pt（高德式步行导航"贴路"线）
+                if poly === self.locLinkPolyline {
+                    r.strokeColor = UIColor.systemYellow
+                    r.lineWidth = 3
+                    r.lineDashPattern = [2, 2]
+                } else
                 // v1.49 历史轨迹：灰色虚线（最底）
                 if poly === self.tripPolyline {
                     r.strokeColor = UIColor.gray.withAlphaComponent(0.8)
@@ -646,6 +743,95 @@ final class PreviewAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     var title: String? { "搜索目标" }
+}
+
+/// v1.50 热门/最近常搜索地点标注（点击直接规划路线）
+final class HotAnnotation: NSObject, MKAnnotation {
+    let name: String
+    var coordinate: CLLocationCoordinate2D
+    init(name: String, lat: Double, lon: Double) {
+        self.name = name
+        self.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        super.init()
+    }
+    var title: String? { name }
+    var subtitle: String? { "热门/常搜" }
+}
+
+/// v1.50 热门/最近常搜索地点视图：橙色星标 + 白描边（醒目）
+final class HotAnnotationView: MKMarkerAnnotationView {
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        markerTintColor = .systemOrange
+        glyphText = "★"
+        titleVisibility = .visible
+        displayPriority = .required
+        layer.borderWidth = 2
+        layer.borderColor = UIColor.white.cgColor
+        layer.cornerRadius = 8
+    }
+    required init?(coder aDecoder: NSCoder) { fatalError("init(coder:)") }
+}
+
+/// v1.50 重中之重：抓拍点位高亮视图——红底白相机 + 白色粗描边 + 呼吸光圈，
+/// displayPriority = .required 保证任何底图/缩放级别都显示
+final class CameraMarkerView: MKAnnotationView {
+    private let haloLayer = CAShapeLayer()
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        frame = CGRect(x: 0, y: 0, width: 40, height: 40)
+        centerOffset = CGPoint(x: 0, y: -20)
+        let img = UIImageView(image: Self.makeIcon())
+        img.frame = CGRect(x: 3, y: 3, width: 34, height: 34)
+        addSubview(img)
+        // 白色粗描边圆底
+        layer.borderWidth = 3
+        layer.borderColor = UIColor.white.cgColor
+        layer.cornerRadius = 20
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.5
+        layer.shadowRadius = 4
+        layer.shadowOffset = .zero
+        // 呼吸光圈（缩放+淡出动画，高德式警示脉冲）
+        haloLayer.path = UIBezierPath(ovalIn: CGRect(x: -9, y: -9, width: 58, height: 58)).cgPath
+        haloLayer.fillColor = UIColor.clear.cgColor
+        haloLayer.strokeColor = UIColor.systemRed.cgColor
+        haloLayer.lineWidth = 3
+        layer.addSublayer(haloLayer)
+        let pulse = CABasicAnimation(keyPath: "transform.scale")
+        pulse.fromValue = 0.8
+        pulse.toValue = 1.4
+        pulse.duration = 1.0
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1.0
+        fade.toValue = 0.25
+        fade.duration = 1.0
+        fade.autoreverses = true
+        fade.repeatCount = .infinity
+        haloLayer.add(pulse, forKey: "pulse")
+        haloLayer.add(fade, forKey: "fade")
+        displayPriority = .required
+    }
+
+    required init?(coder aDecoder: NSCoder) { fatalError("init(coder:)") }
+
+    static func makeIcon() -> UIImage {
+        let size = CGSize(width: 34, height: 34)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            UIColor.systemRed.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: 34, height: 34)).fill()
+            if let img = UIImage(systemName: "video.fill")?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                let t = img.size
+                img.draw(in: CGRect(x: (34 - t.width) / 2, y: (34 - t.height) / 2,
+                                    width: t.width, height: t.height))
+            }
+        }
+    }
 }
 
 /// 加油站标注（橙色"油"）
