@@ -41,14 +41,12 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             mapLayer
-            // 等待定位/状态提示：屏幕最上边
-            topOverlay
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
             if !model.navigating {
                 menuOverlay
             }
-            // 天气条（左上角，指南针下方，一行；导航中隐藏，高德导航顶部只留导航信息）
+            // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
             if !model.navigating {
                 weatherOverlay
             }
@@ -252,6 +250,7 @@ struct ContentView: View {
     }
 
     /// 天气条：左上角（指南针下方），一行液态玻璃胶囊（不再遮挡右上角状态文字）
+    /// 天气条：屏幕最上边（原提醒条位置，一行液态玻璃胶囊；导航中隐藏）
     private var weatherOverlay: some View {
         VStack {
             HStack {
@@ -263,7 +262,6 @@ struct ContentView: View {
                         .padding(.vertical, 5)
                         .background(.ultraThinMaterial, in: Capsule())
                         .padding(.leading, 12)
-                        .padding(.top, 96)
                 }
                 Spacer()
             }
@@ -877,40 +875,6 @@ struct ContentView: View {
         model.addPoi(type: type, name: "地图新增\(type.label)点", lat: c.latitude, lon: c.longitude)
         model.status = "已添加：地图新增\(type.label)点"
         pendingCoord = nil
-    }
-
-    /// 屏幕最上边的状态提示条（矩形，长度=屏宽不变，高度随行数自适应；导航中隐藏避免与导航条重复）
-    private var topOverlay: some View {
-        VStack {
-            if !model.navigating {
-                statusBar
-            }
-            Spacer()
-        }
-    }
-
-    private var statusBar: some View {
-        Text(model.status)
-            .font(.footnote)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(.black.opacity(0.45))
-            )
-    }
-
-    /// 目的地搜索框（输入时智能联想，高德式底部胶囊；导航时被退出按钮替代）
-    private var searchBar: some View {
-        VStack(spacing: 4) {
-            searchInputRow
-            if showSuggestions && !suggestions.isEmpty {
-                suggestionsList
-            }
-        }
-        .background(.black.opacity(0.18))
     }
 
     /// 搜索输入行：高德样式通栏圆角胶囊（放大镜 + 输入 + ✕ + 搜索按钮为一体）
