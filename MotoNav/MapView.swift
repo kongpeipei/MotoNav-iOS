@@ -267,11 +267,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.add(main)
             }
         }
-        // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
-        if !context.coordinator.userMoved {
-            map.rotation = CLLocationDirection(heading) // v1.77：2D SDK 属性名 rotation（3D 为 rotationDegree）
-        }
-        // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
+        // v1.77：2D SDK 地图固定北朝上、无旋转 API（3D 的 rotationDegree 已移除）；指南针自绘独立跟随手机朝向
+        // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动）
         if navigateFollowTick != context.coordinator.lastNavFollowTick {
             context.coordinator.lastNavFollowTick = navigateFollowTick
             context.coordinator.userMoved = false
