@@ -862,7 +862,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 if let data, let img = UIImage(data: data) {
                     self.cache[key] = img
                     self.pending.remove(key)
-                    if self.cache.count > 400 {
+                    if self.cache.count > 200 {
                         // Dictionary 无 removeFirst：清最旧若干条目（键序近似 FIFO）
                         var drop = 50
                         while drop > 0, let k = self.cache.keys.first {

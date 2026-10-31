@@ -220,12 +220,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 最近常搜索地点（历史记录中能匹配到坐标的 → 与热门一起高亮）
     var recentHot: [PlaceLabel] {
-        searchHistory.compactMap { name in
-            if let h = hotPlaces.first(where: { $0.name == name }) { return h }
-            if let l = searchLandmarks.first(where: { $0.name == name || $0.aliases.contains(name) }) {
-                return PlaceLabel(name: l.name, lat: l.lat, lon: l.lon)
+        // v1.53-fix：按标准名去重（别名搜索可能映射到同一地点 → ForEach id 冲突曾致启动闪退）
+        var seen = Set<String>()
+        return searchHistory.compactMap { name in
+            let pl: PlaceLabel?
+            if let h = hotPlaces.first(where: { $0.name == name }) {
+                pl = h
+            } else if let l = searchLandmarks.first(where: { $0.name == name || $0.aliases.contains(name) }) {
+                pl = PlaceLabel(name: l.name, lat: l.lat, lon: l.lon)
+            } else {
+                pl = nil
             }
-            return nil
+            guard let p = pl, seen.insert(p.name).inserted else { return nil }
+            return p
         }
     }
 

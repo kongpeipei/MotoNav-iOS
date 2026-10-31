@@ -1149,7 +1149,8 @@ struct ContentView: View {
             .padding(.horizontal, 14)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(model.recentHot.prefix(showAllRecent ? 12 : 3), id: \.name) { pl in
+                    // v1.53-fix：用 offset 作 id 双保险，杜绝同名地点 ID 冲突闪退
+                    ForEach(Array(model.recentHot.prefix(showAllRecent ? 12 : 3).enumerated()), id: \.offset) { _, pl in
                         Button {
                             tapRecent(pl)
                         } label: {
@@ -1207,7 +1208,7 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                     }
                     .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
-                    ForEach(model.recentHot.prefix(5), id: \.name) { pl in
+                    ForEach(Array(model.recentHot.prefix(5).enumerated()), id: \.offset) { _, pl in
                         row(icon: "clock.arrow.circlepath", color: .orange, name: displayName(pl.name), sub: "合肥 · 最近搜索", place: pl,
                             onDelete: { model.removeHistory(pl.name) })
                     }
