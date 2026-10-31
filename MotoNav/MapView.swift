@@ -53,6 +53,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     let northUpTick: Int
     /// v1.81 地点所属区域多边形（AOI，蓝色虚线框）
     let tipPolygon: [CLLocationCoordinate2D]?
+    /// v1.81.1 地点信息卡定位点（fitTick 变化时优先移到这里，不画高亮圈）
+    let tipFit: CLLocationCoordinate2D?
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
 
@@ -120,9 +122,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回；包含全部方案路线）
-        if fitTick != context.coordinator.lastFitTick && route.count > 1 {
+        if fitTick != context.coordinator.lastFitTick {
             context.coordinator.lastFitTick = fitTick
-            context.coordinator.setRegionProgrammatically {
+            if let tf = tipFit {
+                // v1.81.1 地点信息卡：地图定位到该点（不画黄圈，卡片沉底展示）
+                context.coordinator.setRegionProgrammatically {
+                    map.setRegion(MKCoordinateRegion(center: tf, latitudinalMeters: 3000, longitudinalMeters: 3000), animated: true)
+                }
+            } else if route.count > 1 {
                 var rect = MKMapRect.null
                 var pts = route
                 for r in choiceRoutes { pts.append(contentsOf: r) }

@@ -330,6 +330,7 @@ struct ContentView: View {
             reloadTick: reloadTick,
             northUpTick: northUpTick,
             tipPolygon: tipPolygon,
+            tipFit: tipCard.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
             onMapLoad: { ok, err in
                 if ok {
                     mapLoadFailed = false
@@ -640,7 +641,21 @@ struct ContentView: View {
                     Text("常用地点")
                 }
                 Section {
-                    let favPois = model.pois.filter { model.isFavorite($0) }
+                    // v1.81.1 收藏列表 = 内置点位收藏 + 联想地点收藏（共用同一收藏夹）
+                    let favPois: [Poi] = {
+                        var ps = model.pois.filter { model.isFavorite($0) }
+                        for (key, name) in model.favorites {
+                            let parts = key.split(separator: ",").compactMap { Double($0) }
+                            guard parts.count == 2,
+                                  !ps.contains(where: { $0.lat == parts[0] && $0.lon == parts[1] }) else { continue }
+                            var h = 0
+                            for b in key.utf8 { h = (h &* 31 &+ Int(b)) }
+                            ps.append(Poi(id: Int64(9_000_000 + abs(h) % 900_000),
+                                          type: .CUSTOM, name: name, lat: parts[0], lon: parts[1],
+                                          radiusM: 0, enabled: true, note: "联想收藏"))
+                        }
+                        return ps
+                    }()
                     if favPois.isEmpty {
                         Text("暂无收藏点位（点位详情里点⭐收藏）")
                             .foregroundStyle(.secondary)
@@ -770,18 +785,19 @@ struct ContentView: View {
         VStack(spacing: 0) {
             Spacer()
             if !model.navigating {
-                // v1.81 地点信息卡（点击联想地点主体/长按地图地点名后显示）
                 if let t = tipCard {
+                    // v1.81.1 地点信息卡独占底部：隐藏类别条/历史/方案卡/去这里，只留卡片+搜索卡片
                     tipInfoCard(t)
+                } else {
+                    // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
+                    categoryBar
+                    // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
+                    if !(searchFocused && searchText.isEmpty) {
+                        historyBar
+                    }
+                    routeChoiceList
+                    goHereBar
                 }
-                // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
-                categoryBar
-                // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
-                if !(searchFocused && searchText.isEmpty) {
-                    historyBar
-                }
-                routeChoiceList
-                goHereBar
                 // v1.80 搜索框 + 导航/我的 合并为一个整体卡片
                 bottomMainCard
             } else {
@@ -1353,13 +1369,18 @@ struct ContentView: View {
         }
     }
 
-    /// v1.81 点击联想地点主体 / 长按地图地点名：地图高亮 + 北向上 + 地点信息卡
+    /// v1.81 点击联想地点主体 / 长按地图地点名：地图定位 + 北向上 + 底部地点信息卡
+    /// 注：不画黄圈高亮、不做路线规划（点卡片"路线"按钮才规划），仅地图居中 + 北向上
     private func showTipCard(name: String, lat: Double, lon: Double, sub: String) {
         tipCard = AppModel.AmapTip(name: name, sub: sub, lat: lat, lon: lon)
         tipRoad = nil
         tipAoiName = nil
         tipPolygon = nil
-        model.setPreview(name, lat: lat, lon: lon)
+        // 清掉此前规划的路线/方案卡残留，只留地点卡
+        model.route = []
+        model.routePois = []
+        model.routeTurns = []
+        model.routeChoices = []
         model.fitTick += 1
         northUpTick += 1
         model.status = "已定位到「\(name)」"
