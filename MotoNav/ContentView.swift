@@ -340,6 +340,8 @@ struct ContentView: View {
             // v1.49：图层切换 / 实时路况 / 历史轨迹回放
             mapType: mapType,
             trafficRoads: model.trafficRoads,
+            // v1.54：实时路况开关
+            showTraffic: showTraffic,
             tripTrackLine: shownTripPoints,
             // v1.50：定位连接线 / 导航全程概览 / 热门与常搜地点
             locLinkLine: locLinkLine,
@@ -353,9 +355,7 @@ struct ContentView: View {
                 model.planRoute(to: pl.name, lat: pl.lat, lon: pl.lon)
             },
             // v1.51：高德瓦片底图（A 选项）
-            useAmapTiles: useAmapTiles,
-            // v1.54：实时路况开关
-            showTraffic: showTraffic
+            useAmapTiles: useAmapTiles
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
