@@ -319,34 +319,25 @@ struct ContentView: View {
         EmptyView()
     }
 
-    /// 右上角图层/路况文字按钮组
+    /// 右上角GPS信号文字按钮组
     private var layerTrafficButtons: some View {
         VStack {
             HStack {
                 Spacer()
                 VStack(spacing: 8) {
+                    // GPS信号显示按钮
                     Button {
-                        showSatellite.toggle()
+                        // 点击显示定位精度信息
+                        if let loc = model.currentLocation {
+                            model.status = "GPS位置：\(String(format: "%.5f, %.5f", loc.latitude, loc.longitude))"
+                        }
                     } label: {
-                        Text(showSatellite ? "标准" : "卫星")
+                        Text("GPS")
                             .font(.caption.bold())
-                            .foregroundStyle(showSatellite ? .white : .primary)
+                            .foregroundStyle(.white)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(showSatellite ? Color.blue : Color.black.opacity(0.3), in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        showTraffic.toggle()
-                    } label: {
-                        Text("路况")
-                            .font(.caption.bold())
-                            .foregroundStyle(showTraffic ? .white : .primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(showTraffic ? Color.green : Color.black.opacity(0.3), in: Capsule())
+                            .background(Color.blue, in: Capsule())
                             .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
@@ -437,7 +428,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.57")
+                        Text("v1.58")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -498,16 +489,15 @@ struct ContentView: View {
                 historyBar
                 routeChoiceList
                 goHereBar
-                // 规划态隐藏底部搜索框（顶部路线胶囊提供重新搜索入口），避免底部三层拥挤
-                if showSearchField || model.routeChoices.isEmpty {
-                    searchBar
-                }
+                // 搜索框始终显示（底部选项卡上方）
+                searchBar
             } else {
                 turnAheadCard
                 navInfoCard
                 snapAlertCard
             }
         }
+        .padding(.bottom, 50) // 给底部选项卡留空间
     }
 
     /// 高德式导航信息卡：下一转向（大图标+距离+路名+车道）+ 实时速度
