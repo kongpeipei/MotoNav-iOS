@@ -1,5 +1,5 @@
 import SwiftUI
-import MAMapKit
+import AMap2DMap
 import AMapFoundationKit
 import UIKit
 import CoreLocation
