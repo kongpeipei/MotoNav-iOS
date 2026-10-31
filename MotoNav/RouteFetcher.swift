@@ -222,13 +222,29 @@ enum RouteFetcher {
             }
         }
         guard !points.isEmpty else { return nil }
+        // v1.51 距离兜底：高德对超短途可能返回 distance=0，用折线长度重算
+        var dist = p["distance"] as? Int ?? 0
+        var dur = p["duration"] as? Int ?? 0
+        if dist <= 0 { dist = Int(polylineMeters(points)) }
+        if dur <= 0 { dur = max(1, Int(Double(dist) / 8.0)) } // 8m/s 城市骑行速度估时
         return RouteChoice(
             points: points,
-            distanceM: p["distance"] as? Int ?? 0,
-            durationS: p["duration"] as? Int ?? 0,
+            distanceM: dist,
+            durationS: dur,
             turns: turns,
             label: label,
             poiCount: 0)
+    }
+
+    /// 折线总长度（米），distance 解析失败时的兜底
+    private static func polylineMeters(_ pts: [CLLocationCoordinate2D]) -> Double {
+        guard pts.count > 1 else { return 0 }
+        var acc = 0.0
+        for i in 0 ..< (pts.count - 1) {
+            acc += CLLocation(latitude: pts[i].latitude, longitude: pts[i].longitude)
+                .distance(from: CLLocation(latitude: pts[i + 1].latitude, longitude: pts[i + 1].longitude))
+        }
+        return acc
     }
 
     /// 从高德 instruction 提取转向动作

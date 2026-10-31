@@ -1658,6 +1658,21 @@ struct PoiDetailSheet: View {
                     .padding(.vertical, 12)
                     .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
             }
+            // v1.51 新增/移动过的点位：详情气泡内直接删除（之前只能长按点位→菜单删除，太隐蔽）
+            if poi.isCustom {
+                Button(role: .destructive) {
+                    model.deletePoi(id: poi.id)
+                    model.status = "已删除：\(poi.name)"
+                    onClose(true)
+                } label: {
+                    Label("删除该点位", systemImage: "trash")
+                        .font(.footnote.bold())
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
         }
         .padding(20)
         .presentationDetents([.height(320)])

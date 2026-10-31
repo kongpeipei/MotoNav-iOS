@@ -328,12 +328,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addOverlay(under)
                 map.addOverlay(main)
             } else {
-                // 规划态：备选方案浅绿虚线 + 当前方案草绿双层（高德式同屏多路线）
-                for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
-                    let alt = MKPolyline(coordinates: pts, count: pts.count)
-                    context.coordinator.alternatePolylines.append(alt)
-                    map.addOverlay(alt)
-                }
+                // v1.51 只画当前选中方案（高德式：卡片切换才换线），不再同屏叠加多条备选
+                // （多策略线重叠交叉是"路线乱七八糟"观感的主因）
                 let under = MKPolyline(coordinates: route, count: route.count)
                 context.coordinator.underPolyline = under
                 let main = MKPolyline(coordinates: route, count: route.count)

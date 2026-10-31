@@ -1553,7 +1553,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
             let e = await eSnap
             let from2 = from
-            let end2 = e ?? rawEnd
+            // v1.51 终点吸附限距：吸附点距原坐标 >250m 视为失败（自定义点位在园区内时
+            // OSRM nearest 会吸到远处主路导致路线乱绕），直接使用原坐标 + 定位连接线兜底
+            let end2: CLLocationCoordinate2D
+            if let e2 = e, distanceM(rawEnd, e2) < 250 {
+                end2 = e2
+            } else {
+                end2 = rawEnd
+            }
             let r = await RouteFetcher.fetch(from: from2, to: end2, amapKey: amapKey)
             if let r = r {
                 route = r.points
@@ -1641,7 +1648,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
             let e = await eSnap
             let from2 = from
-            let end2 = e ?? rawEnd
+            // v1.51 终点吸附限距（>250m 不用吸附点，避免园区内点被吸到远处主路导致乱绕）
+            let end2: CLLocationCoordinate2D
+            if let e2 = e, distanceM(rawEnd, e2) < 250 {
+                end2 = e2
+            } else {
+                end2 = rawEnd
+            }
             let choices = await RouteFetcher.fetchAll(from: from2, to: end2, amapKey: amapKey)
             if choices.isEmpty {
                 fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
