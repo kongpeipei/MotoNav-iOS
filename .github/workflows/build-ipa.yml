@@ -27,6 +27,14 @@ jobs:
         run: |
           pod install --repo-update
 
+      - name: Inspect 2D SDK structure (v1.77 排障)
+        run: |
+          echo "--- Pods/AMap2DMap 顶层 ---"
+          ls -la Pods/AMap2DMap 2>/dev/null | head -20
+          echo "--- framework 树(前3层) ---"
+          find Pods/AMap2DMap -maxdepth 3 -name "*.h" | head -30
+          find Pods/AMap2DMap -maxdepth 2 -name "*.framework" -o -maxdepth 2 -name "*.bundle" | head
+
       - name: Build app (unsigned)
         run: |
           xcodebuild \

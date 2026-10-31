@@ -1,8 +1,7 @@
 import SwiftUI
-import MAMapKit
-import AMapFoundationKit
 import UIKit
 import CoreLocation
+// v1.77：MAMapView/AMapServices 等符号经 MotoNav-Bridging-Header.h 全局可见（2D SDK 无 Swift module）
 
 /// 轻量地图封装（v1.68 B档：高德官方 3D 地图 SDK 渲染引擎，真·高德底图；坐标 WGS84 存储、GCJ 显示）
 /// 保留全部对外参数签名，ContentView 无需改动。
@@ -299,13 +298,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setCenter(CLLocationCoordinate2D(latitude: g.0, longitude: g.1), animated: true)
             }
         }
-        // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
+        // v1.77：2D SDK 无俯仰（2D 顶视即高德骑行风格），导航不倾斜
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
             context.coordinator.lastPitchState = isNav
-            context.coordinator.setRegionProgrammatically {
-                map.cameraDegree = isNav ? 45 : 0
-            }
         }
         // 缩放按钮（+/-）：按地图中心缩放
         if zoomInTick != context.coordinator.lastZoomInTick {
