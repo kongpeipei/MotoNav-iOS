@@ -1865,6 +1865,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
             let choices = await RouteFetcher.fetchAll(from: from2, to: end2, amapKey: amapKey)
             if choices.isEmpty {
+                // v1.53：失败原因明确展示（高德错误码/网络），不再是"静默无路线"
+                let diag = RouteDiagnostics.lastAmapError
+                if diag.isEmpty {
+                    status = "路线规划失败（网络或服务无返回），已回退直线示意"
+                } else {
+                    status = "路线规划失败（\(diag)），已回退直线示意"
+                }
                 fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
             } else {
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"

@@ -133,20 +133,36 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // v1.50 定位连接线（定位点→路线投影点，高德式步行导航线；导航中随定位实时更新）
+        // v1.53 卡顿优化：端点位移 >12m 才重建 overlay（导航中 body 高频刷新，避免每帧移除/添加）
         var needLink = false
         if navigating, locLinkLine.count == 2 {
-            let a = MKMapPoint(locLinkLine[0]), b = MKMapPoint(locLinkLine[1])
-            let r = MKPolyline(points: [a, b], count: 2)
+            let moved: Bool
+            if context.coordinator.lastLinkLine.count == 2 {
+                let d = max(
+                    MKMapPoint(locLinkLine[0]).distance(to: MKMapPoint(context.coordinator.lastLinkLine[0])),
+                    MKMapPoint(locLinkLine[1]).distance(to: MKMapPoint(context.coordinator.lastLinkLine[1]))
+                )
+                moved = d > 12
+            } else {
+                moved = true
+            }
+            context.coordinator.lastLinkLine = locLinkLine
+            if moved {
+                let a = MKMapPoint(locLinkLine[0]), b = MKMapPoint(locLinkLine[1])
+                let r = MKPolyline(points: [a, b], count: 2)
+                if let old = context.coordinator.locLinkPolyline {
+                    map.removeOverlay(old)
+                }
+                context.coordinator.locLinkPolyline = r
+                map.addOverlay(r)
+            }
+            needLink = true
+        } else {
+            context.coordinator.lastLinkLine = []
             if let old = context.coordinator.locLinkPolyline {
                 map.removeOverlay(old)
+                context.coordinator.locLinkPolyline = nil
             }
-            context.coordinator.locLinkPolyline = r
-            map.addOverlay(r)
-            needLink = true
-        }
-        if !needLink, let old = context.coordinator.locLinkPolyline {
-            map.removeOverlay(old)
-            context.coordinator.locLinkPolyline = nil
         }
         // v1.50 热门/最近搜索地点：橙色星标高亮（hotTick 变化时重建）
         if hotTick != context.coordinator.lastHotTick {
@@ -415,6 +431,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onHotPlaceSelect: ((PlaceLabel) -> Void)?
         /// v1.50 定位连接线折线
         var locLinkPolyline: MKPolyline?
+        /// v1.53 定位连接线节流缓存
+        var lastLinkLine: [CLLocationCoordinate2D] = []
         /// v1.50 概览/热门重建记忆
         var lastNavOverviewTick = 0
         var lastHotTick = 0
@@ -790,14 +808,24 @@ final class AmapTileRenderer: MKOverlayRenderer {
         let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
         guard x1 >= x0, y1 >= y0 else { return }
         ctx.setFillColor(UIColor.systemGray5.cgColor)
+        // v1.53 卡顿优化：GCJ 偏移逐行近似（每行中心点算一次，瓦片内误差可忽略，省 20× 三角函数）
+        let lonMid = ((Double(x0) + Double(x1)) / 2.0 + 0.5) / Double(n) * 360.0 - 180.0
+        var rowGCJ: [Int: (gy: Int, lonDelta: Double)] = [:]
+        for y in y0...y1 {
+            let lat = tileLat(y, z)
+            let g = CoordConv.wgs2gcj(lat, lonMid)
+            rowGCJ[y] = (
+                min(n - 1, max(0, tileY(g.0, z))),
+                g.1 - lonMid
+            )
+        }
         for x in x0...x1 {
+            let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
             for y in y0...y1 {
+                guard let r = rowGCJ[y] else { continue }
                 // WGS 瓦片中心 → GCJ 瓦片索引（中心对齐近似）
-                let lat = tileLat(y, z)
-                let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
-                let g = CoordConv.wgs2gcj(lat, lon)
-                let gx = min(n - 1, max(0, Int(floor((g.1 + 180.0) / 360.0 * Double(n)))))
-                let gy = min(n - 1, max(0, tileY(g.0, z)))
+                let gx = min(n - 1, max(0, Int(floor((lon + r.lonDelta + 180.0) / 360.0 * Double(n)))))
+                let gy = r.gy
                 let key = "\(z)-\(gx)-\(gy)"
                 let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
                                                     width: per, height: per))
@@ -814,25 +842,38 @@ final class AmapTileRenderer: MKOverlayRenderer {
         }
     }
 
+    // v1.53 并发限制：最多同时下载 16 个瓦片，防止网络慢时大量请求堆积卡顿
+    private var inflight = 0
+
     private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        if inflight >= 16 {
+            pending.remove(key) // 并发满：移出待下载，待下次重绘再试
+            return
+        }
         guard let url = URL(string: AmapTileOverlay.tileURL
             .replacingOccurrences(of: "{x}", with: "\(x)")
             .replacingOccurrences(of: "{y}", with: "\(y)")
             .replacingOccurrences(of: "{z}", with: "\(z)")) else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, let data, let img = UIImage(data: data) else { return }
+        inflight += 1
+        URLSession.shared.dataTask(with: url) { [weak self] data, resp, err in
+            guard let self else { return }
             DispatchQueue.main.async {
-                self.cache[key] = img
-                self.pending.remove(key)
-                if self.cache.count > 400 {
-                    // Dictionary 无 removeFirst：清最旧若干条目（键序近似 FIFO）
-                    var drop = 50
-                    while drop > 0, let k = self.cache.keys.first {
-                        self.cache.removeValue(forKey: k)
-                        drop -= 1
+                self.inflight -= 1
+                if let data, let img = UIImage(data: data) {
+                    self.cache[key] = img
+                    self.pending.remove(key)
+                    if self.cache.count > 400 {
+                        // Dictionary 无 removeFirst：清最旧若干条目（键序近似 FIFO）
+                        var drop = 50
+                        while drop > 0, let k = self.cache.keys.first {
+                            self.cache.removeValue(forKey: k)
+                            drop -= 1
+                        }
                     }
+                    self.setNeedsDisplay()
+                } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
+                    self.pending.remove(key) // 失败瓦片：移出待下载，避免永久悬挂
                 }
-                self.setNeedsDisplay()
             }
         }.resume()
     }

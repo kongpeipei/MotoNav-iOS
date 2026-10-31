@@ -2,8 +2,14 @@ import Foundation
 import CoreLocation
 
 /// 坐标纠偏（高德 GCJ-02 火星坐标 ↔ 苹果地图 WGS-84），独立 enum 供各文件非隔离调用
-enum CoordConv {
-    private static func outOfChina(_ lat: Double, _ lon: Double) -> Bool {
+/// 路线规划失败诊断（v1.53：高德接口返回的错误信息，供状态栏显示原因）
+final class RouteDiagnostics {
+    /// 最近一次高德规划错误（"10003: ..." / "服务无返回"）；非线程隔离仅作诊断展示
+    nonisolated(unsafe) static var lastAmapError = ""
+    private init() {}
+}
+
+enum CoordConv {    private static func outOfChina(_ lat: Double, _ lon: Double) -> Bool {
         if lon < 72.004 || lon > 137.8347 { return true }
         if lat < 0.8293 || lat > 55.8271 { return true }
         return false
@@ -175,6 +181,12 @@ enum RouteFetcher {
                         if let (data, _) = try? await URLSession.shared.data(for: req),
                            let choice = parseAmap(data, label: label) {
                             return (label, choice)
+                        }
+                        // v1.53 诊断：高德业务错误（Key 无效/配额/IP 白名单等）
+                        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let info = root["info"] as? String {
+                            let code = root["infocode"] as? String ?? ""
+                            RouteDiagnostics.lastAmapError = "高德\(code): \(info)"
                         }
                     }
                     return (label, nil)

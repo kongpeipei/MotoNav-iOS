@@ -8,6 +8,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var searchText = ""
     @State private var showSuggestions = false
+    /// v1.53 最近常搜"更多"展开开关
+    @State private var showAllRecent = false
     /// 高德「输入提示」联想候选（填写高德 Key 后启用，点击直接定位跳转）
     @State private var onlineTips: [AppModel.AmapTip] = []
     /// 高德搜索 Key 输入弹窗
@@ -1101,9 +1103,13 @@ struct ContentView: View {
         pendingCoord = nil
     }
 
-    /// 目的地搜索框（高德式搜索：输入即实时高德 POI 联想；未输入显示推荐地区；导航时被退出按钮替代）
+    /// 目的地搜索框（高德式：最近常搜置顶 + 白色胶囊输入行 + 推荐/联想；导航时被退出按钮替代）
     private var searchBar: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
+            // v1.53 最近常搜置顶（最多 3 个，可展开更多；高德"最近搜索"胶囊）
+            if !model.recentHot.isEmpty {
+                recentChips
+            }
             searchInputRow
             // v1.52 搜索推荐：未输入 → 热门目的地/最近常搜（高德式推荐地区）；输入 → 高德 POI 联想
             if showSuggestions {
@@ -1114,7 +1120,72 @@ struct ContentView: View {
                 }
             }
         }
-        .background(.black.opacity(0.18))
+    }
+
+    /// v1.53 最近常搜置顶胶囊（最多 3 个，点"更多"展开；点标签直接定位）
+    private var recentChips: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.arrow.circlepath").font(.caption2).foregroundStyle(.orange)
+                Text("最近常搜").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if model.recentHot.count > 3 {
+                    Button {
+                        showAllRecent.toggle()
+                    } label: {
+                        Text(showAllRecent ? "收起" : "更多 \(model.recentHot.count) 个")
+                            .font(.caption).foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    model.clearHistory()
+                    model.status = "最近常搜已清空"
+                } label: {
+                    Text("清空").font(.caption).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.recentHot.prefix(showAllRecent ? 12 : 3), id: \.name) { pl in
+                        Button {
+                            tapRecent(pl)
+                        } label: {
+                            Text(displayName(pl.name))
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(Color(.systemBackground), in: Capsule())
+                                .overlay(Capsule().stroke(Color(.systemGray4), lineWidth: 0.6))
+                                .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 2)
+            }
+        }
+    }
+
+    /// 点最近常搜标签 → 直接定位（与推荐行同一交互）
+    private func tapRecent(_ pl: PlaceLabel) {
+        searchFocused = false
+        showSuggestions = false
+        dismissKeyboard()
+        showSearchSheet = false
+        model.setPreview(pl.name, lat: pl.lat, lon: pl.lon)
+        goHereLabel = "导航去此处"
+        goHereName = pl.name
+        goHereLat = pl.lat
+        goHereLon = pl.lon
+        model.addHistory(pl.name)
+        model.fitTick += 1
+        model.status = "已定位到「\(pl.name)」，点「导航去此处」规划路线"
     }
 
     /// v1.52 推荐地区列表（点击搜索框未输入时显示：最近常搜 + 合肥热门，高德式）
@@ -1269,8 +1340,10 @@ struct ContentView: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
         .frame(height: searchHeight)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 2))
-        .overlay(RoundedRectangle(cornerRadius: 2).stroke(.white.opacity(0.35), lineWidth: 0.8))
+        // v1.53 高德同款搜索框：白色圆角胶囊 + 浅灰描边 + 柔和阴影（替代原深色半透明底）
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.systemGray4), lineWidth: 0.6))
+        .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
         .padding(.horizontal)
         .gesture(
             DragGesture(minimumDistance: 10)
