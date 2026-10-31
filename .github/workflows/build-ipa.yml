@@ -22,10 +22,14 @@ jobs:
           if [ -n "$APP" ]; then sudo xcode-select -s "/Applications/$APP"; fi
           xcodebuild -version
 
+      - name: Install CocoaPods
+        run: |
+          pod install --repo-update
+
       - name: Build app (unsigned)
         run: |
           xcodebuild \
-            -project MotoNav.xcodeproj \
+            -workspace MotoNav.xcworkspace \
             -scheme MotoNav \
             -configuration Release \
             -sdk iphoneos \
