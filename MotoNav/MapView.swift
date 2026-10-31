@@ -1,6 +1,4 @@
 import SwiftUI
-import AMap2DMap
-import AMapFoundationKit
 import UIKit
 import CoreLocation
 

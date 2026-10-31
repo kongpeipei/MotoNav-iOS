@@ -1,8 +1,8 @@
 #ifndef MotoNav_Bridging_Header_h
 #define MotoNav_Bridging_Header_h
 
-// v1.68 B档：高德 iOS 地图 SDK（AMap3DMap 3D 渲染引擎）
+// v1.72：高德 iOS 2D 地图 SDK（AMap2DMap 5.x 无 Swift module，走桥接头导入）
 #import <AMapFoundationKit/AMapFoundationKit.h>
-#import <MAMapKit/MAMapKit.h>
+#import <AMap2DMap/MAMapKit.h>
 
 #endif
