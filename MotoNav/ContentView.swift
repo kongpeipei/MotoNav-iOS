@@ -1693,7 +1693,7 @@ struct VoiceSettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("语音引擎") {
+                Section {
                     Button {
                         UserDefaults.standard.set(false, forKey: "xfEnabled")
                         model.speak("语音播报已切换为系统语音")
@@ -1712,8 +1712,10 @@ struct VoiceSettingsSheet: View {
                             if !model.xfEnabled { Image(systemName: "checkmark").foregroundStyle(.green) }
                         }
                     }
+                } header: {
+                    Text("语音引擎")
                 }
-                Section("讯飞在线语音（需联网，新用户送免费额度）") {
+                Section {
                     ForEach(voices, id: \.vcn) { v in
                         HStack(spacing: 8) {
                             Image(systemName: v.icon)
@@ -1746,6 +1748,8 @@ struct VoiceSettingsSheet: View {
                             model.speak("语音已切换为\(v.name)")
                         }
                     }
+                } header: {
+                    Text("讯飞在线语音（需联网，新用户送免费额度）")
                 } footer: {
                     Text("音色已内置你的讯飞应用（APPID/Key 已配置）；若提示 11200 请到控制台为该音色开通权限。")
                 }
