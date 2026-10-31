@@ -41,8 +41,6 @@ struct ContentView: View {
     @State private var searchHeight: CGFloat = 54
     /// 底部选项卡：0=导航主页，1=我的
     @State private var selectedTab = 0
-    /// "我的"页面弹出
-    @State private var showSettingsSheet = false
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
@@ -50,29 +48,34 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            mapLayer
-            // 左上角指南针（手机朝向即指针指向）
-            compassOverlay
-            // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
-            if !model.navigating {
-                weatherOverlay
+            // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
+            if selectedTab == 0 {
+                mapLayer
+                // 左上角指南针（手机朝向即指针指向）
+                compassOverlay
+                // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
+                if !model.navigating {
+                    weatherOverlay
+                }
+                // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
+                routeBarOverlay
+                // 地图缩放 + / - 按钮
+                zoomOverlay
+                // 图层/路况文字按钮（右上角）
+                layerTrafficButtons
+                // 导航中悬浮退出按钮
+                exitNavOverlay
+                // v1.63 导航态左侧竖排：刷新 / 极简（高德导航特征）
+                if model.navigating {
+                    navSideOverlay
+                }
+                // 高德式顶部大数字条（剩余里程/时间，导航中显示）
+                navTopBar
+                bottomOverlay
+            } else {
+                settingsPage
             }
-            // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-            routeBarOverlay
-            // 地图缩放 + / - 按钮
-            zoomOverlay
-            // 图层/路况文字按钮（右上角）
-            layerTrafficButtons
-            // 导航中悬浮退出按钮
-            exitNavOverlay
-            // v1.63 导航态左侧竖排：刷新 / 极简（高德导航特征）
-            if model.navigating {
-                navSideOverlay
-            }
-            // 高德式顶部大数字条（剩余里程/时间，导航中显示）
-            navTopBar
-            bottomOverlay
-            // 底部选项卡（导航中隐藏）
+            // 底部选项卡（导航中隐藏，切换界面常驻下方）
             if !model.navigating {
                 bottomTabBar
             }
@@ -81,9 +84,6 @@ struct ContentView: View {
             PoiDetailSheet(poi: p, model: model) { close in
                 poiDetail = nil
             }
-        }
-        .sheet(isPresented: $showSettingsSheet) {
-            settingsSheet
         }
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         .sheet(isPresented: $showVoiceSettings) {
@@ -367,7 +367,7 @@ struct ContentView: View {
         return Color.red
     }
 
-    /// 底部选项卡：导航 / 我的（加高版，骑行易点）
+    /// v1.64 底部选项卡：导航 / 我的（白底、缩小胶囊、选中变蓝；切换时选项卡常驻底部）
     private var bottomTabBar: some View {
         VStack {
             Spacer()
@@ -376,46 +376,51 @@ struct ContentView: View {
                     selectedTab = 0
                     haptic()
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "location.north.circle.fill")
-                            .font(.title)
+                    VStack(spacing: 3) {
+                        Image(systemName: selectedTab == 0 ? "location.north.circle.fill" : "location.north.circle")
+                            .font(.body)
                         Text("导航")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
+                            .font(.caption)
+                            .fontWeight(selectedTab == 0 ? .semibold : .regular)
                     }
                     .foregroundStyle(selectedTab == 0 ? .blue : .secondary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .padding(.bottom, 8)
+                    .padding(.vertical, 8)
+                    .background(selectedTab == 0 ? Color.blue.opacity(0.12) : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
 
                 Button {
                     selectedTab = 1
-                    showSettingsSheet = true
                     haptic()
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "person.circle.fill")
-                            .font(.title)
+                    VStack(spacing: 3) {
+                        Image(systemName: selectedTab == 1 ? "person.fill" : "person")
+                            .font(.body)
                         Text("我的")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
+                            .font(.caption)
+                            .fontWeight(selectedTab == 1 ? .semibold : .regular)
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(selectedTab == 1 ? .blue : .secondary)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .padding(.bottom, 8)
+                    .padding(.vertical, 8)
+                    .background(selectedTab == 1 ? Color.blue.opacity(0.12) : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
-            .background(.ultraThinMaterial)
-            .overlay(Rectangle().frame(height: 0.5).foregroundStyle(.quaternary), alignment: .top)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(height: 54)
+            .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+            .padding(.horizontal, 20)
         }
     }
 
     /// "我的"页面：导入/导出JSON、高德Key设置
-    private var settingsSheet: some View {
+    /// v1.64 "我的"独立菜单页（底部选项卡切换进入，选项卡常驻下方）
+    private var settingsPage: some View {
         NavigationStack {
             List {
                 // v1.61：语音包选项卡（讯飞四川话/普通话女声，从旧版"语音"入口迁入"我的"）
@@ -442,7 +447,7 @@ struct ContentView: View {
                             goHereName = h.name
                             goHereLat = h.lat
                             goHereLon = h.lon
-                            showSettingsSheet = false
+                            selectedTab = 0
                             model.planRoute(to: h.name, lat: h.lat, lon: h.lon)
                         } else {
                             model.status = "家未设置：长按地图选点后设为常用"
@@ -462,7 +467,7 @@ struct ContentView: View {
                             goHereName = w.name
                             goHereLat = w.lat
                             goHereLon = w.lon
-                            showSettingsSheet = false
+                            selectedTab = 0
                             model.planRoute(to: w.name, lat: w.lat, lon: w.lon)
                         } else {
                             model.status = "公司未设置：长按地图选点后设为常用"
@@ -492,7 +497,7 @@ struct ContentView: View {
                                 goHereName = p.name
                                 goHereLat = p.lat
                                 goHereLon = p.lon
-                                showSettingsSheet = false
+                                selectedTab = 0
                                 model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
                             } label: {
                                 HStack {
@@ -526,7 +531,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.63")
+                        Text("v1.64")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -534,6 +539,10 @@ struct ContentView: View {
             }
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
+            // v1.64：底部选项卡常驻，列表底部留出空间不被遮挡
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 8)
+            }
         }
     }
 
