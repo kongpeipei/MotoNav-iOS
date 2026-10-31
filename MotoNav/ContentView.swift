@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var showSuggestions = false
     /// 高德「输入提示」联想候选（填写高德 Key 后启用，点击直接定位跳转）
     @State private var onlineTips: [AppModel.AmapTip] = []
+    /// v1.81 点"搜索"后展开列表模式：搜索框与导航/我的按钮拉开，中间铺满联想地点
+    @State private var searchExpanded = false
     /// 高德搜索 Key 输入弹窗
     @State private var showAmapKeyInput = false
     @State private var amapKeyInput = ""
@@ -1280,7 +1282,50 @@ struct ContentView: View {
 
     private func dismissKeyboard() {
         searchFocused = false
+        // 收起键盘（同步给 focus 状态）
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    /// v1.81 点"搜索"：收起键盘、展开联想地点列表（搜索框与底部按钮拉开，中间铺满），按距离近→远
+    private func expandSearchResults() {
+        dismissKeyboard()
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { model.status = "请输入目的地"; return }
+        searchExpanded = true
+        showSuggestions = true
+        Task {
+            let tips = await model.amapInputTips(q)
+            if searchText.trimmingCharacters(in: .whitespaces) == q {
+                onlineTips = sortedByDistance(tips)
+            }
+        }
+    }
+
+    /// v1.81 距当前定位点的直线距离（米），无定位返回 nil
+    private func distM(_ lat: Double, _ lon: Double) -> Double? {
+        guard let loc = model.currentLocation else { return nil }
+        let R = 6371000.0
+        let dLat = (lat - loc.latitude) * .pi / 180
+        let dLon = (lon - loc.longitude) * .pi / 180
+        let a = sin(dLat / 2) * sin(dLat / 2)
+            + cos(lat * .pi / 180) * cos(loc.latitude * .pi / 180) * sin(dLon / 2) * sin(dLon / 2)
+        return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+    }
+
+    /// v1.81 距离文案：<1km 显示"350米"，≥1km 显示"1.2公里"；无定位返回 nil
+    private func distText(_ lat: Double, _ lon: Double) -> String? {
+        guard let d = distM(lat, lon) else { return nil }
+        if d < 1000 { return String(format: "%.0f米", d) }
+        return String(format: "%.1f公里", d / 1000)
+    }
+
+    /// v1.81 联想列表按距当前定位点 近→远 排序（无定位保持原序）
+    private func sortedByDistance(_ tips: [AppModel.AmapTip]) -> [AppModel.AmapTip] {
+        guard model.currentLocation != nil else { return tips }
+        return tips.sorted {
+            (distM($0.lat, $0.lon) ?? .greatestFiniteMagnitude)
+                < (distM($1.lat, $1.lon) ?? .greatestFiniteMagnitude)
+        }
     }
 
     private func addPoiAtPending(type: PoiType) {
@@ -1529,11 +1574,13 @@ struct ContentView: View {
                 .font(.subheadline)
                 .focused($searchFocused)
                 .submitLabel(.search)
-                .onSubmit { showSuggestions = false; dismissKeyboard(); doSearch() }
+                .onSubmit { expandSearchResults() }
                 .onChange(of: searchText) { newValue in
                     // 只使用高德Web搜索联想，删除本地联想
                     suggestions = []
                     showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+                    // v1.81：输入时列表收起（小高度），点"搜索"才展开铺满
+                    searchExpanded = false
                     // 高德搜索逻辑：输入即实时返回 POI 联想候选（带坐标，点击直接定位）
                     onlineTips = []
                     if !model.amapKey.isEmpty {
@@ -1541,7 +1588,10 @@ struct ContentView: View {
                         guard !q.isEmpty else { return }
                         Task {
                             let tips = await model.amapInputTips(q)
-                            if searchText == newValue { onlineTips = tips }
+                            if searchText == newValue {
+                                // v1.81：按距当前定位点 近→远 排序
+                                onlineTips = sortedByDistance(tips)
+                            }
                         }
                     }
                 }
@@ -1570,9 +1620,8 @@ struct ContentView: View {
             .buttonStyle(.plain)
             // 搜索按钮（与输入框同一胶囊内，右侧）
             Button {
-                showSuggestions = false
-                dismissKeyboard()
-                doSearch()
+                // v1.81：点搜索 → 收起键盘，展开联想地点列表（搜索框与按钮拉开，中间铺满）
+                expandSearchResults()
             } label: {
                 Text("搜索")
                     .font(.subheadline.bold())
@@ -1619,6 +1668,7 @@ struct ContentView: View {
                         Button {
                             searchFocused = false
                             showSuggestions = false
+                            searchExpanded = false
                             dismissKeyboard()
                             model.setPreview(tip.name, lat: tip.lat, lon: tip.lon)
                             goHereLabel = "导航去此处"
@@ -1643,6 +1693,13 @@ struct ContentView: View {
                                         .lineLimit(1)
                                 }
                                 Spacer()
+                                // v1.81：名称右侧、箭头左侧显示距当前定位点距离
+                                if let d = distText(tip.lat, tip.lon) {
+                                    Text(d)
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.secondary)
+                                        .padding(.trailing, 6)
+                                }
                                 Image(systemName: "arrow.up.right.circle")
                                     .foregroundStyle(.tertiary)
                             }
@@ -1656,7 +1713,8 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(maxHeight: 190)
+        // v1.81：点"搜索"展开时铺满中间（搜索框与底部按钮拉开），输入时小高度
+        .frame(maxHeight: searchExpanded ? 400 : 190)
         .background(.bar)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))

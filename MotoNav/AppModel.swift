@@ -1382,7 +1382,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
                 out.append(AmapTip(name: name, sub: sub, lat: parts[1], lon: parts[0]))
             }
-            return Array(out.prefix(8))
+            return Array(out.prefix(20))
         } catch {
             return []
         }
