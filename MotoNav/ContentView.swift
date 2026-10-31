@@ -58,6 +58,23 @@ struct ContentView: View {
     @State private var reloadTick = 0
     /// v1.70：加载失败自动重试一次（避免弱网/瞬时失败直接弹条）
     @State private var mapRetried = false
+    /// v1.74：高德地图服务器网络自检结果（nil=未测；true=可达；false=异常）
+    @State private var mapNetOK: Bool?
+    /// v1.74：网络自检请求高德公共瓦片（无 Key，纯测连通性）
+    private func checkMapNetwork() {
+        let url = URL(string: "https://webrd01.is.autonavi.com/appmaptile?style=7&x=116&y=50&z=8")!
+        var req = URLRequest(url: url, timeoutInterval: 8)
+        req.cachePolicy = .reloadIgnoringCacheData
+        URLSession.shared.dataTask(with: req) { data, _, err in
+            DispatchQueue.main.async {
+                if let d = data, d.count > 1000 {
+                    mapNetOK = true
+                } else {
+                    mapNetOK = false
+                }
+            }
+        }.resume()
+    }
 
     var body: some View {
         ZStack {
@@ -214,6 +231,8 @@ struct ContentView: View {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
+            // v1.74：地图服务器网络自检（区分"网络问题"与"Key/渲染问题"）
+            checkMapNetwork()
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
         .onChange(of: scenePhase) { phase in
@@ -685,7 +704,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.73")
+                        Text("v1.74")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -693,11 +712,19 @@ struct ContentView: View {
                     HStack {
                         Label("地图诊断", systemImage: mapLoadFailed ? "exclamationmark.triangle" : "checkmark.circle")
                         Spacer()
-                        Text(mapLoadFailed ? mapLoadError : "地图正常 / 加载中")
+                        Text(mapLoadFailed ? mapLoadError : "地图加载正常 / 等待中")
                             .foregroundStyle(mapLoadFailed ? .red : .secondary)
                             .font(.caption)
                             .lineLimit(2)
                             .multilineTextAlignment(.trailing)
+                    }
+                    // v1.74：高德地图服务器网络自检（黑屏排障第二步：先断网络还是 Key）
+                    HStack {
+                        Label("地图网络", systemImage: mapNetOK == false ? "wifi.slash" : "checkmark.circle")
+                        Spacer()
+                        Text(mapNetOK == nil ? "检测中…" : (mapNetOK == true ? "高德服务器可达" : "网络异常"))
+                            .foregroundStyle(mapNetOK == false ? .red : .secondary)
+                            .font(.caption)
                     }
                     HStack {
                         Label("高德Key", systemImage: "key.fill")
