@@ -13,6 +13,11 @@ struct ContentView: View {
     /// 高德搜索 Key 输入弹窗
     @State private var showAmapKeyInput = false
     @State private var amapKeyInput = ""
+    /// 点击地标「搜周边」（v1.47）
+    @State private var aroundPlace: PlaceLabel?
+    @State private var aroundPois: [AppModel.AmapPoi] = []
+    @State private var aroundKeyword = "加油站"
+    @State private var showAround = false
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
     /// 标记该点：待标记坐标 + 备注输入
@@ -131,6 +136,13 @@ struct ContentView: View {
         } message: {
             Text("在高德开放平台（lbs.amap.com）注册后创建应用，获取 Web 服务 Key，粘贴后搜索联想即为高德数据（含精确坐标，点击直接定位）")
         }
+        // v1.47：点击地图小区/商业标注 → 搜周边（高德周边搜索）
+        .sheet(isPresented: $showAround) {
+            if let pl = aroundPlace {
+                aroundSheet(pl)
+                    .presentationDetents([.medium, .large])
+            }
+        }
         .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
             ForEach(PoiType.allCases.filter(\.isCamera), id: \.self) { t in
                 Button(t.label) { addPoiAtPending(type: t) }
@@ -241,11 +253,13 @@ struct ContentView: View {
                 poiDetail = p
             },
             onPlaceSelect: { pl in
-                goHereLabel = "导航去此处"
-                goHereName = pl.name
-                goHereLat = pl.lat
-                goHereLon = pl.lon
-                model.clearPreview()
+                haptic()
+                // v1.47：点击地图小区/商业标注 → 弹「搜周边」卡片（高德周边搜索）
+                aroundPlace = pl
+                aroundKeyword = "加油站"
+                aroundPois = []
+                showAround = true
+                Task { await loadAround(pl, kw: "加油站") }
             },
             onCategorySelect: { r in
                 model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
@@ -294,6 +308,13 @@ struct ContentView: View {
                     .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
                 }
                 Spacer()
+            }
+            // v1.47：当前位置道路名（高德逆地理，"沿XX路"高德式显示）
+            if !model.currentRoad.isEmpty {
+                Text("沿\(model.currentRoad)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
             }
             Spacer()
         }
@@ -1092,6 +1113,118 @@ struct ContentView: View {
             if d < bestD { bestD = d; best = pl }
         }
         return best?.name ?? "地图选点"
+    }
+
+    // MARK: - 点击地标搜周边（v1.47 高德周边搜索）
+
+    private let aroundCategories = ["加油站", "充电桩", "餐饮", "酒店", "公共厕所", "药店", "修车", "全部"]
+
+    private func loadAround(_ pl: PlaceLabel, kw: String) async {
+        let result = await model.amapAround(lat: pl.lat, lon: pl.lon, keyword: kw)
+        if aroundPlace?.id == pl.id {
+            aroundPois = result
+        }
+    }
+
+    private func aroundSheet(_ pl: PlaceLabel) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pl.name)
+                        .font(.headline)
+                    Text("周边搜索 · 3公里内")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showAround = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.bottom, 4)
+            // 分类快捷筛选
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(aroundCategories, id: \.self) { c in
+                        Button {
+                            aroundKeyword = c
+                            aroundPois = []
+                            Task { await loadAround(pl, kw: c == "全部" ? "" : c) }
+                        } label: {
+                            Text(c)
+                                .font(.footnote)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(c == aroundKeyword ? Color.green : Color(.secondarySystemBackground),
+                                            in: Capsule())
+                                .foregroundStyle(c == aroundKeyword ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            // 周边结果
+            if aroundPois.isEmpty {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Text("正在搜索周边…")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(aroundPois) { p in
+                            VStack(spacing: 0) {
+                                Button {
+                                    showAround = false
+                                    model.setPreview(p.name, lat: p.lat, lon: p.lon)
+                                    goHereLabel = "导航去此处"
+                                    goHereName = p.name
+                                    goHereLat = p.lat
+                                    goHereLon = p.lon
+                                    model.addHistory(p.name)
+                                    model.fitTick += 1
+                                    model.status = "已定位到「\(p.name)」，点「导航去此处」规划路线"
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "mappin.circle.fill")
+                                            .foregroundStyle(.green)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(p.name)
+                                                .font(.subheadline)
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                            Text(p.distance > 0 ? "距地标 \(p.distance)m\(p.address.isEmpty ? "" : " · \(p.address)")" : p.address)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "arrow.up.right.circle")
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 8)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
     }
 
     /// v1.13：搜索学校/医院/加油站 → 附近10公里类别点位高亮+直接导航；

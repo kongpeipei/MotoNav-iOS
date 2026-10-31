@@ -87,24 +87,16 @@ enum RouteFetcher {
             let dup = out.contains { existing in
                 existing.distanceM == c.distanceM && abs(existing.durationS - c.durationS) < 30
             }
-            if !dup { out.append(c) }
-        }
-        // 按用时升序重排 + 重打标签
-        if out.count > 1 {
-            out.sort { $0.durationS < $1.durationS }
-            let minDist = out.map(\.distanceM).min() ?? 0
-            var relabeled: [RouteChoice] = []
-            for (i, c) in out.enumerated() {
-                let label: String
-                if i == 0 { label = "推荐" }
-                else if c.distanceM == minDist { label = "距离最短" }
-                else { label = "备选" }
-                relabeled.append(RouteChoice(points: c.points, distanceM: c.distanceM,
-                                             durationS: c.durationS, turns: c.turns,
-                                             label: label, poiCount: c.poiCount))
+            if !dup {
+                out.append(RouteChoice(points: c.points, distanceM: c.distanceM,
+                                       durationS: c.durationS, turns: c.turns,
+                                       label: "备选", poiCount: c.poiCount))
             }
-            out = relabeled
-        } else if out.count == 1 {
+        }
+        // v1.47：截断 3 条 + 用时升序（推荐最前）；保留高德策略标签（躲避拥堵/少收费/高速优先）
+        if out.count > 3 { out = Array(out.prefix(3)) }
+        out.sort { $0.durationS < $1.durationS }
+        if out.count == 1 {
             out[0] = RouteChoice(points: out[0].points, distanceM: out[0].distanceM,
                                  durationS: out[0].durationS, turns: out[0].turns,
                                  label: "推荐", poiCount: 0)
@@ -112,31 +104,49 @@ enum RouteFetcher {
         return out
     }
 
-    // MARK: - 高德路径规划通道（v1.46）
+    // MARK: - 高德路径规划通道（v1.46/v1.47）
 
-    /// 高德驾车路径规划：真实道路 polyline + 转向指令，最接近实际通过路线
+    /// 高德驾车路径规划：多策略并行（推荐/躲避拥堵/少收费/高速优先），真实道路 polyline + 转向指令
     private static func amapFetchAll(from start: CLLocationCoordinate2D,
                                      to end: CLLocationCoordinate2D,
                                      key: String) async -> [RouteChoice] {
-        let origin = "\(start.longitude),\(start.latitude)"
-        let dest = "\(end.longitude),\(end.latitude)"
-        guard let url = URL(string:
-            "https://restapi.amap.com/v3/direction/driving?key=\(key)"
-            + "&origin=\(origin)&destination=\(dest)&extensions=all&strategy=0"
-        ) else { return [] }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 12
-        for _ in 0..<2 {
-            if let (data, _) = try? await URLSession.shared.data(for: req),
-               let choice = parseAmap(data) {
-                return [choice]
+        // 请求前转 GCJ-02（高德坐标系）
+        let s = AppModel.shared.wgs2gcj(start.latitude, start.longitude)
+        let e = AppModel.shared.wgs2gcj(end.latitude, end.longitude)
+        let origin = "\(s.1),\(s.0)"
+        let dest = "\(e.1),\(e.0)"
+        // v1.47 多策略：0 推荐 / 4 躲避拥堵 / 11 少收费 / 10 高速优先
+        let strategies: [(String, String)] = [
+            ("0", "推荐"), ("4", "躲避拥堵"), ("11", "少收费"), ("10", "高速优先")
+        ]
+        var out: [RouteChoice] = []
+        await withTaskGroup(of: (String, RouteChoice?).self) { group in
+            for (strategy, label) in strategies {
+                group.addTask {
+                    guard let url = URL(string:
+                        "https://restapi.amap.com/v3/direction/driving?key=\(key)"
+                        + "&origin=\(origin)&destination=\(dest)&extensions=all&strategy=\(strategy)"
+                    ) else { return (label, nil) }
+                    var req = URLRequest(url: url)
+                    req.timeoutInterval = 12
+                    for _ in 0..<2 {
+                        if let (data, _) = try? await URLSession.shared.data(for: req),
+                           let choice = parseAmap(data, label: label) {
+                            return (label, choice)
+                        }
+                    }
+                    return (label, nil)
+                }
+            }
+            for await (_, choice) in group {
+                if let c = choice { out.append(c) }
             }
         }
-        return []
+        return out
     }
 
-    /// 解析高德 driving 响应（paths[0]：steps.polyline 拼接 + instruction 转向）
-    private static func parseAmap(_ data: Data) -> RouteChoice? {
+    /// 解析高德 driving 响应（paths[0]：steps.polyline 拼接 + instruction 转向），坐标转 WGS-84
+    private static func parseAmap(_ data: Data, label: String) -> RouteChoice? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let route = root["route"] as? [String: Any],
               let paths = route["paths"] as? [[String: Any]],
@@ -151,7 +161,9 @@ enum RouteFetcher {
                 for pair in poly.split(separator: ";") {
                     let ll = pair.split(separator: ",")
                     guard ll.count == 2, let lon = Double(ll[0]), let lat = Double(ll[1]) else { continue }
-                    points.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
+                    // v1.47 坐标纠偏：高德 GCJ-02 → WGS-84（苹果地图显示）
+                    let w = AppModel.shared.gcj2wgs(lat, lon)
+                    points.append(CLLocationCoordinate2D(latitude: w.0, longitude: w.1))
                 }
                 // 转向指令解析（instruction 如"沿学林路向西行驶420米，左转"）
                 let instruction = step["instruction"] as? String ?? ""
@@ -173,7 +185,7 @@ enum RouteFetcher {
             distanceM: p["distance"] as? Int ?? 0,
             durationS: p["duration"] as? Int ?? 0,
             turns: turns,
-            label: "推荐",
+            label: label,
             poiCount: 0)
     }
 
