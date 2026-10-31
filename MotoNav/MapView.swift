@@ -51,6 +51,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     let reloadTick: Int
     /// v1.81 地点查看时地图强制北向上（tick 变化触发一次）
     let northUpTick: Int
+    /// v1.81 地点所属区域多边形（AOI，蓝色虚线框）
+    let tipPolygon: [CLLocationCoordinate2D]?
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
 
@@ -242,6 +244,21 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
+        // v1.81 地点区域多边形（AOI 蓝色虚线框；随 tipPolygon 变化重建，每次重画路线后补加）
+        let polyKey = tipPolygon.map { pts in
+            pts.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ":")
+        } ?? ""
+        if polyKey != context.coordinator.lastTipPolygonKey {
+            context.coordinator.lastTipPolygonKey = polyKey
+            if let pts = tipPolygon, pts.count >= 3 {
+                context.coordinator.tipPolygonOverlay = MKPolygon(coordinates: pts, count: pts.count)
+            } else {
+                context.coordinator.tipPolygonOverlay = nil
+            }
+        }
+        if let pg = context.coordinator.tipPolygonOverlay {
+            map.addOverlay(pg)
+        }
         if route.count > 1 {
             if navigating {
                 // 导航中只画当前路线（草绿双层，高德导航推荐色）
@@ -375,6 +392,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastZoomInTick = 0
         /// v1.81 地点查看北向上记忆
         var lastNorthUpTick = 0
+        /// v1.81 地点区域多边形（AOI）记忆
+        var lastTipPolygonKey = ""
+        var tipPolygonOverlay: MKPolygon?
         var lastZoomOutTick = 0
         var lastPreviewKey = ""
         /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
@@ -639,6 +659,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                     r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
                     r.lineWidth = 4
                 }
+                return r
+            }
+            if let pg = overlay as? MKPolygon {
+                // v1.81 地点区域范围：蓝色虚线框 + 淡蓝填充
+                let r = MKPolygonRenderer(polygon: pg)
+                r.strokeColor = UIColor(red: 0.16, green: 0.45, blue: 0.98, alpha: 0.95)
+                r.fillColor = UIColor(red: 0.16, green: 0.45, blue: 0.98, alpha: 0.08)
+                r.lineWidth = 2.5
+                r.lineDashPattern = [7, 6]
                 return r
             }
             if let amap = overlay as? AmapTileOverlay {

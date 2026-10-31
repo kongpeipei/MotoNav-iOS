@@ -16,6 +16,9 @@ struct ContentView: View {
     /// v1.81 点击联想地点主体后：地图高亮该点并显示地点信息卡
     @State private var tipCard: AppModel.AmapTip?
     @State private var tipRoad: String?
+    /// v1.81 地点所属区域（AOI）：名称 + 多边形（地图蓝虚线框住）
+    @State private var tipAoiName: String?
+    @State private var tipPolygon: [CLLocationCoordinate2D]?
     /// v1.81 地点查看时地图强制北向上
     @State private var northUpTick = 0
     /// 高德搜索 Key 输入弹窗
@@ -326,6 +329,7 @@ struct ContentView: View {
             minimal: minimalMap,
             reloadTick: reloadTick,
             northUpTick: northUpTick,
+            tipPolygon: tipPolygon,
             onMapLoad: { ok, err in
                 if ok {
                     mapLoadFailed = false
@@ -1344,13 +1348,19 @@ struct ContentView: View {
     private func showTipCard(name: String, lat: Double, lon: Double, sub: String) {
         tipCard = AppModel.AmapTip(name: name, sub: sub, lat: lat, lon: lon)
         tipRoad = nil
+        tipAoiName = nil
+        tipPolygon = nil
         model.setPreview(name, lat: lat, lon: lon)
         model.fitTick += 1
         northUpTick += 1
         model.status = "已定位到「\(name)」"
         Task {
-            let r = await model.amapRegeo(lat: lat, lon: lon)
-            if tipCard?.lat == lat && tipCard?.lon == lon { tipRoad = r }
+            let info = await model.amapRegeoInfo(lat: lat, lon: lon)
+            if tipCard?.lat == lat && tipCard?.lon == lon {
+                tipRoad = info.road
+                tipAoiName = info.aoiName
+                tipPolygon = info.polygon
+            }
         }
     }
 
@@ -1375,6 +1385,8 @@ struct ContentView: View {
                 Button {
                     tipCard = nil
                     tipRoad = nil
+                    tipAoiName = nil
+                    tipPolygon = nil
                     model.clearPreview()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -1399,6 +1411,11 @@ struct ContentView: View {
                 }
                 if let road = tipRoad ?? (!t.sub.isEmpty ? t.sub : nil) {
                     Label("位于\(road)", systemImage: "road.lanes")
+                        .lineLimit(1)
+                }
+                // v1.81 区域范围：显示区域名（蓝虚线框住见地图）
+                if let aoi = tipAoiName {
+                    Label(aoi, systemImage: "square.dashed")
                         .lineLimit(1)
                 }
             }

@@ -1407,15 +1407,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }.count
     }
 
-    /// v1.81 高德逆地理：返回地点所在道路描述（"XX路与XX路附近"或 formatted_address）
-    func amapRegeo(lat: Double, lon: Double) async -> String? {
-        guard !amapKey.isEmpty else { return nil }
+    /// v1.81 高德逆地理：道路描述 + 区域（AOI）名称与多边形（extensions=all）
+    func amapRegeoInfo(lat: Double, lon: Double) async -> (road: String?, aoiName: String?, polygon: [CLLocationCoordinate2D]?) {
+        guard !amapKey.isEmpty else { return (nil, nil, nil) }
         let loc = "\(lon),\(lat)"
-        guard let url = URL(string: "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=base") else { return nil }
+        guard let url = URL(string: "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=all") else { return (nil, nil, nil) }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let re = obj["regeocode"] as? [String: Any] else { return nil }
+                  let re = obj["regeocode"] as? [String: Any] else { return (nil, nil, nil) }
             let faddr = re["formatted_address"] as? String ?? ""
             var roads: [String] = []
             if let rs = re["roads"] as? [[String: Any]] {
@@ -1423,16 +1423,38 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     if let n = r["name"] as? String, !n.isEmpty { roads.append(n) }
                 }
             }
+            var road: String?
             if roads.count >= 2 {
-                return "\(roads[0])与\(roads[1])附近"
+                road = "\(roads[0])与\(roads[1])附近"
             } else if let r0 = roads.first {
-                return "\(r0)附近"
+                road = "\(r0)附近"
             } else if !faddr.isEmpty {
-                return faddr
+                road = faddr
             }
-            return nil
+            // 区域范围（AOI）：优先取覆盖该点面积最大的 aoi 多边形
+            var aoiName: String?
+            var polygon: [CLLocationCoordinate2D]?
+            if let aois = re["aois"] as? [[String: Any]], !aois.isEmpty {
+                var bestCount = 0
+                for a in aois {
+                    guard let poly = a["polyline"] as? String, !poly.isEmpty else { continue }
+                    var pts: [CLLocationCoordinate2D] = []
+                    for pair in poly.split(separator: ";") {
+                        let parts = pair.split(separator: ",").compactMap { Double($0) }
+                        if parts.count == 2 {
+                            pts.append(CLLocationCoordinate2D(latitude: parts[1], longitude: parts[0]))
+                        }
+                    }
+                    if pts.count > bestCount {
+                        bestCount = pts.count
+                        aoiName = a["name"] as? String
+                        polygon = pts
+                    }
+                }
+            }
+            return (road, aoiName, polygon)
         } catch {
-            return nil
+            return (nil, nil, nil)
         }
     }
 
