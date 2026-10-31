@@ -1,10 +1,8 @@
 import SwiftUI
+import MapKit
 import UIKit
-import CoreLocation
-// v1.77：MAMapView/AMapServices 等符号经 MotoNav-Bridging-Header.h 全局可见（2D SDK 无 Swift module）
 
-/// 轻量地图封装（v1.68 B档：高德官方 3D 地图 SDK 渲染引擎，真·高德底图；坐标 WGS84 存储、GCJ 显示）
-/// 保留全部对外参数签名，ContentView 无需改动。
+/// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
     let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
@@ -44,44 +42,40 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onPoiSelect: ((Poi) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
-    /// 轻点地图空白处（高德 SDK 坐标系 GCJ，回调前转回 WGS84）
+    /// 轻点地图空白处选点（显示"导航到这里"）
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
     /// v1.63 极简模式：隐藏兴趣点/地名/类别标注（高德导航"极简"）
     let minimal: Bool
-    /// v1.69 地图重载计数（加载失败重试 +1，触发 MAMapView.reloadMap）
+    /// v1.69 地图重载计数（加载失败重试 +1，触发瓦片强制重绘）
     let reloadTick: Int
-    /// v1.69 地图加载状态回调：(是否成功, 错误描述)
+    /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
 
-    func makeUIView(context: Context) -> MAMapView {
-        // v1.73：初始 frame 必须非零（黑屏根因修复）——MAMapView 渲染层依赖初始尺寸，
-        // frame .zero 时 3D 渲染层不启动：数据加载完成回调正常、画面纯黑
-        let map = MAMapView(frame: UIScreen.main.bounds)
-        map.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        // 高德 SDK 正式 Key（AppDelegate 已设，此处幂等兜底）
-        AMapServices.shared().apiKey = "6fd752bc12caa258f066729617db0066"
-        // v1.70：浅灰兜底背景——瓦片/渲染层未就绪时显示浅灰而非纯黑，便于区分"Key/服务问题"
-        map.backgroundColor = UIColor(white: 0.93, alpha: 1)
+    func makeUIView(context: Context) -> MKMapView {
+        let map = MKMapView()
+        map.showsUserLocation = true
         map.showsCompass = false // 使用自绘指南针（左上角）
+        map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
+        map.isRotateEnabled = true  // 双指旋转地图
         map.delegate = context.coordinator
-        // v1.70：加载 watchdog——高德失败回调可能静默不触发，6 秒未完成视为加载卡住
-        context.coordinator.startLoadWatchdog()
-        // 当前定位箭头标注（高德 SDK 不启用内置定位，避免双定位；用我们自己的 CLLocationManager 数据）
-        let userAnn = UserLocationAnnotation(coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0))
-        context.coordinator.userAnnotation = userAnn
-        map.addAnnotation(userAnn)
+        // v1.67 高德瓦片底图（纯高德视觉）：插入 .aboveRoads 最底层——
+        // 路线折线/点位标注都叠在瓦片之上（v1.62 灰罩+盖路线问题已修复：
+        // ①层级由 aboveLabels 改 aboveRoads ②未加载瓦片透明露出苹果底图兜底 ③多子域轮询防限流)
+        // v1.78：黑屏回归苹果 MapKit 引擎（3D Metal 渲染与设备不兼容），高德瓦片视觉保留
+        let amapOverlay = AmapTileOverlay()
+        map.insertOverlay(amapOverlay, at: 0, level: .aboveRoads)
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.6
         map.addGestureRecognizer(longPress)
-        // 轻点地图：空白处（命中点位/地点标注时不触发，交给 didSelect）
+        // 轻点地图：空白处选点（命中点位/地点标注时不触发，交给 didSelect）
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
         tap.delegate = context.coordinator
         map.addGestureRecognizer(tap)
         return map
     }
 
-    func updateUIView(_ map: MAMapView, context: Context) {
+    func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
         context.coordinator.onPoiMoved = onPoiMoved
@@ -90,64 +84,64 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
         context.coordinator.onMapLoad = onMapLoad
-        // v1.69 地图加载失败重试（v1.77：2D SDK 无 reloadMap，改触发全图层重绘）
+        // v1.69 地图加载失败重试（v1.78：移除重插瓦片 overlay 强制重绘）
         if reloadTick != context.coordinator.lastReloadTick {
             context.coordinator.lastReloadTick = reloadTick
-            if reloadTick > 0 { map.setNeedsDisplay() }
-        }
-        // 当前定位箭头：坐标（WGS84→GCJ 显示）；变化时重建刷新位置
-        if let loc = userLocation {
-            let g = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
-            let newC = CLLocationCoordinate2D(latitude: g.0, longitude: g.1)
-            if let ua = context.coordinator.userAnnotation {
-                if fabs(ua.coordinate.latitude - newC.latitude) > 1e-6
-                    || fabs(ua.coordinate.longitude - newC.longitude) > 1e-6 {
-                    ua.coordinate = newC
-                    map.removeAnnotation(ua)
-                    map.addAnnotation(ua)
+            if reloadTick > 0 {
+                let ov = map.overlays.first { $0 is AmapTileOverlay }
+                if let ov {
+                    map.removeOverlay(ov)
+                    map.insertOverlay(AmapTileOverlay(), at: 0, level: .aboveRoads)
                 }
             }
         }
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
         if locateTick != context.coordinator.lastLocateTick {
             context.coordinator.lastLocateTick = locateTick
-            if locateTick > 0, let loc = userLocation {
+            if locateTick > 0 {
                 context.coordinator.userMoved = false // 恢复跟随/自动旋转
-                let g = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
                 context.coordinator.setRegionProgrammatically {
-                    map.setCenter(CLLocationCoordinate2D(latitude: g.0, longitude: g.1), animated: true)
+                    map.userTrackingMode = .followWithHeading
                 }
             }
         } else if !context.coordinator.hasCentered, let loc = userLocation {
-            // 首次定位：设置初始区域（合肥周边 3km）
+            // 首次定位：设置初始区域
             context.coordinator.hasCentered = true
-            let g = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
             context.coordinator.setRegionProgrammatically {
-                map.setRegion(MACoordinateRegion(
-                    center: CLLocationCoordinate2D(latitude: g.0, longitude: g.1),
-                    span: MACoordinateSpan(latitudeDelta: 0.045, longitudeDelta: 0.045)),
+                map.setRegion(
+                    MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
                     animated: false)
             }
         }
-        // 路线全览（仅在新规划完成时触发一次，包含全部方案路线）
+        // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回；包含全部方案路线）
         if fitTick != context.coordinator.lastFitTick && route.count > 1 {
             context.coordinator.lastFitTick = fitTick
             context.coordinator.setRegionProgrammatically {
-                var pts: [CLLocationCoordinate2D] = route.map { gcj($0) }
-                for r in choiceRoutes { pts.append(contentsOf: r.map { gcj($0) }) }
-                context.coordinator.fitRegion(pts, map: map)
+                var rect = MKMapRect.null
+                var pts = route
+                for r in choiceRoutes { pts.append(contentsOf: r) }
+                for c in pts {
+                    let p = MKMapPoint(c)
+                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                }
+                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
             }
         }
         // 加油站全览（仅在新请求时触发一次）
         if gasTick != context.coordinator.lastGasTick && !gasStations.isEmpty {
             context.coordinator.lastGasTick = gasTick
             context.coordinator.setRegionProgrammatically {
-                var pts = gasStations.map { gcj($0) }
-                if let u = userLocation { pts.append(gcj(u)) }
-                context.coordinator.fitRegion(pts, map: map)
+                var rect = MKMapRect.null
+                var pts = gasStations
+                if let u = userLocation { pts.append(u) }
+                for c in pts {
+                    let p = MKMapPoint(c)
+                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                }
+                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
             }
         }
-        // 点位标注增删（PoiAnnotation.coordinate 返回 GCJ 显示坐标）
+        // 点位标注增删
         let ids = Set(pois.map(\.id))
         map.annotations
             .compactMap { $0 as? PoiAnnotation }
@@ -158,6 +152,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
             } else if let a = map.annotations.first(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) as? PoiAnnotation {
                 if a.poi.coordinate != p.coordinate || a.poi.isCustom != p.isCustom {
+                    // 坐标/自定义标记变化（拖动或编辑后）：移除重建以刷新 marker 视图（新位置 + 橙色描边）
                     map.removeAnnotation(a)
                     map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
                 } else {
@@ -166,14 +161,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
-        // 终点标记（高德式：起点=当前定位蓝箭头，终点保留"终"）
+        // 终点标记（高德式：起点=当前定位蓝箭头，不再画"起"标记；终点保留"终"）
         map.annotations
             .compactMap { $0 as? RouteEndAnnotation }
             .filter { $0.kind == "start" }
             .forEach { map.removeAnnotation($0) }
-        let endPresent = map.annotations.contains { ($0 as? RouteEndAnnotation)?.kind == "end" }
+        let ends = Set(map.annotations.compactMap { ($0 as? RouteEndAnnotation)?.kind })
+        let endPresent = ends.contains("end")
         if let last = route.last, !endPresent {
-            map.addAnnotation(RouteEndAnnotation(kind: "end", coordinate: gcj(last)))
+            map.addAnnotation(RouteEndAnnotation(kind: "end", coordinate: last))
         }
         if route.count < 2 {
             map.annotations
@@ -187,34 +183,33 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastPreviewKey = previewKey
             if let p = preview {
                 context.coordinator.setRegionProgrammatically {
-                    let g = gcj(p)
-                    map.setRegion(MACoordinateRegion(
-                        center: g,
-                        span: MACoordinateSpan(latitudeDelta: 0.045, longitudeDelta: 0.045)),
+                    map.userTrackingMode = .none
+                    map.setRegion(
+                        MKCoordinateRegion(center: p, latitudinalMeters: 3000, longitudinalMeters: 3000),
                         animated: true)
                 }
             }
         }
         if let p = preview {
-            let g = gcj(p)
             if previews.isEmpty {
-                map.addAnnotation(PreviewAnnotation(coordinate: g))
+                map.addAnnotation(PreviewAnnotation(coordinate: p))
             } else if let a = previews.first {
-                a.coordinate = g
+                a.coordinate = p
             }
         } else {
             previews.forEach { map.removeAnnotation($0) }
         }
         // 加油站标注
+        let gasIds = Set(map.annotations.compactMap { ($0 as? GasAnnotation)?.id })
         let wantGas = Set(gasStations.map { "\($0.latitude),\($0.longitude)" })
         map.annotations
             .compactMap { $0 as? GasAnnotation }
-            .filter { !wantGas.contains("\($0.wgsLat),\($0.wgsLon)") }
+            .filter { !wantGas.contains("\($0.coordinate.latitude),\($0.coordinate.longitude)") }
             .forEach { map.removeAnnotation($0) }
         for c in gasStations {
             let key = "\(c.latitude),\(c.longitude)"
-            if !map.annotations.contains(where: { ($0 as? GasAnnotation)?.id == key }) {
-                map.addAnnotation(GasAnnotation(id: key, coordinate: gcj(c)))
+            if !gasIds.contains(key) {
+                map.addAnnotation(GasAnnotation(id: key, coordinate: c))
             }
         }
         // 小区/商铺名称标签
@@ -239,81 +234,102 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(CategoryAnnotation(result: r))
             }
         }
-        // 路线折线（GCJ 坐标；导航中仅当前路线，规划态含备选虚线）
         map.removeOverlays(map.overlays)
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
         if route.count > 1 {
-            let gcjRoute = route.map { gcj($0) }
             if navigating {
-                let under = polyline(gcjRoute)
+                // 导航中只画当前路线（草绿双层，高德导航推荐色）
+                let under = MKPolyline(coordinates: route, count: route.count)
                 context.coordinator.underPolyline = under
-                let main = polyline(gcjRoute)
+                let main = MKPolyline(coordinates: route, count: route.count)
                 context.coordinator.mainPolyline = main
-                map.add(under)
-                map.add(main)
+                map.addOverlay(under)
+                map.addOverlay(main)
             } else {
+                // 规划态：备选方案浅绿虚线 + 当前方案草绿双层（高德式同屏多路线）
                 for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
-                    let alt = polyline(pts.map { gcj($0) })
+                    let alt = MKPolyline(coordinates: pts, count: pts.count)
                     context.coordinator.alternatePolylines.append(alt)
-                    map.add(alt)
+                    map.addOverlay(alt)
                 }
-                let under = polyline(gcjRoute)
+                let under = MKPolyline(coordinates: route, count: route.count)
                 context.coordinator.underPolyline = under
-                let main = polyline(gcjRoute)
+                let main = MKPolyline(coordinates: route, count: route.count)
                 context.coordinator.mainPolyline = main
-                map.add(under)
-                map.add(main)
+                map.addOverlay(under)
+                map.addOverlay(main)
             }
         }
-        // v1.77：2D SDK 地图固定北朝上、无旋转 API（3D 的 rotationDegree 已移除）；指南针自绘独立跟随手机朝向
-        // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动）
+        // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
+        // 用户手动拖动/旋转地图后暂停跟随（高德式：点定位按钮恢复）
+        if !context.coordinator.userMoved {
+            map.camera.heading = CLLocationDirection(heading)
+        }
+        // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
         if navigateFollowTick != context.coordinator.lastNavFollowTick {
             context.coordinator.lastNavFollowTick = navigateFollowTick
             context.coordinator.userMoved = false
             if let loc = userLocation {
                 context.coordinator.navLastFollow = loc
-                let g = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
+            }
+            context.coordinator.setRegionProgrammatically {
+                map.userTrackingMode = .followWithHeading
+            }
+        }
+        // 导航中拖动/旋转地图后，车开远（>100米）自动拉回跟随（高德导航行为）
+        if navigating && context.coordinator.userMoved {
+            if let loc = userLocation, let last = context.coordinator.navLastFollow,
+               CLLocation(latitude: loc.latitude, longitude: loc.longitude)
+                .distance(from: CLLocation(latitude: last.latitude, longitude: last.longitude)) > 100 {
+                context.coordinator.userMoved = false
+                context.coordinator.navLastFollow = loc
                 context.coordinator.setRegionProgrammatically {
-                    map.setCenter(CLLocationCoordinate2D(latitude: g.0, longitude: g.1), animated: true)
+                    map.userTrackingMode = .followWithHeading
                 }
             }
-        }
-        // 导航中跟随车动（每帧回中）；用户拖动后暂停，开远（>100米）自动拉回
-        if navigating, let loc = userLocation {
-            if context.coordinator.userMoved {
-                if let last = context.coordinator.navLastFollow,
-                   CLLocation(latitude: loc.latitude, longitude: loc.longitude)
-                    .distance(from: CLLocation(latitude: last.latitude, longitude: last.longitude)) > 100 {
-                    context.coordinator.userMoved = false
-                }
-            }
+        } else if navigating, let loc = userLocation {
             context.coordinator.navLastFollow = loc
-            if !context.coordinator.userMoved {
-                let g = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
-                map.setCenter(CLLocationCoordinate2D(latitude: g.0, longitude: g.1), animated: true)
-            }
         }
-        // v1.77：2D SDK 无俯仰（2D 顶视即高德骑行风格），导航不倾斜
+        // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
             context.coordinator.lastPitchState = isNav
+            map.camera.pitch = isNav ? 55 : 0
         }
-        // 缩放按钮（+/-）：按地图中心缩放
+        // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随系统深浅
+        if isNav != context.coordinator.lastDarkState {
+            context.coordinator.lastDarkState = isNav
+            map.overrideUserInterfaceStyle = isNav ? .dark : .unspecified
+            // v1.67 高德瓦片随导航切换夜间样式（style=8 深色 / style=7 浅色）
+            context.coordinator.amapDark = isNav
+            context.coordinator.amapRenderer?.dark = isNav
+        }
+        // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
         if zoomInTick != context.coordinator.lastZoomInTick {
             context.coordinator.lastZoomInTick = zoomInTick
             if zoomInTick > 0 {
+                let reg = map.region
                 context.coordinator.setRegionProgrammatically {
-                    map.setZoomLevel(map.zoomLevel + 1, animated: true)
+                    map.setRegion(MKCoordinateRegion(
+                        center: reg.center,
+                        span: MKCoordinateSpan(latitudeDelta: reg.span.latitudeDelta * 0.5,
+                                               longitudeDelta: reg.span.longitudeDelta * 0.5)),
+                        animated: true)
                 }
             }
         }
         if zoomOutTick != context.coordinator.lastZoomOutTick {
             context.coordinator.lastZoomOutTick = zoomOutTick
             if zoomOutTick > 0 {
+                let reg = map.region
                 context.coordinator.setRegionProgrammatically {
-                    map.setZoomLevel(max(map.zoomLevel - 1, 3), animated: true)
+                    map.setRegion(MKCoordinateRegion(
+                        center: reg.center,
+                        span: MKCoordinateSpan(latitudeDelta: reg.span.latitudeDelta * 2.0,
+                                               longitudeDelta: reg.span.longitudeDelta * 2.0)),
+                        animated: true)
                 }
             }
         }
@@ -321,19 +337,7 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    /// GCJ 坐标转换辅助（WGS84 → GCJ-02 显示）
-    private func gcj(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
-        let g = CoordConv.wgs2gcj(c.latitude, c.longitude)
-        return CLLocationCoordinate2D(latitude: g.0, longitude: g.1)
-    }
-
-    /// MAPolyline 构造（Swift 指针接口）
-    private func polyline(_ pts: [CLLocationCoordinate2D]) -> MAPolyline {
-        var coords = pts
-        return MAPolyline(coordinates: &coords, count: UInt(coords.count))
-    }
-
-    final class Coordinator: NSObject, MAMapViewDelegate, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var onPoiLongPress: ((Poi) -> Void)?
         var onPoiMoved: ((Poi, Double, Double) -> Void)?
@@ -345,11 +349,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
-        /// v1.69 地图加载状态回调
+        /// v1.69 地图加载回调（MKMapView 渲染完成/失败）
         var onMapLoad: ((Bool, String) -> Void)?
+        /// v1.69 重载计数记忆
         var lastReloadTick = 0
-        /// 当前定位箭头标注
-        var userAnnotation: UserLocationAnnotation?
         /// 是否已做过首次定位居中
         var hasCentered = false
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
@@ -359,14 +362,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastZoomInTick = 0
         var lastZoomOutTick = 0
         var lastPreviewKey = ""
-        /// 导航 3D 俯仰状态记忆（仅状态切换时设置 cameraDegree）
+        /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
         var lastPitchState: Bool?
-        /// 路线绿色描边底层引用（renderer 区分双层）
-        var underPolyline: MAPolyline?
+        /// 导航深色底图状态记忆
+        var lastDarkState: Bool?
+        /// v1.67 高德瓦片 renderer 引用 + 深色（夜间瓦片 style=8）状态
+        var amapRenderer: AmapTileRenderer?
+        var amapDark = false
+        /// 路线白色描边底层引用（renderer 区分双层）
+        var underPolyline: MKPolyline?
         /// 当前方案主层（草绿色，renderer 区分）
-        var mainPolyline: MAPolyline?
+        var mainPolyline: MKPolyline?
         /// 备选方案折线（浅绿色虚线，renderer 区分）
-        var alternatePolylines: [MAPolyline] = []
+        var alternatePolylines: [MKPolyline] = []
         /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
         var userMoved = false
         /// 导航跟随触发记忆
@@ -381,27 +389,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             block()
         }
 
-        /// 全览一组点（GCJ 已转换）：计算 bbox 并 setRegion
-        func fitRegion(_ pts: [CLLocationCoordinate2D], map: MAMapView) {
-            guard let first = pts.first else { return }
-            var minLat = first.latitude, maxLat = first.latitude
-            var minLon = first.longitude, maxLon = first.longitude
-            for p in pts {
-                minLat = min(minLat, p.latitude); maxLat = max(maxLat, p.latitude)
-                minLon = min(minLon, p.longitude); maxLon = max(maxLon, p.longitude)
-            }
-            let dLat = max(maxLat - minLat, 0.01)
-            let dLon = max(maxLon - minLon, 0.01)
-            map.setRegion(MACoordinateRegion(
-                center: CLLocationCoordinate2D(
-                    latitude: (minLat + maxLat) / 2,
-                    longitude: (minLon + maxLon) / 2),
-                span: MACoordinateSpan(latitudeDelta: dLat * 1.4, longitudeDelta: dLon * 1.4)),
-                animated: true)
-        }
-
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-            guard let map = gesture.view as? MAMapView else { return }
+            guard let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
             switch gesture.state {
             case .began:
@@ -422,18 +411,14 @@ struct MapViewRepresentable: UIViewRepresentable {
                         .compactMap { $0 as? PoiAnnotation }
                         .first { $0.poi.id == p.id }
                 } else {
-                    // 高德 SDK 返回 GCJ 坐标 → 转回 WGS84 存库
                     let coord = map.convert(pt, toCoordinateFrom: map)
-                    let w = CoordConv.gcj2wgs(coord.latitude, coord.longitude)
-                    onLongPress?(CLLocationCoordinate2D(latitude: w.0, longitude: w.1))
+                    onLongPress?(coord)
                 }
             case .changed:
                 if let ann = dragAnnotation {
                     let newCoord = map.convert(pt, toCoordinateFrom: map)
-                    // 拖动临时坐标存 WGS84（与 poi.coordinate 同体系）
-                    let w = CoordConv.gcj2wgs(newCoord.latitude, newCoord.longitude)
-                    ann.dragCoordinate = CLLocationCoordinate2D(latitude: w.0, longitude: w.1)
-                    // 地图跟随平移（高德拖拽标记行为）：标注始终保持在手指下
+                    ann.dragCoordinate = newCoord
+                    // 地图跟随平移（高德拖拽标记行为）：标注始终保持在手指下，可拖出屏幕范围继续移动
                     let ap = map.convert(ann.coordinate, toPointTo: map)
                     let dx = pt.x - ap.x
                     let dy = pt.y - ap.y
@@ -461,70 +446,49 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
 
-        /// 轻点地图空白处（命中标注时不触发，避免与点位/地点选择冲突）
+        /// 轻点地图空白处：选点（命中标注时不触发，避免与点位/地点选择冲突）
         @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended,
-                  let map = gesture.view as? MAMapView else { return }
+                  let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
             for a in map.annotations {
-                guard !(a is UserLocationAnnotation), let ann = a as? MAAnnotation else { continue }
-                let ap = map.convert(ann.coordinate, toPointTo: map)
+                let ap = map.convert(a.coordinate, toPointTo: map)
                 let d = hypot(pt.x - ap.x, pt.y - ap.y)
-                // 命中任何标注（点位/地点/类别/起点终点）→ 交给 didSelect
-                if d < 40 {
+                // 命中任何标注（点位/地点/类别/起点终点/用户位置）→ 交给 didSelect
+                if d < 40 && !(a is MKUserLocation) {
                     return
                 }
             }
             let coord = map.convert(pt, toCoordinateFrom: map)
-            let w = CoordConv.gcj2wgs(coord.latitude, coord.longitude)
-            onMapTap?(CLLocationCoordinate2D(latitude: w.0, longitude: w.1))
+            onMapTap?(coord)
         }
 
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool { true }
+        ) -> Bool { false }
 
-        func mapView(_ mapView: MAMapView, regionDidChangeAnimated animated: Bool) {
-            // 程序 setRegion/setCenter 触发时不标记用户移动
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            // 程序 setRegion 触发时不标记用户移动
             if programmaticMove {
                 programmaticMove = false
             } else if !animated {
+                // 用户手势（拖动/旋转/缩放）触发的区域变化 → 暂停跟随与自动旋转
                 userMoved = true
             }
         }
 
-        /// v1.69 地图加载成功（高德底图渲染就绪）
-        func mapViewDidFinishLoadingMap(_ mapView: MAMapView) {
-            cancelLoadWatchdog()
-            onMapLoad?(true, "")
+        // v1.69 地图加载回调（MKMapView：渲染完成 / 加载失败）
+        func mapViewDidFinishRenderingMap(_ mapView: MKMapView, fullyRendered: Bool) {
+            onMapLoad?(true, "地图渲染完成")
         }
 
-        /// v1.69 地图加载失败（Key 未生效/网络异常/服务未开通），给出诊断
-        func mapViewDidFailLoadingMap(_ mapView: MAMapView, withError error: Error) {
-            cancelLoadWatchdog()
+        func mapViewDidFailLoadingMap(_ mapView: MKMapView, withError error: Error) {
             onMapLoad?(false, error.localizedDescription)
         }
 
-        // MARK: - v1.70 加载 watchdog（高德失败回调可能静默不触发）
-
-        private var loadWatchdog: Timer?
-
-        func startLoadWatchdog() {
-            cancelLoadWatchdog()
-            loadWatchdog = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
-                self?.loadWatchdog = nil
-                self?.onMapLoad?(false, "TIMEOUT: 地图 6 秒未加载完成")
-            }
-        }
-
-        func cancelLoadWatchdog() {
-            loadWatchdog?.invalidate()
-            loadWatchdog = nil
-        }
-
-        func mapView(_ mapView: MAMapView, didSelect view: MAAnnotationView) {
-            // 点击点位/地点/类别：回调（取消系统选中态，避免遮挡）
+        func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+            // 点击地点：高亮显示名称并回调（取消系统选中态，避免遮挡）
             if let pa = view.annotation as? PoiAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onPoiSelect?(pa.poi)
@@ -537,119 +501,131 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
 
-        func mapView(_ mapView: MAMapView, viewFor annotation: MAAnnotation) -> MAAnnotationView? {
-            // 当前位置：高德同款实心蓝色指向箭头
-            if annotation is UserLocationAnnotation {
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // 当前位置：缩小版指南针图标（玻璃圆底 + 红色指北针）
+            if annotation is MKUserLocation {
                 let id = "userLoc"
-                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: annotation, reuseIdentifier: id))!
-                v.image = MapViewRepresentable.makeUserIcon()
-                v.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
-                v.centerOffset = .zero
-                v.canShowCallout = false
+                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                if v == nil {
+                    v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
+                }
+                v?.image = MapViewRepresentable.makeUserIcon()
+                v?.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+                v?.centerOffset = .zero
+                v?.canShowCallout = false
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
                 let id = "routeEnd"
-                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: re, reuseIdentifier: id))!
-                v.image = MapViewRepresentable.markerImage(
-                    color: re.kind == "start" ? .systemGreen : .systemRed,
-                    text: re.kind == "start" ? "起" : "终")
-                v.canShowCallout = false
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
+                v.markerTintColor = re.kind == "start" ? .systemGreen : .systemRed
+                v.glyphText = re.kind == "start" ? "起" : "终"
+                v.titleVisibility = .adaptive
                 return v
             }
             if let pa = annotation as? PreviewAnnotation {
                 let id = "preview"
-                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: pa, reuseIdentifier: id))!
-                v.image = MapViewRepresentable.markerImage(color: .systemGreen, text: "✓")
-                v.canShowCallout = false
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
+                v.markerTintColor = .systemGreen
+                v.glyphText = "✓"
+                v.titleVisibility = .adaptive
                 return v
             }
             if let ga = annotation as? GasAnnotation {
                 let id = "gas"
-                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: ga, reuseIdentifier: id))!
-                v.image = MapViewRepresentable.markerImage(color: .systemOrange, text: "油")
-                v.canShowCallout = false
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: ga, reuseIdentifier: id)
+                v.markerTintColor = .systemOrange
+                v.glyphText = "油"
+                v.titleVisibility = .hidden
                 return v
             }
             if let pla = annotation as? PlaceAnnotation {
                 let id = "place"
-                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: pla, reuseIdentifier: id))!
-                v.image = MapViewRepresentable.placeLabelImage(pla.place.name)
-                v.centerOffset = CGPoint(x: 0, y: -10)
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: pla, reuseIdentifier: id)
+                v.markerTintColor = .systemGray
+                v.glyphText = nil
+                v.titleVisibility = .visible // 直接显示小区/商铺名称
                 v.canShowCallout = false
+                v.displayPriority = .defaultLow
                 return v
             }
             if let ca = annotation as? CategoryAnnotation {
                 let id = "category"
-                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: ca, reuseIdentifier: id))!
-                let color: UIColor
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: ca, reuseIdentifier: id)
+                // 按类别着色：学校蓝 / 医院红 / 加油站橙
                 switch ca.result.kind {
-                case "医院": color = .systemRed
-                case "加油站": color = .systemOrange
-                default: color = .systemBlue
+                case "医院": v.markerTintColor = .systemRed
+                case "加油站": v.markerTintColor = .systemOrange
+                default: v.markerTintColor = .systemBlue
                 }
-                v.image = MapViewRepresentable.markerImage(
-                    color: color, text: ca.result.kind == "加油站" ? "油" : "点")
+                v.glyphText = ca.result.kind == "加油站" ? "油" : "点"
+                v.titleVisibility = .visible
                 v.canShowCallout = false
+                v.displayPriority = .required
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
             let id = "poi"
-            let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                ?? MAAnnotationView(annotation: pa, reuseIdentifier: id))!
-            // 沿途点位：白色描边高亮（优先）；用户自定义/移动过的点位：橙色描边
-            let border: UIColor? = pa.onRoute ? .white : (pa.poi.isCustom ? .orange : nil)
-            v.image = MapViewRepresentable.markerImage(
-                color: pa.poi.type.color,
-                text: String(pa.poi.type.label.prefix(1)),
-                border: border)
-            v.canShowCallout = false
+            let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                ?? MKMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
+            v.markerTintColor = pa.poi.type.color
+            v.titleVisibility = .adaptive
+            v.glyphText = String(pa.poi.type.label.prefix(1))
+            // 沿途点位：白色描边高亮（优先）；用户自定义/移动过的点位：橙色描边（可与内置点位区分）
+            if pa.onRoute {
+                v.layer.borderWidth = 2.5
+                v.layer.borderColor = UIColor.white.cgColor
+            } else if pa.poi.isCustom {
+                v.layer.borderWidth = 2
+                v.layer.borderColor = UIColor.orange.cgColor
+            } else {
+                v.layer.borderWidth = 0
+            }
             return v
         }
 
-        func mapView(_ mapView: MAMapView, rendererFor overlay: MAOverlay) -> MAOverlayRenderer? {
-            guard let poly = overlay as? MAPolyline else { return nil }
-            let r = MAPolylineRenderer(polyline: poly)!
-            r.lineWidth = 4
-            if poly === self.underPolyline {
-                // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
-                r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
-                r.lineWidth = 9
-            } else if poly === self.mainPolyline {
-                // 推荐路线：浅绿内芯（高德绿路线双线效果）
-                r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
-                r.lineWidth = 5
-            } else if self.alternatePolylines.contains(where: { $0 === poly }) {
-                // 备选路线：浅绿色（高德 11.x 无公开虚线类型，用实线浅绿区分）
-                r.strokeColor = UIColor(red: 0.60, green: 0.85, blue: 0.62, alpha: 0.95)
-                r.lineWidth = 4
-            } else {
-                r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
-                r.lineWidth = 4
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let poly = overlay as? MKPolyline {
+                let r = MKPolylineRenderer(polyline: poly)
+                r.lineCap = .round
+                if poly === self.underPolyline {
+                    // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
+                    r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
+                    r.lineWidth = 9
+                } else if poly === self.mainPolyline {
+                    // 推荐路线：浅绿内芯（高德绿路线双线效果）
+                    r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
+                    r.lineWidth = 5
+                } else if self.alternatePolylines.contains(where: { $0 === poly }) {
+                    // 备选路线：浅绿色虚线
+                    r.strokeColor = UIColor(red: 0.60, green: 0.85, blue: 0.62, alpha: 0.95)
+                    r.lineWidth = 4
+                    r.lineDashPattern = [6, 6]
+                } else {
+                    r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
+                    r.lineWidth = 4
+                }
+                return r
             }
-            return r
+            if let amap = overlay as? AmapTileOverlay {
+                // v1.67：高德瓦片底图 renderer（浅色 style=7 / 导航深色 style=8 随导航态切换）
+                let renderer = AmapTileRenderer(overlay: amap)
+                amapRenderer = renderer
+                renderer.dark = amapDark
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
         }
     }
 }
 
-/// 当前定位箭头标注（GCJ 显示坐标）
-final class UserLocationAnnotation: NSObject, MAAnnotation {
-    var coordinate: CLLocationCoordinate2D
-    init(coordinate: CLLocationCoordinate2D) {
-        self.coordinate = coordinate
-        super.init()
-    }
-    var title: String? { "我的位置" }
-}
-
 /// 路线起点/终点标记
-final class RouteEndAnnotation: NSObject, MAAnnotation {
+final class RouteEndAnnotation: NSObject, MKAnnotation {
     let kind: String
     let coordinate: CLLocationCoordinate2D
     init(kind: String, coordinate: CLLocationCoordinate2D) {
@@ -660,28 +636,23 @@ final class RouteEndAnnotation: NSObject, MAAnnotation {
     var title: String? { kind == "start" ? "起点" : "终点" }
 }
 
-/// 违法拍照点位标注（coordinate 返回 GCJ 显示坐标；poi.coordinate 保持 WGS84 原始）
-final class PoiAnnotation: NSObject, MAAnnotation {
+final class PoiAnnotation: NSObject, MKAnnotation {
     var poi: Poi
     var onRoute: Bool
-    /// 拖动校准中的临时坐标（WGS84，nil = 使用点位原始坐标）
+    /// 拖动校准中的临时坐标（nil = 使用点位原始坐标）
     var dragCoordinate: CLLocationCoordinate2D?
     init(poi: Poi, onRoute: Bool = false) {
         self.poi = poi
         self.onRoute = onRoute
         super.init()
     }
-    var coordinate: CLLocationCoordinate2D {
-        let src = dragCoordinate ?? poi.coordinate
-        let g = CoordConv.wgs2gcj(src.latitude, src.longitude)
-        return CLLocationCoordinate2D(latitude: g.0, longitude: g.1)
-    }
+    var coordinate: CLLocationCoordinate2D { dragCoordinate ?? poi.coordinate }
     var title: String? { poi.name }
     var subtitle: String? { poi.type.label }
 }
 
-/// 搜索预览点（绿色高亮；coordinate 为 GCJ 显示坐标）
-final class PreviewAnnotation: NSObject, MAAnnotation {
+/// 搜索预览点（绿色高亮）
+final class PreviewAnnotation: NSObject, MKAnnotation {
     var coordinate: CLLocationCoordinate2D
     init(coordinate: CLLocationCoordinate2D) {
         self.coordinate = coordinate
@@ -690,48 +661,50 @@ final class PreviewAnnotation: NSObject, MAAnnotation {
     var title: String? { "搜索目标" }
 }
 
-/// 加油站标注（橙色"油"；id 用 WGS84 键，coordinate 为 GCJ 显示坐标）
-final class GasAnnotation: NSObject, MAAnnotation {
+/// 加油站标注（橙色"油"）
+final class GasAnnotation: NSObject, MKAnnotation {
     let id: String
-    let wgsLat: Double
-    let wgsLon: Double
     var coordinate: CLLocationCoordinate2D
     init(id: String, coordinate: CLLocationCoordinate2D) {
         self.id = id
-        self.wgsLat = coordinate.latitude
-        self.wgsLon = coordinate.longitude
         self.coordinate = coordinate
         super.init()
     }
     var title: String? { "加油站" }
 }
 
-/// 小区/商铺名称标签标注（GCJ 显示）
-final class PlaceAnnotation: NSObject, MAAnnotation {
+/// 小区/商铺名称标签标注
+final class PlaceAnnotation: NSObject, MKAnnotation {
     let place: PlaceLabel
     init(place: PlaceLabel) {
         self.place = place
         super.init()
     }
     var coordinate: CLLocationCoordinate2D {
-        let g = CoordConv.wgs2gcj(place.lat, place.lon)
-        return CLLocationCoordinate2D(latitude: g.0, longitude: g.1)
+        CLLocationCoordinate2D(latitude: place.lat, longitude: place.lon)
     }
     var title: String? { place.name }
 }
 
-/// 类别搜索结果标注（学校/医院/加油站；GCJ 显示）
-final class CategoryAnnotation: NSObject, MAAnnotation {
+/// 类别搜索结果标注（学校/医院/加油站）
+final class CategoryAnnotation: NSObject, MKAnnotation {
     let result: AppModel.CategoryResult
     init(result: AppModel.CategoryResult) {
         self.result = result
         super.init()
     }
     var coordinate: CLLocationCoordinate2D {
-        let g = CoordConv.wgs2gcj(result.lat, result.lon)
-        return CLLocationCoordinate2D(latitude: g.0, longitude: g.1)
+        CLLocationCoordinate2D(latitude: result.lat, longitude: result.lon)
     }
     var title: String? { result.name }
+}
+
+extension MKPolyline {
+    var coordinates: [CLLocationCoordinate2D] {
+        var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid, count: pointCount)
+        getCoordinates(&coords, range: NSRange(location: 0, length: pointCount))
+        return coords
+    }
 }
 
 extension MapViewRepresentable {
@@ -763,54 +736,132 @@ extension MapViewRepresentable {
             c.restoreGState()
         }
     }
+}
 
-    /// v1.68 高德 SDK 标注圆点：彩色圆 + 单字（替代已移除的 MAMarkerAnnotationView）
-    static func markerImage(color: UIColor, text: String, border: UIColor? = nil) -> UIImage {
-        let size: CGFloat = 26
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
-        return renderer.image { ctx in
-            let c = ctx.cgContext
-            let rect = CGRect(x: 1.5, y: 1.5, width: size - 3, height: size - 3)
-            c.setFillColor(color.cgColor)
-            c.fillEllipse(in: rect)
-            if let b = border {
-                c.setStrokeColor(b.cgColor)
-                c.setLineWidth(b.isEqual(UIColor.white) ? 2.5 : 2)
-                c.strokeEllipse(in: rect)
+// MARK: - v1.67 高德瓦片底图（纯高德视觉；GCJ→WGS 重投影 + NSLock 防渲染线程数据竞争闪退）
+// v1.62 曾因灰罩/盖路线移除，本轮修复：①层级 .aboveRoads（路线折线/标注在其上，不再被盖）
+// ②未加载瓦片透明占位（露出苹果底图兜底，不再大片灰色遮挡）③webrd01-04 多子域轮询防限流
+
+/// 高德标准底图瓦片 overlay（世界网格全屏覆盖）
+final class AmapTileOverlay: NSObject, MKOverlay {
+    /// 高德标准底图瓦片模板（公开服务，无需 Key；style=7 日间 / 8 夜间）
+    static let tileURL = "https://webrd0{SD}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style={STYLE}&x={x}&y={y}&z={z}"
+    let coordinate = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+    let boundingMapRect = MKMapRect.world
+}
+
+/// 瓦片重投影 renderer：在 WGS 网格上逐瓦片请求 GCJ 瓦片并按中心对齐绘制
+/// 关键：cache/pending/inflight 会被主线程（下载回调）与 VectorKit 渲染线程（draw）并发访问，
+/// 必须用 NSLock 保护，否则数据竞争导致 EXC_BAD_ACCESS（真机启动闪退根因）
+final class AmapTileRenderer: MKOverlayRenderer {
+    private static let zMin = 3, zMax = 19
+    private let lock = NSLock()
+    private var cache: [String: UIImage] = [:]
+    private var pending: Set<String> = []
+    private var inflight = 0
+    /// 夜间瓦片（导航中 style=8）
+    var dark = false
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
+        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
+        let n = 1 << z
+        let per = MKMapRect.world.size.width / Double(n)
+        let x0 = max(0, Int(floor(mapRect.minX / per)))
+        let x1 = min(n - 1, Int(floor(mapRect.maxX / per)))
+        let y0 = max(0, Int(floor(mapRect.minY / per)))
+        let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
+        guard x1 >= x0, y1 >= y0 else { return }
+        // v1.67：未加载瓦片不绘制（透明）→ 露出下层苹果底图兜底，杜绝灰罩
+        // GCJ 偏移逐行近似（每行中心点算一次，瓦片内误差可忽略，省 20× 三角函数）
+        let lonMid = ((Double(x0) + Double(x1)) / 2.0 + 0.5) / Double(n) * 360.0 - 180.0
+        var rowGCJ: [Int: (gy: Int, lonDelta: Double)] = [:]
+        for y in y0...y1 {
+            let lat = tileLat(y, z)
+            let g = CoordConv.wgs2gcj(lat, lonMid)
+            rowGCJ[y] = (
+                min(n - 1, max(0, tileY(g.0, z))),
+                g.1 - lonMid
+            )
+        }
+        for x in x0...x1 {
+            let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
+            for y in y0...y1 {
+                guard let r = rowGCJ[y] else { continue }
+                let gx = min(n - 1, max(0, Int(floor((lon + r.lonDelta + 180.0) / 360.0 * Double(n)))))
+                let gy = r.gy
+                let key = "\(dark ? "n" : "d")-\(z)-\(gx)-\(gy)" // 深浅样式分开缓存，切换即时生效
+                let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
+                                                    width: per, height: per))
+                lock.lock()
+                let hit = cache[key]
+                let needFetch = hit == nil && !pending.contains(key)
+                if needFetch { pending.insert(key) }
+                lock.unlock()
+                if let hit, let cg = hit.cgImage {
+                    ctx.draw(cg, in: rect)
+                } else if needFetch {
+                    fetchTile(gx, gy, z, key)
+                }
             }
-            let para = NSMutableParagraphStyle()
-            para.alignment = .center
-            (text as NSString).draw(in: CGRect(x: 0, y: (size - 15) / 2, width: size, height: 15),
-                withAttributes: [
-                    .font: UIFont.boldSystemFont(ofSize: 12),
-                    .foregroundColor: UIColor.white,
-                    .paragraphStyle: para,
-                ])
         }
     }
 
-    /// v1.68 小区/商铺名称标签（高德地名气泡样式）
-    static func placeLabelImage(_ name: String) -> UIImage {
-        let font = UIFont.systemFont(ofSize: 11)
-        let w = max((name as NSString).size(withAttributes: [.font: font]).width + 12, 22)
-        let h: CGFloat = 20
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: w, height: h))
-        return renderer.image { ctx in
-            let rect = CGRect(x: 0, y: 0, width: w, height: h)
-            let path = UIBezierPath(roundedRect: rect, cornerRadius: 6)
-            UIColor(white: 1, alpha: 0.9).setFill()
-            path.fill()
-            UIColor.black.withAlphaComponent(0.15).setStroke()
-            path.lineWidth = 0.5
-            path.stroke()
-            let para = NSMutableParagraphStyle()
-            para.alignment = .center
-            (name as NSString).draw(in: CGRect(x: 2, y: 3, width: w - 4, height: 14),
-                withAttributes: [
-                    .font: font,
-                    .foregroundColor: UIColor.black,
-                    .paragraphStyle: para,
-                ])
+    private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        lock.lock()
+        if inflight >= 16 {
+            pending.remove(key)
+            lock.unlock()
+            return
         }
+        // v1.67 多子域轮询：webrd01-04 按瓦片坐标取模，降低单域限流概率
+        let sd = ((x + y) % 4) + 1
+        let style = dark ? "8" : "7"
+        guard let url = URL(string: AmapTileOverlay.tileURL
+            .replacingOccurrences(of: "{SD}", with: "\(sd)")
+            .replacingOccurrences(of: "{STYLE}", with: style)
+            .replacingOccurrences(of: "{x}", with: "\(x)")
+            .replacingOccurrences(of: "{y}", with: "\(y)")
+            .replacingOccurrences(of: "{z}", with: "\(z)")) else {
+            pending.remove(key)
+            lock.unlock()
+            return
+        }
+        inflight += 1
+        lock.unlock()
+        URLSession.shared.dataTask(with: url) { [weak self] data, resp, err in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.lock.lock()
+                self.inflight -= 1
+                if let data, let img = UIImage(data: data) {
+                    self.cache[key] = img
+                    self.pending.remove(key)
+                    if self.cache.count > 200 {
+                        var drop = 50
+                        while drop > 0, let k = self.cache.keys.first {
+                            self.cache.removeValue(forKey: k)
+                            drop -= 1
+                        }
+                    }
+                    self.setNeedsDisplay()
+                } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
+                    self.pending.remove(key) // 失败瓦片：移出待下载，滚动/重绘后自然重试
+                }
+                self.lock.unlock()
+            }
+        }.resume()
+    }
+
+    /// 瓦片 y → 中心纬度（Web Mercator）
+    private func tileLat(_ y: Int, _ z: Int) -> Double {
+        let n = Double(1 << z)
+        return atan(sinh(.pi * (1 - 2.0 * (Double(y) + 0.5) / n))) * 180.0 / .pi
+    }
+    /// 纬度 → 瓦片 y
+    private func tileY(_ lat: Double, _ z: Int) -> Int {
+        let n = Double(1 << z)
+        let r = lat / 180.0 * .pi
+        return Int(floor((1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0 * n))
     }
 }
+
