@@ -36,7 +36,8 @@ jobs:
             -derivedDataPath build \
             build \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO
 
       - name: Build widget (unsigned)
         run: |
