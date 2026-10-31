@@ -48,6 +48,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var mapType: MKMapType = .standard
     /// v1.49 实时路况线（高德红黄绿）
     var trafficRoads: [TrafficRoad] = []
+    /// v1.54 实时路况图层开关（高德式右侧控制钮）
+    var showTraffic: Bool = true
     /// v1.49 历史轨迹（灰色虚线，回放）
     var tripTrackLine: [CLLocationCoordinate2D] = []
     /// v1.50 定位连接线（定位点→路线投影点，高德式步行导航线）
@@ -311,9 +313,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             map.removeOverlay(o)
             context.coordinator.amapTileOverlay = nil
         }
-        // v1.49 路况线（先画，路线在其上层）
+        // v1.49 路况线（先画，路线在其上层）；v1.54 可开关
         context.coordinator.trafficPolylines = []
-        for r in trafficRoads where r.coords.count > 1 {
+        for r in trafficRoads where showTraffic && r.coords.count > 1 {
             let p = MKPolyline(coordinates: r.coords, count: r.coords.count)
             context.coordinator.trafficPolylines.append((p, r.status))
             map.addOverlay(p)

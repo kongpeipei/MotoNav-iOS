@@ -60,6 +60,8 @@ struct ContentView: View {
     @State private var showSearchField = false
     /// 搜索框当前高度（手指上下滑动调整）
     @State private var searchHeight: CGFloat = 54
+    /// v1.54 实时路况图层开关（高德式右侧控制钮）
+    @State private var showTraffic = true
 
     var body: some View {
         ZStack {
@@ -77,6 +79,8 @@ struct ContentView: View {
             routeBarOverlay
             // 地图缩放 + / - 按钮
             zoomOverlay
+            // v1.54 高德式右侧竖排控制钮（图层/路况/语音/缩放）
+            mapControlsOverlay
             // 导航中悬浮退出按钮
             exitNavOverlay
             // 高德式顶部大数字条（剩余里程/时间，导航中显示）
@@ -349,7 +353,9 @@ struct ContentView: View {
                 model.planRoute(to: pl.name, lat: pl.lat, lon: pl.lon)
             },
             // v1.51：高德瓦片底图（A 选项）
-            useAmapTiles: useAmapTiles
+            useAmapTiles: useAmapTiles,
+            // v1.54：实时路况开关
+            showTraffic: showTraffic
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -515,7 +521,6 @@ struct ContentView: View {
             if !model.navigating {
                 // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
                 categoryBar
-                historyBar
                 routeChoiceList
                 goHereBar
                 // v1.49：搜索框只在首页出现（无路线规划时）；规划态/导航态主页面无搜索框
@@ -887,6 +892,66 @@ struct ContentView: View {
     }
 
     /// 地图缩放 + / - 按钮（右下角，高德式；定位按钮在放大按钮上方）
+    /// v1.54 高德式右侧竖排控制钮：图层 / 实时路况 / 语音播报（常用功能直给，替代全塞 ⋯ 菜单）
+    private var mapControlsOverlay: some View {
+        VStack {
+            Spacer()
+            if !model.navigating {
+                VStack(spacing: 14) {
+                    // 图层切换（标准 ↔ 卫星）
+                    Button {
+                        haptic()
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            mapType = (mapType == .satelliteFlyover || mapType == .satellite) ? .standard : .satelliteFlyover
+                        }
+                    } label: {
+                        Image(systemName: mapType == .standard ? "globe.americas" : "map.fill")
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .frame(width: 40, height: 40)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(.white.opacity(0.45), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    // 实时路况开关
+                    Button {
+                        haptic()
+                        showTraffic.toggle()
+                        model.status = showTraffic ? "实时路况已开启" : "实时路况已关闭"
+                    } label: {
+                        Image(systemName: "water.waves")
+                            .font(.body)
+                            .foregroundStyle(showTraffic ? Color.blue : .secondary)
+                            .frame(width: 40, height: 40)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(showTraffic ? Color.blue.opacity(0.7) : .white.opacity(0.45), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    // 语音播报设置（讯飞音色）
+                    Button {
+                        haptic()
+                        showVoiceSettings = true
+                    } label: {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.body)
+                            .foregroundStyle(model.xfEnabled ? Color.orange : .secondary)
+                            .frame(width: 40, height: 40)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(model.xfEnabled ? Color.orange.opacity(0.6) : .white.opacity(0.45), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.trailing, 8)
+                .padding(.bottom, 220)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
     private var zoomOverlay: some View {
         VStack {
             Spacer()
