@@ -5,7 +5,6 @@ import UserNotifications
 import UIKit
 import ActivityKit
 import CryptoKit
-import Network
 
 extension Notification.Name {
     /// 触发点位提醒（object 为 Poi）
@@ -95,7 +94,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var xfSeq = 0
     /// 讯飞诊断（试听/播报失败时显示具体原因，设置页 footer）
     @Published var xfDiag = ""
-    private var xfConn: NWConnection?
+    private var xfTask: URLSessionWebSocketTask?
     /// 语音播报总开关
     var voiceMuted: Bool { UserDefaults.standard.object(forKey: "voiceMuted") as? Bool ?? false }
     private var lastSpeakAt = Date.distantPast
@@ -1002,7 +1001,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 讯飞在线语音合成（wss WebSocket + HMAC-SHA256 鉴权，mp3 分片返回）
-    /// v1.52 fix：HTTP POST 调 wss 被网关 403 → NWConnection WebSocket；失败降级系统语音
+    /// 讯飞在线语音合成（wss WebSocket + HMAC-SHA256 鉴权，mp3 分片返回）
+    /// v1.79 fix：鉴权参数必须放 URL query（放握手 Header 被网关 401），改 URLSession WebSocket；
+    ///           参数与文本合并单帧发送（分两帧会报 10163 datalist is nil）；rdn 必须为字符串
     private func speakXf(_ text: String) {
         let appId = xfAppId, apiKey = xfApiKey, apiSecret = xfApiSecret
         guard !appId.isEmpty, !apiKey.isEmpty, !apiSecret.isEmpty else {
@@ -1013,7 +1014,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let vcn = xfVcn
         let t = (vcn != "xiaoyan") ? sweetSichuan(text) : text
 
-        // HMAC-SHA256 鉴权头（wss 握手携带 Host/Date/Authorization）
+        // HMAC-SHA256 鉴权（讯飞 v2/tts 要求鉴权参数放 URL query，非握手头）
         let host = "tts-api.xfyun.cn"
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
@@ -1027,33 +1028,28 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(sig)\""
         let auth = Data(authOrigin.utf8).base64EncodedString()
 
-        // WebSocket 连接参数（API 要求 (name, value) 元组数组）
-        let wsOptions = NWProtocolWebSocket.Options()
-        wsOptions.setAdditionalHeaders([
-            ("Host", host),
-            ("Date", date),
-            ("Authorization", auth)
-        ])
-        wsOptions.autoReplyPing = true
-        let params = NWParameters.tls
-        params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
-        params.allowLocalEndpointReuse = false
+        var comps = URLComponents(string: "wss://\(host)/v2/tts")!
+        comps.queryItems = [
+            URLQueryItem(name: "authorization", value: auth),
+            URLQueryItem(name: "date", value: date),
+            URLQueryItem(name: "host", value: host)
+        ]
+        guard let url = comps.url else { speakSystem(text); return }
 
-        xfConn?.cancel()
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: 443, using: params)
-        xfConn = conn
+        xfTask?.cancel()
+        let task = URLSession.shared.webSocketTask(with: url)
+        xfTask = task
 
-        let f1: [String: Any] = [
+        // 参数与文本合并单帧（v2/tts 流式协议：common+business+data 一帧）
+        let frame: [String: Any] = [
             "common": ["app_id": appId],
             "business": ["aue": "lame", "sfl": 1, "auf": "audio/L16;rate=16000",
                          "vcn": vcn, "speed": 55, "volume": 60, "pitch": 50,
-                         "tte": "UTF8", "rdn": 0]
-        ]
-        let f2: [String: Any] = [
+                         "tte": "UTF8", "rdn": "0"],
             "data": ["status": 2, "text": Data(t.utf8).base64EncodedString()]
         ]
-        guard let j1 = try? JSONSerialization.data(withJSONObject: f1),
-              let j2 = try? JSONSerialization.data(withJSONObject: f2) else {
+        guard let j = try? JSONSerialization.data(withJSONObject: frame),
+              let js = String(data: j, encoding: .utf8) else {
             speakSystem(text); return
         }
 
@@ -1064,6 +1060,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let finishAudio = { (buf: Data) in
             if !buf.isEmpty && !done {
                 done = true
+                task.cancel()
                 Task { @MainActor [weak self] in
                     guard let self = self, mySeq == self.xfSeq else { return }
                     if !self.playXf(buf) {
@@ -1076,7 +1073,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let fallback = { (diag: String) in
             if !failed {
                 failed = true
-                conn.cancel()
+                task.cancel()
                 Task { @MainActor [weak self] in
                     guard let self = self, mySeq == self.xfSeq else { return }
                     self.xfDiag = diag
@@ -1085,29 +1082,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
 
-        conn.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                conn.send(content: j1, completion: .contentProcessed { _ in
-                    conn.send(content: j2, completion: .contentProcessed { _ in })
-                })
-            case .failed:
-                fallback("讯飞连接失败（服务未开通或 Key 错误）")
-            case .cancelled:
-                finishAudio(audio)
-            default:
-                break
-            }
-        }
-
         func receive() {
-            conn.receiveMessage { data, context, isComplete, error in
-                if let d = data {
-                    let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata)?.opcode
-                    if op == .binary {
-                        audio.append(d)
-                    } else if op == .text {
-                        if let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            task.receive { result in
+                if done || failed { return }
+                switch result {
+                case .success(let message):
+                    switch message {
+                    case .string(let s):
+                        if let obj = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any] {
                             let code = obj["code"] as? Int ?? 0
                             if code != 0 {
                                 if code == 11200 {
@@ -1117,20 +1099,28 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                 }
                                 return
                             }
-                            let st = (obj["data"] as? [String: Any])?["status"] as? Int ?? 0
-                            if st == 2 { finishAudio(audio); conn.cancel() }
+                            let d = obj["data"] as? [String: Any]
+                            if let b64 = d?["audio"] as? String, let b = Data(base64Encoded: b64) {
+                                audio.append(b)
+                            }
+                            if d?["status"] as? Int == 2 { finishAudio(audio) }
                         }
+                        receive()
+                    case .data(let d):
+                        audio.append(d)
+                        receive()
+                    @unknown default:
+                        receive()
                     }
-                }
-                if error != nil || isComplete || done {
-                    finishAudio(audio)
-                } else {
-                    receive()
+                case .failure:
+                    fallback("讯飞连接失败（服务未开通或 Key 错误）")
                 }
             }
         }
+
+        task.resume()
+        task.send(.string(js)) { _ in }
         receive()
-        conn.start(queue: .global(qos: .userInitiated))
     }
 
     /// 播放讯飞返回的 mp3
