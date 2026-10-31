@@ -596,7 +596,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let id = "hot"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? HotAnnotationView
                     ?? HotAnnotationView(annotation: ha, reuseIdentifier: id)
-                v.title = ha.name
                 v.canShowCallout = false
                 return v
             }
