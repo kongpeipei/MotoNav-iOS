@@ -1052,21 +1052,27 @@ extension MapViewRepresentable {
     /// 当前位置图标：高德同款蓝色实心箭头（宽胖箭头 + 圆尾，纯蓝渐变填充，无中心点；
     /// 白色细描边 + 底部轻投影保证深色地图上的辨识度；固定朝屏幕上方，地图随手机朝向旋转）
     static func makeUserIcon() -> UIImage {
-        let size: CGFloat = 42
+        let size: CGFloat = 46
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
         return renderer.image { ctx in
             let c = ctx.cgContext
             let cx = size / 2
-            let cy: CGFloat = 21
+            let cy: CGFloat = 23
+            // v1.57：白色半透明外圈（深色导航底图上更醒目，高德定位圈效果）
+            c.setFillColor(UIColor.white.withAlphaComponent(0.30).cgColor)
+            c.fillEllipse(in: CGRect(x: cx - 21.5, y: cy - 20, width: 43, height: 43))
+            c.setStrokeColor(UIColor.white.withAlphaComponent(0.55).cgColor)
+            c.setLineWidth(2)
+            c.strokeEllipse(in: CGRect(x: cx - 21.5, y: cy - 20, width: 43, height: 43))
             // 高德式箭头：宽胖主体 + 圆弧尾
             let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: cx, y: cy - 21))                        // 尖端
-            arrow.addQuadCurve(to: CGPoint(x: cx - 13, y: cy - 3),
-                               controlPoint: CGPoint(x: cx - 12.5, y: cy - 12.5)) // 左侧
-            arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 8),
-                         radius: 11, startAngle: .pi, endAngle: 0, clockwise: true) // 圆尾
-            arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 21),
-                               controlPoint: CGPoint(x: cx + 12.5, y: cy - 12.5)) // 右侧
+            arrow.move(to: CGPoint(x: cx, y: cy - 23))                        // 尖端
+            arrow.addQuadCurve(to: CGPoint(x: cx - 13.5, y: cy - 3),
+                               controlPoint: CGPoint(x: cx - 13, y: cy - 13.5)) // 左侧
+            arrow.addArc(withCenter: CGPoint(x: cx, y: cy + 8.5),
+                         radius: 11.5, startAngle: .pi, endAngle: 0, clockwise: true) // 圆尾
+            arrow.addQuadCurve(to: CGPoint(x: cx, y: cy - 23),
+                               controlPoint: CGPoint(x: cx + 13, y: cy - 13.5)) // 右侧
             arrow.close()
             // 底部轻投影（高德箭头立体感）
             c.saveGState()
@@ -1085,14 +1091,14 @@ extension MapViewRepresentable {
             if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                      colors: colors, locations: [0.0, 1.0]) {
                 c.drawLinearGradient(grad,
-                                     start: CGPoint(x: cx, y: cy - 21),
-                                     end: CGPoint(x: cx, y: cy + 19),
+                                     start: CGPoint(x: cx, y: cy - 23),
+                                     end: CGPoint(x: cx, y: cy + 20),
                                      options: [])
             }
             c.restoreGState()
             // 白色细描边（高德箭头描边效果，深色底图上清晰）
             c.setStrokeColor(UIColor.white.withAlphaComponent(0.92).cgColor)
-            c.setLineWidth(1.6)
+            c.setLineWidth(1.7)
             c.setLineJoin(.round)
             c.addPath(arrow.cgPath)
             c.strokePath()

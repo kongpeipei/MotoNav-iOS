@@ -68,14 +68,22 @@ struct ContentView: View {
     @State private var showRouteDetail = false
     /// v1.56 极简模式（隐藏道路标注，高德导航"极简"）
     @State private var minimalMap = false
+    /// v1.57 底部选项卡：0=导航主页，1=我的（设置）
+    @State private var selectedTab = 0
+    /// v1.57 我的页：超速阈值 / 图层 选择弹窗
+    @State private var speedLimitSheet = false
+    @State private var layerSheet = false
+    /// v1.57 我的页：自定义点位管理
+    @State private var showPoiManage = false
 
     var body: some View {
         ZStack {
             mapLayer
             // 左上角指南针（手机朝向即指针指向）
             compassOverlay
-            if !model.navigating {
-                menuOverlay
+            // v1.57：我的页（原右上角 ⋯ 菜单内容，底部"我的"Tab 进入）
+            if !model.navigating && selectedTab == 1 {
+                myPageOverlay
             }
             // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
             if !model.navigating {
@@ -94,6 +102,10 @@ struct ContentView: View {
             // 高德式顶部大数字条（剩余里程/时间，导航中显示）
             navTopBar
             bottomOverlay
+            // v1.57 底部选项卡：导航 / 我的（高德式；导航中隐藏）
+            if !model.navigating {
+                bottomTabBar
+            }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
@@ -199,6 +211,62 @@ struct ContentView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("关闭") { showFavSheet = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        // v1.57 我的页：超速提醒阈值选择
+        .confirmationDialog("超速提醒阈值", isPresented: $speedLimitSheet, titleVisibility: .visible) {
+            Button("60 km/h") { model.speedLimit = 60; model.status = "超速提醒阈值设为 60 km/h" }
+            Button("70 km/h") { model.speedLimit = 70; model.status = "超速提醒阈值设为 70 km/h" }
+            Button("80 km/h") { model.speedLimit = 80; model.status = "超速提醒阈值设为 80 km/h" }
+            Button("100 km/h") { model.speedLimit = 100; model.status = "超速提醒阈值设为 100 km/h" }
+            Button("关闭提醒") { model.speedLimit = 0; model.status = "超速提醒已关闭" }
+            Button("取消", role: .cancel) {}
+        }
+        // v1.57 我的页：图层选择
+        .confirmationDialog("地图图层", isPresented: $layerSheet, titleVisibility: .visible) {
+            Button(mapType == .standard ? "标准（当前）" : "标准") { mapType = .standard }
+            Button(mapType == .satelliteFlyover || mapType == .satellite ? "卫星（当前）" : "卫星") { mapType = .satelliteFlyover }
+            Button("取消", role: .cancel) {}
+        }
+        // v1.57 我的页：自定义点位管理（内置点防误删）
+        .sheet(isPresented: $showPoiManage) {
+            NavigationStack {
+                List {
+                    ForEach(model.pois) { p in
+                        HStack {
+                            Image(systemName: p.enabled ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(p.enabled ? Color.green : .secondary)
+                            Text(p.name).lineLimit(1)
+                            Spacer()
+                            Text(p.isCustom ? "自定义" : "内置")
+                                .font(.caption2)
+                                .foregroundStyle(p.isCustom ? Color.orange : .secondary)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            poiDetail = p
+                            showPoiManage = false
+                        }
+                        .swipeActions(edge: .trailing) {
+                            if p.isCustom {
+                                Button(role: .destructive) {
+                                    model.deletePoi(id: p.id)
+                                    model.status = "已删除「\(p.name)」"
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("自定义点位管理")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { showPoiManage = false }
                     }
                 }
             }
@@ -499,74 +567,140 @@ struct ContentView: View {
     }
 
     /// 右上角 ⋯ 菜单（导入/导出点位数据）
-    private var menuOverlay: some View {
+    /// v1.57 底部选项卡：导航 / 我的（高德式图标+文字；导航中隐藏）
+    private var bottomTabBar: some View {
         VStack {
-            HStack {
-                Spacer()
-                Menu {
-                    Button("导入 JSON") { showImport = true }
-                    Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
-                    // v1.49：摩托车模式开关（禁摩前置提醒）
-                    Toggle(isOn: Binding(
-                        get: { model.motoMode },
-                        set: { model.motoMode = $0 }
-                    )) {
-                        Label("摩托车模式（禁摩提醒）", systemImage: "motorcycle.fill")
-                    }
-                    // v1.49：超速提醒阈值
-                    Menu {
-                        ForEach([60, 70, 80, 100], id: \.self) { v in
-                            Button(model.speedLimit == v ? "\(v) km/h ✓" : "\(v) km/h") {
-                                model.speedLimit = v
-                                model.status = "超速提醒阈值设为 \(v) km/h"
-                            }
-                        }
-                        Button(model.speedLimit == 0 ? "关闭 ✓" : "关闭") {
-                            model.speedLimit = 0
-                            model.status = "超速提醒已关闭"
-                        }
-                    } label: {
-                        Label("超速提醒：\(model.speedLimit == 0 ? "关" : "\(model.speedLimit) km/h")", systemImage: "speedometer")
-                    }
-                    // v1.52：语音播报引擎（高德式音色设置，讯飞在线 TTS）
-                    Button {
-                        showVoiceSettings = true
-                    } label: {
-                        Label("语音播报：\(model.xfEnabled ? model.xfVcnName : "系统语音")",
-                              systemImage: "speaker.wave.2.fill")
-                    }
-                    // v1.49：图层切换（标准/卫星）
-                    Button(mapType == .standard ? "图层：标准（当前）" : "图层：标准") {
-                        mapType = .standard
-                    }
-                    Button(mapType == .satelliteFlyover || mapType == .satellite ? "图层：卫星（当前）" : "图层：卫星") {
-                        mapType = .satelliteFlyover
-                    }
-                    // v1.51：底图数据源（高德瓦片=与高德路线同源，A 选项）
-                    Toggle(isOn: $useAmapTiles) {
-                        Label("底图：高德瓦片（贴合路线）", systemImage: "map.fill")
-                    }
-                    // v1.49：骑行轨迹
-                    Button("骑行轨迹（\(model.tripTracks.count)条）") { showTripList = true }
-                    // v1.49：离线地图引导
-                    Button("离线地图（系统）") { showOfflineMapHint = true }
-                    Button(model.amapKey.isEmpty ? "高德搜索Key（可选，填了联想更准）" : "高德搜索Key（已启用）") {
-                        amapKeyInput = model.amapKey
-                        showAmapKeyInput = true
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title2)
-                        .foregroundStyle(.primary)
-                }
-                .padding(8)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                .padding(.trailing, 12)
-                .padding(.top, 40)
-            }
             Spacer()
+            HStack(spacing: 0) {
+                tabButton(icon: "location.fill", name: "导航", selected: selectedTab == 0) {
+                    withAnimation(.easeOut(duration: 0.18)) { selectedTab = 0 }
+                }
+                tabButton(icon: "person.fill", name: "我的", selected: selectedTab == 1) {
+                    withAnimation(.easeOut(duration: 0.18)) { selectedTab = 1 }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(.bar)
+            .overlay(Divider(), alignment: .top)
         }
+        .frame(maxWidth: .infinity)
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    private func tabButton(icon: String, name: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            haptic()
+            action()
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17))
+                    .foregroundStyle(selected ? Color(red: 0.16, green: 0.38, blue: 1.0) : .secondary)
+                Text(name)
+                    .font(.caption2.bold())
+                    .foregroundStyle(selected ? Color(red: 0.16, green: 0.38, blue: 1.0) : .secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// v1.57 我的页（原右上角 ⋯ 菜单全部选项，改为整页列表；底部"我的"Tab 进入）
+    private var myPageOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.12)
+                .ignoresSafeArea()
+                .onTapGesture { selectedTab = 0 }
+            VStack(spacing: 0) {
+                HStack {
+                    Text("我的").font(.title3.bold())
+                    Spacer()
+                    Button("完成") { selectedTab = 0 }
+                        .font(.subheadline.bold())
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                Divider()
+                ScrollView {
+                    VStack(spacing: 0) {
+                        myRow(icon: "square.and.arrow.down.fill", name: "导入 JSON") { showImport = true }
+                        myRow(icon: "square.and.arrow.up.fill", name: "导出 JSON") {
+                            exportDoc = JsonFile(text: model.exportPois())
+                            showExport = true
+                        }
+                        myToggleRow(icon: "motorcycle.fill", name: "摩托车模式（禁摩提醒）", on: $model.motoMode)
+                        myRow(icon: "speedometer", name: "超速提醒：\(model.speedLimit == 0 ? "关闭" : "\(model.speedLimit) km/h")") {
+                            speedLimitSheet = true
+                        }
+                        myRow(icon: "speaker.wave.2.fill", name: "语音播报：\(model.xfEnabled ? model.xfVcnName : "系统语音")") {
+                            showVoiceSettings = true
+                        }
+                        myRow(icon: "map", name: "图层：\(mapType == .standard ? "标准（当前）" : "卫星（当前）")") {
+                            layerSheet = true
+                        }
+                        myToggleRow(icon: "map.fill", name: "底图：高德瓦片（贴合路线）", on: $useAmapTiles)
+                        myRow(icon: "point.topleft.down.curvedto.point.bottomright.up", name: "骑行轨迹（\(model.tripTracks.count)条）") {
+                            showTripList = true
+                        }
+                        myRow(icon: "arrow.down.to.line", name: "离线地图（系统）") {
+                            showOfflineMapHint = true
+                        }
+                        myRow(icon: "key.fill", name: model.amapKey.isEmpty ? "高德搜索Key（可选）" : "高德搜索Key（已启用）") {
+                            amapKeyInput = model.amapKey
+                            showAmapKeyInput = true
+                        }
+                        myRow(icon: "map.circle", name: "自定义点位管理") { showPoiManage = true }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(.quaternary, lineWidth: 0.5))
+            .padding(.horizontal, 10)
+            .padding(.bottom, 54)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private func myRow(icon: String, name: String, action: @escaping () -> Void) -> some View {
+        Button {
+            haptic()
+            action()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.subheadline)
+                    .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    .frame(width: 26)
+                Text(name).font(.subheadline).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+        Divider().padding(.leading, 54)
+    }
+
+    private func myToggleRow(icon: String, name: String, on: Binding<Bool>) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline)
+                .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                .frame(width: 26)
+            Text(name).font(.subheadline).foregroundStyle(.primary)
+            Spacer()
+            Toggle("", isOn: on).labelsHidden().scaleEffect(0.85)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        Divider().padding(.leading, 54)
     }
 
     /// 规划态顶部路线胶囊：显示"我的位置 → 目的地"，点击重新搜索（高德规划态顶部搜索框）
@@ -616,13 +750,17 @@ struct ContentView: View {
             Spacer()
             if !model.navigating {
                 // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
-                categoryBar
-                routeChoiceList
-                goHereBar
-                // v1.49：搜索框只在首页出现（无路线规划时）；规划态/导航态主页面无搜索框
-                if model.routeChoices.isEmpty {
-                    searchBar
+                // v1.57 底部 TabBar 高度预留：内容整体上移
+                VStack(spacing: 0) {
+                    categoryBar
+                    routeChoiceList
+                    goHereBar
+                    // v1.49：搜索框只在首页出现（无路线规划时）；规划态/导航态主页面无搜索框
+                    if model.routeChoices.isEmpty {
+                        searchBar
+                    }
                 }
+                .padding(.bottom, 50)
             } else {
                 // v1.48：接近转向（<200米）只显示路口放大图，避免与下一转向卡重复
                 turnAheadCard
@@ -1055,49 +1193,49 @@ struct ContentView: View {
         VStack {
             Spacer()
             if !model.navigating {
-                VStack(spacing: 14) {
-                    // 图层切换（标准 ↔ 卫星）
+                VStack(spacing: 12) {
+                    // 图层切换（标准 ↔ 卫星；v1.57 文字版）
                     Button {
                         haptic()
                         withAnimation(.easeInOut(duration: 0.2)) {
                             mapType = (mapType == .satelliteFlyover || mapType == .satellite) ? .standard : .satelliteFlyover
                         }
                     } label: {
-                        Image(systemName: mapType == .standard ? "globe.americas" : "map.fill")
-                            .font(.body)
+                        Text(mapType == .standard ? "卫星" : "标准")
+                            .font(.caption.bold())
                             .foregroundStyle(.primary)
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .overlay(Circle().strokeBorder(.white.opacity(0.45), lineWidth: 1))
+                            .frame(width: 46, height: 40)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
+                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.45), lineWidth: 1))
                             .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                     }
                     .buttonStyle(.plain)
-                    // 实时路况开关
+                    // 实时路况开关（v1.57 文字版）
                     Button {
                         haptic()
                         showTraffic.toggle()
                         model.status = showTraffic ? "实时路况已开启" : "实时路况已关闭"
                     } label: {
-                        Image(systemName: "water.waves")
-                            .font(.body)
+                        Text("路况")
+                            .font(.caption.bold())
                             .foregroundStyle(showTraffic ? Color.blue : .secondary)
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .overlay(Circle().strokeBorder(showTraffic ? Color.blue.opacity(0.7) : .white.opacity(0.45), lineWidth: 1))
+                            .frame(width: 46, height: 40)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
+                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(showTraffic ? Color.blue.opacity(0.7) : .white.opacity(0.45), lineWidth: 1))
                             .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                     }
                     .buttonStyle(.plain)
-                    // 语音播报设置（讯飞音色）
+                    // 语音播报设置（讯飞音色；v1.57 文字版）
                     Button {
                         haptic()
                         showVoiceSettings = true
                     } label: {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .font(.body)
+                        Text("语音")
+                            .font(.caption.bold())
                             .foregroundStyle(model.xfEnabled ? Color.orange : .secondary)
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .overlay(Circle().strokeBorder(model.xfEnabled ? Color.orange.opacity(0.6) : .white.opacity(0.45), lineWidth: 1))
+                            .frame(width: 46, height: 40)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
+                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(model.xfEnabled ? Color.orange.opacity(0.6) : .white.opacity(0.45), lineWidth: 1))
                             .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                     }
                     .buttonStyle(.plain)
