@@ -1393,6 +1393,49 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         locateTick += 1
     }
 
+    /// v1.81 两点矩形范围内抓拍点位数量（沿途估算）
+    func snapCountBetween(_ from: CLLocationCoordinate2D, _ to: CLLocationCoordinate2D) -> Int {
+        guard !pois.isEmpty else { return 0 }
+        let minLat = min(from.latitude, to.latitude) - 0.004
+        let maxLat = max(from.latitude, to.latitude) + 0.004
+        let minLon = min(from.longitude, to.longitude) - 0.004
+        let maxLon = max(from.longitude, to.longitude) + 0.004
+        return pois.filter { p in
+            p.enabled && allPoiEnabled && enabledTypes.contains(p.type)
+                && p.lat >= minLat && p.lat <= maxLat
+                && p.lon >= minLon && p.lon <= maxLon
+        }.count
+    }
+
+    /// v1.81 高德逆地理：返回地点所在道路描述（"XX路与XX路附近"或 formatted_address）
+    func amapRegeo(lat: Double, lon: Double) async -> String? {
+        guard !amapKey.isEmpty else { return nil }
+        let loc = "\(lon),\(lat)"
+        guard let url = URL(string: "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=base") else { return nil }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let re = obj["regeocode"] as? [String: Any] else { return nil }
+            let faddr = re["formatted_address"] as? String ?? ""
+            var roads: [String] = []
+            if let rs = re["roads"] as? [[String: Any]] {
+                for r in rs.prefix(3) {
+                    if let n = r["name"] as? String, !n.isEmpty { roads.append(n) }
+                }
+            }
+            if roads.count >= 2 {
+                return "\(roads[0])与\(roads[1])附近"
+            } else if let r0 = roads.first {
+                return "\(r0)附近"
+            } else if !faddr.isEmpty {
+                return faddr
+            }
+            return nil
+        } catch {
+            return nil
+        }
+    }
+
     /// 规划到任意目的地并高亮沿途抓拍点位（起点/终点自动吸附到最近道路出入口）
     func planRoute(to name: String, lat: Double, lon: Double) {
         guard let start = currentLocation else {

@@ -13,6 +13,11 @@ struct ContentView: View {
     @State private var onlineTips: [AppModel.AmapTip] = []
     /// v1.81 点"搜索"后展开列表模式：搜索框与导航/我的按钮拉开，中间铺满联想地点
     @State private var searchExpanded = false
+    /// v1.81 点击联想地点主体后：地图高亮该点并显示地点信息卡
+    @State private var tipCard: AppModel.AmapTip?
+    @State private var tipRoad: String?
+    /// v1.81 地点查看时地图强制北向上
+    @State private var northUpTick = 0
     /// 高德搜索 Key 输入弹窗
     @State private var showAmapKeyInput = false
     @State private var amapKeyInput = ""
@@ -298,6 +303,11 @@ struct ContentView: View {
                 goHereLon = pl.lon
                 model.clearPreview()
             },
+            onPlaceLongPress: { pl in
+                // v1.81 长按地图地点名 → 高亮+北向上+地点信息卡（同搜索点击格式）
+                haptic()
+                showTipCard(name: pl.name, lat: pl.lat, lon: pl.lon, sub: "")
+            },
             onCategorySelect: { r in
                 model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
                 model.clearCategory()
@@ -315,6 +325,7 @@ struct ContentView: View {
             },
             minimal: minimalMap,
             reloadTick: reloadTick,
+            northUpTick: northUpTick,
             onMapLoad: { ok, err in
                 if ok {
                     mapLoadFailed = false
@@ -449,14 +460,24 @@ struct ContentView: View {
         }
     }
 
-    /// 右上角竖排文字按钮：GPS信号 + 图层（高德瓦片）+ 路况（实时路况）
+    /// v1.81 右上角 GPS 信号按钮（可拖动；内容用视图+onTapGesture，避免 Button 拦截拖拽导致不跟手）
     private var layerTrafficButtons: some View {
-        // v1.80 GPS 按钮可自由拖动，位置持久化（下次打开保持）
         DraggableFloat(key: "gps", defaultPos: CGPoint(x: 0.86, y: 0.24)) {
             VStack(spacing: 8) {
-                // GPS信号显示按钮
-                Button {
-                    // 点击显示定位精度详情
+                // GPS信号显示按钮（点击显示定位精度详情）
+                HStack(spacing: 4) {
+                    Image(systemName: "scope")
+                        .font(.caption2.bold())
+                    Text(gpsSignalText())
+                        .font(.caption.bold())
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(gpsSignalColor(), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                .contentShape(Capsule())
+                .onTapGesture {
                     let acc = model.locationAccuracy
                     let signalLevel: String
                     if acc <= 10 {
@@ -467,20 +488,7 @@ struct ContentView: View {
                         signalLevel = "弱（\(Int(acc))米）"
                     }
                     model.status = "GPS信号：\(signalLevel)"
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "scope")
-                            .font(.caption2.bold())
-                        Text(gpsSignalText())
-                            .font(.caption.bold())
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(gpsSignalColor(), in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -749,6 +757,10 @@ struct ContentView: View {
         VStack(spacing: 0) {
             Spacer()
             if !model.navigating {
+                // v1.81 地点信息卡（点击联想地点主体/长按地图地点名后显示）
+                if let t = tipCard {
+                    tipInfoCard(t)
+                }
                 // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
                 categoryBar
                 // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
@@ -1328,6 +1340,78 @@ struct ContentView: View {
         }
     }
 
+    /// v1.81 点击联想地点主体 / 长按地图地点名：地图高亮 + 北向上 + 地点信息卡
+    private func showTipCard(name: String, lat: Double, lon: Double, sub: String) {
+        tipCard = AppModel.AmapTip(name: name, sub: sub, lat: lat, lon: lon)
+        tipRoad = nil
+        model.setPreview(name, lat: lat, lon: lon)
+        model.fitTick += 1
+        northUpTick += 1
+        model.status = "已定位到「\(name)」"
+        Task {
+            let r = await model.amapRegeo(lat: lat, lon: lon)
+            if tipCard?.lat == lat && tipCard?.lon == lon { tipRoad = r }
+        }
+    }
+
+    /// v1.81 摩托骑行时间估算：直线距离 × 1.3 路网系数 ÷ 30km/h，向上取整（至少1分钟）
+    private func motoMinutes(_ lat: Double, _ lon: Double) -> Int? {
+        guard let d = distM(lat, lon) else { return nil }
+        let roadM = d * 1.3
+        let mins = roadM / (30.0 * 1000.0 / 60.0)
+        return max(1, Int(ceil(mins)))
+    }
+
+    /// v1.81 地点信息卡：距离 / 摩托时间 / 沿途抓拍 / 所在道路
+    private func tipInfoCard(_ t: AppModel.AmapTip) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "mappin.circle.fill")
+                    .foregroundStyle(.green)
+                Text(t.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Button {
+                    tipCard = nil
+                    tipRoad = nil
+                    model.clearPreview()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+            }
+            HStack(spacing: 12) {
+                if let d = distText(t.lat, t.lon) {
+                    Label(d, systemImage: "location.fill")
+                }
+                if let mins = motoMinutes(t.lat, t.lon) {
+                    Label("摩托约\(mins)分钟", systemImage: "clock.fill")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                if let loc = model.currentLocation {
+                    Label("沿途抓拍 \(model.snapCountBetween(loc, CLLocationCoordinate2D(latitude: t.lat, longitude: t.lon))) 个", systemImage: "camera.fill")
+                }
+                if let road = tipRoad ?? (!t.sub.isEmpty ? t.sub : nil) {
+                    Label("位于\(road)", systemImage: "road.lanes")
+                        .lineLimit(1)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(Color(.systemBackground).opacity(0.95), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .padding(.horizontal, 14)
+    }
+
     private func addPoiAtPending(type: PoiType) {
         guard let c = pendingCoord else { return }
         model.addPoi(type: type, name: "地图新增\(type.label)点", lat: c.latitude, lon: c.longitude)
@@ -1659,55 +1743,61 @@ struct ContentView: View {
         .padding(.horizontal)
     }
 
-    /// 高德联想候选列表（名称 + 地址副标题 + 定位图标；点击直接定位跳转，高德式搜索体验）
+    /// v1.81 高德联想候选列表：点主体→高亮+北向上+地点信息卡；点箭头→直接导航规划
     private var onlineTipsList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(onlineTips) { tip in
                     VStack(spacing: 0) {
-                        Button {
+                        HStack {
+                            Image(systemName: "mappin.circle.fill")
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(tip.name)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text(tip.sub)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            // v1.81：名称右侧、箭头左侧显示距当前定位点距离
+                            if let d = distText(tip.lat, tip.lon) {
+                                Text(d)
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.secondary)
+                                    .padding(.trailing, 6)
+                            }
+                            // v1.81：箭头=直接规划导航；主体其他位置=高亮+信息卡
+                            Button {
+                                searchFocused = false
+                                showSuggestions = false
+                                searchExpanded = false
+                                dismissKeyboard()
+                                model.addHistory(tip.name)
+                                model.fetchRouteChoices(to: tip.name, lat: tip.lat, lon: tip.lon)
+                            } label: {
+                                Image(systemName: "arrow.up.right.circle")
+                                    .foregroundStyle(Color(red: 0.0, green: 0.75, blue: 0.95))
+                                    .font(.title3)
+                            }
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // v1.81 主体点击：地图高亮+北向上+地点信息卡
                             searchFocused = false
                             showSuggestions = false
                             searchExpanded = false
                             dismissKeyboard()
-                            model.setPreview(tip.name, lat: tip.lat, lon: tip.lon)
-                            goHereLabel = "导航去此处"
-                            goHereName = tip.name
-                            goHereLat = tip.lat
-                            goHereLon = tip.lon
                             model.addHistory(tip.name)
-                            model.fitTick += 1
-                            model.status = "已定位到「\(tip.name)」，点「导航去此处」规划路线"
-                        } label: {
-                            HStack {
-                                Image(systemName: "mappin.circle.fill")
-                                    .foregroundStyle(.green)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(tip.name)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    Text(tip.sub)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                // v1.81：名称右侧、箭头左侧显示距当前定位点距离
-                                if let d = distText(tip.lat, tip.lon) {
-                                    Text(d)
-                                        .font(.caption2.bold())
-                                        .foregroundStyle(.secondary)
-                                        .padding(.trailing, 6)
-                                }
-                                Image(systemName: "arrow.up.right.circle")
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .contentShape(Rectangle())
+                            showTipCard(name: tip.name, lat: tip.lat, lon: tip.lon, sub: tip.sub)
                         }
-                        .buttonStyle(.plain)
                         Divider()
                     }
                 }

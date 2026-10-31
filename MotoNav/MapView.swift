@@ -41,6 +41,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onPoiMoved: ((Poi, Double, Double) -> Void)?
     var onPoiSelect: ((Poi) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
+    var onPlaceLongPress: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
     /// 轻点地图空白处选点（显示"导航到这里"）
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
@@ -48,6 +49,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     let minimal: Bool
     /// v1.69 地图重载计数（加载失败重试 +1，触发瓦片强制重绘）
     let reloadTick: Int
+    /// v1.81 地点查看时地图强制北向上（tick 变化触发一次）
+    let northUpTick: Int
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
 
@@ -81,6 +84,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPoiMoved = onPoiMoved
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
+        context.coordinator.onPlaceLongPress = onPlaceLongPress
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
         context.coordinator.onMapLoad = onMapLoad
@@ -267,6 +271,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         if !context.coordinator.userMoved {
             map.camera.heading = CLLocationDirection(heading)
         }
+        // v1.81 地点查看：强制北向上一次（暂停朝向跟随，避免下一帧转回）
+        if northUpTick != context.coordinator.lastNorthUpTick {
+            context.coordinator.lastNorthUpTick = northUpTick
+            if northUpTick > 0 {
+                context.coordinator.userMoved = true
+                map.camera.heading = 0
+            }
+        }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
         if navigateFollowTick != context.coordinator.lastNavFollowTick {
             context.coordinator.lastNavFollowTick = navigateFollowTick
@@ -347,6 +359,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var dragStartCoord: CLLocationCoordinate2D?
         var onPoiSelect: ((Poi) -> Void)?
         var onPlaceSelect: ((PlaceLabel) -> Void)?
+        var onPlaceLongPress: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
         /// v1.69 地图加载回调（MKMapView 渲染完成/失败）
@@ -360,6 +373,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastFitTick = 0
         var lastGasTick = 0
         var lastZoomInTick = 0
+        /// v1.81 地点查看北向上记忆
+        var lastNorthUpTick = 0
         var lastZoomOutTick = 0
         var lastPreviewKey = ""
         /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
@@ -411,8 +426,22 @@ struct MapViewRepresentable: UIViewRepresentable {
                         .compactMap { $0 as? PoiAnnotation }
                         .first { $0.poi.id == p.id }
                 } else {
-                    let coord = map.convert(pt, toCoordinateFrom: map)
-                    onLongPress?(coord)
+                    // v1.81：长按地点名标签 → 地图高亮+北向上+地点信息卡
+                    var bestPlace: PlaceLabel?
+                    var bestPlaceDist = CGFloat.greatestFiniteMagnitude
+                    for a in map.annotations {
+                        if let pla = a as? PlaceAnnotation {
+                            let ap = map.convert(pla.coordinate, toPointTo: map)
+                            let d = hypot(pt.x - ap.x, pt.y - ap.y)
+                            if d < 44 && d < bestPlaceDist { bestPlaceDist = d; bestPlace = pla.place }
+                        }
+                    }
+                    if let p = bestPlace {
+                        onPlaceLongPress?(p)
+                    } else {
+                        let coord = map.convert(pt, toCoordinateFrom: map)
+                        onLongPress?(coord)
+                    }
                 }
             case .changed:
                 if let ann = dragAnnotation {
