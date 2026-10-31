@@ -62,6 +62,8 @@ struct ContentView: View {
     @State private var searchHeight: CGFloat = 54
     /// v1.54 实时路况图层开关（高德式右侧控制钮）
     @State private var showTraffic = true
+    /// v1.55 搜索面板"收藏夹"入口
+    @State private var showFavSheet = false
 
     var body: some View {
         ZStack {
@@ -164,6 +166,38 @@ struct ContentView: View {
                 aroundSheet(pl)
                     .presentationDetents([.medium, .large])
             }
+        }
+        // v1.55：搜索面板"收藏夹"（列出收藏点位，点击直接导航）
+        .sheet(isPresented: $showFavSheet) {
+            NavigationStack {
+                let favs = model.pois.filter { model.isFavorite($0) }
+                List {
+                    if favs.isEmpty {
+                        Text("暂无收藏，长按地图点位 → 收藏").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(favs) { p in
+                            Button {
+                                model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
+                                showFavSheet = false
+                            } label: {
+                                HStack {
+                                    Text(p.name)
+                                    Spacer()
+                                    Text("导航").font(.subheadline).foregroundStyle(.blue)
+                                }
+                            }
+                        }
+                    }
+                }
+                .navigationTitle("收藏夹")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { showFavSheet = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
         }
         // v1.49：规划态搜索 sheet（全屏，搜索框只在首页出现）
         .sheet(isPresented: $showSearchSheet) {
@@ -1176,12 +1210,12 @@ struct ContentView: View {
                 recentChips
             }
             searchInputRow
-            // v1.52 搜索推荐：未输入 → 热门目的地/最近常搜（高德式推荐地区）；输入 → 高德 POI 联想
+            // v1.52 搜索推荐：未输入 → 高德式搜索面板（分类宫格/常用/历史）；输入 → 高德 POI 联想
             if showSuggestions {
                 if !onlineTips.isEmpty {
                     onlineTipsList
                 } else if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    recommendedList
+                    searchPanel
                 }
             }
         }
@@ -1254,46 +1288,182 @@ struct ContentView: View {
         model.status = "已定位到「\(pl.name)」，点「导航去此处」规划路线"
     }
 
-    /// v1.52 推荐地区列表（点击搜索框未输入时显示：最近常搜 + 合肥热门，高德式）
-    private var recommendedList: some View {
+    /// v1.55 高德式搜索面板（点击搜索框未输入时显示）：分类宫格 + 常用入口 + 历史记录 + 隐私开关
+    private var searchPanel: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if !model.recentHot.isEmpty {
-                    HStack {
-                        Image(systemName: "star.fill").font(.caption2).foregroundStyle(.orange)
-                        Text("最近常搜").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        // v1.52：一键清空最近常搜（高德式）
+                // 分类快捷宫格（高德式 4×2）
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
+                    ForEach(panelCategories, id: \.kind) { c in
                         Button {
-                            model.clearHistory()
-                            model.status = "最近常搜已清空"
+                            haptic()
+                            searchFocused = false
+                            showSuggestions = false
+                            dismissKeyboard()
+                            model.fetchNearby(kind: c.kind, tag: c.tag, pattern: c.pattern)
                         } label: {
-                            Text("清空").font(.caption).foregroundStyle(.blue)
+                            VStack(spacing: 5) {
+                                Image(systemName: c.icon)
+                                    .font(.title3)
+                                    .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                                Text(c.kind).font(.caption).foregroundStyle(.primary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
-                    ForEach(Array(model.recentHot.prefix(5).enumerated()), id: \.offset) { _, pl in
-                        row(icon: "clock.arrow.circlepath", color: .orange, name: displayName(pl.name), sub: "合肥 · 最近搜索", place: pl,
-                            onDelete: { model.removeHistory(pl.name) })
+                }
+                .padding(12)
+                // 常用入口（高德式：家/公司/收藏夹/常去前2）
+                HStack(spacing: 8) {
+                    panelQuick(icon: "house.fill", name: "家") { goHomeWork(home: true) }
+                    panelQuick(icon: "briefcase.fill", name: "公司") { goHomeWork(home: false) }
+                    panelQuick(icon: "star.fill", name: "收藏夹") { showFavSheet = true }
+                    ForEach(Array(model.recentHot.prefix(2).enumerated()), id: \.offset) { _, pl in
+                        panelQuick(icon: "clock.fill", name: displayName(pl.name)) { tapRecent(pl) }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+                // 历史记录标题 + 清空
                 HStack {
-                    Image(systemName: "flame.fill").font(.caption2).foregroundStyle(.orange)
-                    Text("合肥热门目的地").font(.caption).foregroundStyle(.secondary)
+                    Text("历史记录").font(.caption).foregroundStyle(.secondary)
                     Spacer()
+                    Button {
+                        model.clearHistory()
+                        model.status = "历史记录已清空"
+                    } label: {
+                        Text("清空").font(.caption).foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
-                ForEach(model.hotPlaces, id: \.name) { pl in
-                    row(icon: "mappin.circle.fill", color: .green, name: displayName(pl.name), sub: "合肥 · 热门目的地", place: pl)
+                .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 2)
+                if model.searchHistory.isEmpty {
+                    Text("暂无历史记录，搜索目的地或点击上方分类即可开始")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 12).padding(.vertical, 10)
+                } else {
+                    ForEach(model.searchHistory, id: \.self) { name in
+                        historyRow(name)
+                    }
                 }
+                // 底部隐私开关（高德式右下角）
+                HStack(spacing: 8) {
+                    Image(systemName: model.privateMode ? "eye.slash.fill" : "eye.fill")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("常搜自动记录").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Toggle("", isOn: $model.privateMode)
+                        .labelsHidden()
+                        .scaleEffect(0.8)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
             }
         }
-        .frame(maxHeight: 220)
+        .frame(maxHeight: 560)
         .background(.bar)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
         .padding(.horizontal)
+    }
+
+    /// 分类宫格配置（icon / kind / OSM tag / pattern）
+    private var panelCategories: [(icon: String, kind: String, tag: String, pattern: String)] {
+        [
+            ("fork.knife", "美食", "amenity", "restaurant|fast_food|cafe"),
+            ("bed.double.fill", "酒店", "amenity", "hotel|hostel|guest_house"),
+            ("camera.fill", "景点", "tourism", "attraction|museum|zoo"),
+            ("fuelpump.fill", "加油站", "amenity", "fuel"),
+            ("bolt.fill", "充电站", "amenity", "charging_station"),
+            ("cart.fill", "超市", "shop", "supermarket|convenience|mall"),
+            ("cross.case.fill", "医院", "amenity", "hospital|clinic|doctors"),
+            ("graduationcap.fill", "学校", "amenity", "school|kindergarten|college|university"),
+        ]
+    }
+
+    /// 常用入口小块（高德式竖排图标卡）
+    private func panelQuick(icon: String, name: String, action: @escaping () -> Void) -> some View {
+        Button {
+            haptic()
+            action()
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon).font(.subheadline).foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                Text(name).font(.caption2).lineLimit(1).foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 历史记录行：名称 + "路线"直达按钮 + 删除（高德截图同款）
+    private func historyRow(_ name: String) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    searchText = name
+                    showSuggestions = false
+                    dismissKeyboard()
+                    doSearch()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(displayName(name)).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
+                            Text("合肥 · 最近搜索").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                // 路线直达（高德式右侧按钮）
+                Button {
+                    if let pl = model.placeByName(name) {
+                        tapRecent(pl)
+                    } else {
+                        searchText = name
+                        showSuggestions = false
+                        dismissKeyboard()
+                        doSearch()
+                    }
+                } label: {
+                    Text("路线")
+                        .font(.caption.bold())
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.blue.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Button {
+                    model.removeHistory(name)
+                } label: {
+                    Image(systemName: "trash").font(.caption).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            Divider()
+        }
+    }
+
+    /// 家/公司快捷入口
+    private func goHomeWork(home: Bool) {
+        let sp = home ? model.homePlace : model.workPlace
+        if let s = sp {
+            searchFocused = false
+            showSuggestions = false
+            dismissKeyboard()
+            model.planRoute(to: s.name, lat: s.lat, lon: s.lon)
+        } else {
+            model.status = home ? "尚未设置「家」：长按地图点位 → 设为家" : "尚未设置「公司」：长按地图点位 → 设为公司"
+        }
     }
 
     /// 推荐/热门地点行（点击直接定位跳转，与高德联想同一交互；onDelete 非空显示删除按钮）

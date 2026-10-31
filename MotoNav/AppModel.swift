@@ -346,6 +346,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private override init() {
         self.motoMode = UserDefaults.standard.object(forKey: "moto_mode") as? Bool ?? true
         self.speedLimit = UserDefaults.standard.object(forKey: "speed_limit") as? Int ?? 80
+        self.privateMode = UserDefaults.standard.object(forKey: "private_mode") as? Bool ?? false
         super.init()
         // v1.52 导航语音必须发声：playback 类别无视静音键 + 后台播放（高德导航同款行为）
         do {
@@ -673,13 +674,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 历史搜索
 
+    /// v1.55 隐私模式（高德式）：开启后不再自动记录常搜/历史
+    @Published var privateMode: Bool = false {
+        didSet { UserDefaults.standard.set(privateMode, forKey: "private_mode") }
+    }
+
     private func loadHistory() {
         let arr = UserDefaults.standard.stringArray(forKey: historyKey) ?? []
         searchHistory = Array(arr.prefix(historyLimit))
     }
 
     func addHistory(_ name: String) {
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty, !privateMode else { return }
         searchHistory.removeAll { $0 == name }
         searchHistory.insert(name, at: 0)
         if searchHistory.count > historyLimit { searchHistory.removeLast() }
@@ -694,6 +700,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func clearHistory() {
         searchHistory = []
         UserDefaults.standard.removeObject(forKey: historyKey)
+    }
+
+    /// v1.55 搜索面板：历史名称 → 坐标（热门/地标库解析，供"路线"按钮直达）
+    func placeByName(_ name: String) -> PlaceLabel? {
+        if let h = hotPlaces.first(where: { $0.name == name }) { return h }
+        if let l = searchLandmarks.first(where: { $0.name == name || $0.aliases.contains(name) }) {
+            return PlaceLabel(name: l.name, lat: l.lat, lon: l.lon)
+        }
+        return nil
     }
 
     // MARK: - 类别搜索（学校/医院/加油站，附近10公里）
@@ -775,6 +790,52 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func clearCategory() {
         categoryResults = []
         categoryTick += 1
+    }
+
+    /// v1.55 搜索面板分类直达：按 tag+pattern 查询附近 10 公里类别点（美食/酒店/景点/充电/超市等）
+    func fetchNearby(kind: String, tag: String, pattern: String) {
+        let center = currentLocation ?? CLLocationCoordinate2D(latitude: 31.86, longitude: 117.28)
+        let dLat = 0.09
+        let dLon = 0.11
+        let bbox = String(format: "%.4f,%.4f,%.4f,%.4f", center.latitude - dLat, center.longitude - dLon, center.latitude + dLat, center.longitude + dLon)
+        let query = "[out:json][timeout:25];(node[\"\(tag)\"~\"\(pattern)\"](\(bbox));way[\"\(tag)\"~\"\(pattern)\"](\(bbox)););out center 80;"
+        status = "正在查找附近10公里\(kind)…"
+        Task {
+            guard let root = await overpassQuery(query, timeout: 25),
+                  let els = root["elements"] as? [[String: Any]] else {
+                status = "查询\(kind)失败，请稍后重试"
+                return
+            }
+            let cl = CLLocation(latitude: center.latitude, longitude: center.longitude)
+            var list: [CategoryResult] = []
+            var seen = Set<String>()
+            for e in els {
+                guard let n = ((e["tags"] as? [String: Any])?["name"] as? String)?
+                    .trimmingCharacters(in: .whitespaces), !n.isEmpty else { continue }
+                var lat = e["lat"] as? Double ?? 0
+                var lon = e["lon"] as? Double ?? 0
+                if (lat == 0 || lon == 0), let cc = e["center"] as? [String: Any] {
+                    lat = cc["lat"] as? Double ?? 0
+                    lon = cc["lon"] as? Double ?? 0
+                }
+                guard lat != 0, lon != 0 else { continue }
+                let key = n
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                let dist = cl.distance(from: CLLocation(latitude: lat, longitude: lon))
+                if dist <= 10000 {
+                    list.append(CategoryResult(name: n, lat: lat, lon: lon, kind: kind))
+                }
+            }
+            list.sort { a, b in
+                let da = cl.distance(from: CLLocation(latitude: a.lat, longitude: a.lon))
+                let db = cl.distance(from: CLLocation(latitude: b.lat, longitude: b.lon))
+                return da < db
+            }
+            categoryResults = list
+            categoryTick += 1
+            status = list.isEmpty ? "附近10公里未找到\(kind)" : "找到 \(list.count) 个\(kind)，点击可直接规划路线"
+        }
     }
 
     /// 类别点距离文本
