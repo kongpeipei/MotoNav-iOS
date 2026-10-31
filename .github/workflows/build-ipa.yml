@@ -11,7 +11,8 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # v1.76：macos-latest 队列曾瞬时不可用（3秒无日志失败），改用稳定的 macos-14 长期支持镜像
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
