@@ -5,6 +5,7 @@ import UserNotifications
 import UIKit
 import ActivityKit
 import CryptoKit
+import Network
 
 extension Notification.Name {
     /// 触发点位提醒（object 为 Poi）
@@ -339,6 +340,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         self.motoMode = UserDefaults.standard.object(forKey: "moto_mode") as? Bool ?? true
         self.speedLimit = UserDefaults.standard.object(forKey: "speed_limit") as? Int ?? 80
         super.init()
+        // v1.52 导航语音必须发声：playback 类别无视静音键 + 后台播放（高德导航同款行为）
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {}
         if let saved = UserDefaults.standard.string(forKey: "amapKey"), !saved.isEmpty {
             amapKey = saved
         }
@@ -1147,6 +1153,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
     private var xfPlayer: AVAudioPlayer?
     private var xfSeq = 0
+    /// v1.52 讯飞诊断（试听失败时显示具体原因）
+    @Published var xfDiag = ""
+    private var xfConn: NWConnection?
 
     private func speakSystem(_ text: String) {
         // v1.49 官方语音包：优先系统最高质量中文语音（iOS 增强音色）
@@ -1160,7 +1169,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         speech.speak(u)
     }
 
-    /// 讯飞在线语音合成（WebAPI v2，mp3 流式返回）
+    /// 讯飞在线语音合成（流式版 WebAPI，wss WebSocket + HMAC-SHA256 鉴权，mp3 分片返回）
+    /// v1.52 fix：原 HTTP POST 调 wss 接口被网关 403/not found 拒绝 → 改 NWConnection WebSocket 接入
     private func speakXf(_ text: String) {
         let appId = xfAppId, apiKey = xfApiKey, apiSecret = xfApiSecret
         guard !appId.isEmpty, !apiKey.isEmpty, !apiSecret.isEmpty else {
@@ -1171,54 +1181,123 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let vcn = xfVcn
         // 四川话音色配川味语气词，普通话晓颜用标准话术
         let t = (vcn != "xiaoyan") ? sweetSichuan(text) : text
-        Task {
-            // HMAC-SHA256 鉴权头
-            let host = "tts-api.xfyun.cn"
-            let df = DateFormatter()
-            df.locale = Locale(identifier: "en_US_POSIX")
-            df.timeZone = TimeZone(identifier: "GMT")
-            df.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
-            let date = df.string(from: Date())
-            let origin = "host: \(host)\ndate: \(date)\nGET /v2/tts HTTP/1.1"
-            let key = SymmetricKey(data: Data(apiSecret.utf8))
-            let mac = HMAC<SHA256>.authenticationCode(for: Data(origin.utf8), using: key)
-            let sig = Data(mac).base64EncodedString()
-            let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(sig)\""
-            let auth = Data(authOrigin.utf8).base64EncodedString()
-            guard let url = URL(string: "https://tts-api.xfyun.cn/v2/tts") else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.timeoutInterval = 12
-            req.setValue(host, forHTTPHeaderField: "host")
-            req.setValue(date, forHTTPHeaderField: "date")
-            req.setValue(auth, forHTTPHeaderField: "authorization")
-            req.setValue("application/json", forHTTPHeaderField: "content-type")
-            let body: [String: Any] = [
-                "common": ["app_id": appId],
-                "business": ["aue": "lame", "sfl": 1, "auf": "audio/L16;rate=16000",
-                             "vcn": vcn, "speed": 55, "volume": 60, "pitch": 50,
-                             "tte": "UTF8", "rdn": 0],
-                "data": ["status": 2, "text": Data(t.utf8).base64EncodedString()]
-            ]
-            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-            do {
-                let (data, resp) = try await URLSession.shared.data(for: req)
-                guard mySeq == self.xfSeq else { return } // 已被更新的播报取代
-                if let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                   !data.isEmpty, data.first != 0x7b { // 非 JSON（{ = 0x7b）→ 音频流
-                    let ok = self.playXf(data)
-                    if !ok { self.speakSystem(text) }
-                } else if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let code = root["code"] as? Int, code != 0 {
-                    // 讯飞业务错误（如 11200 音色未授权）→ 降级系统语音
-                    self.speakSystem(text)
-                } else {
+
+        // HMAC-SHA256 鉴权头（wss 握手携带 Host/Date/Authorization）
+        let host = "tts-api.xfyun.cn"
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(identifier: "GMT")
+        df.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        let date = df.string(from: Date())
+        let origin = "host: \(host)\ndate: \(date)\nGET /v2/tts HTTP/1.1"
+        let key = SymmetricKey(data: Data(apiSecret.utf8))
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(origin.utf8), using: key)
+        let sig = Data(mac).base64EncodedString()
+        let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(sig)\""
+        let auth = Data(authOrigin.utf8).base64EncodedString()
+
+        // WebSocket 连接参数（自定义握手头）
+        let wsOptions = NWProtocolWebSocket.Options()
+        wsOptions.setAdditionalHeaders([
+            "Host": host,
+            "Date": date,
+            "Authorization": auth
+        ])
+        wsOptions.autoReplyPing = true
+        let params = NWParameters.tls
+        params.defaultProtocolStack.applicationProtocols.insert(wsOptions, at: 0)
+        params.allowLocalEndpointReuse = false
+
+        xfConn?.cancel()
+        let conn = NWConnection(host: NWEndpoint.Host(host), port: 443, using: params)
+        xfConn = conn
+
+        let f1: [String: Any] = [
+            "common": ["app_id": appId],
+            "business": ["aue": "lame", "sfl": 1, "auf": "audio/L16;rate=16000",
+                         "vcn": vcn, "speed": 55, "volume": 60, "pitch": 50,
+                         "tte": "UTF8", "rdn": 0]
+        ]
+        let f2: [String: Any] = [
+            "data": ["status": 2, "text": Data(t.utf8).base64EncodedString()]
+        ]
+        guard let j1 = try? JSONSerialization.data(withJSONObject: f1),
+              let j2 = try? JSONSerialization.data(withJSONObject: f2) else {
+            speakSystem(text); return
+        }
+
+        var audio = Data()
+        var done = false
+        var failed = false
+        func finishAudio() {
+            guard !audio.isEmpty, !done else { return }
+            done = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, mySeq == self.xfSeq else { return }
+                if !self.playXf(audio) {
+                    self.xfDiag = "讯飞音频解析失败，已降级系统语音"
                     self.speakSystem(text)
                 }
-            } catch {
-                if mySeq == self.xfSeq { self.speakSystem(text) }
             }
         }
+        func fallback(_ diag: String) {
+            guard !failed else { return }
+            failed = true
+            conn.cancel()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, mySeq == self.xfSeq else { return }
+                self.xfDiag = diag
+                self.speakSystem(text)
+            }
+        }
+
+        conn.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                conn.send(content: j1, completion: .contentProcessed { _ in
+                    conn.send(content: j2, completion: .contentProcessed { _ in })
+                })
+            case .failed:
+                fallback("讯飞连接失败（服务未开通或 Key 错误）")
+            case .cancelled:
+                finishAudio()
+            default:
+                break
+            }
+        }
+
+        func receive() {
+            conn.receiveMessage { data, _, isComplete, error in
+                if let d = data {
+                    let op = (d.metadata as? NWProtocolWebSocket.Metadata)?.opcode
+                    if op == .binary {
+                        audio.append(d)
+                    } else if op == .text {
+                        if let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                            let code = obj["code"] as? Int ?? 0
+                            if code != 0 {
+                                // 11200=音色未授权；其它业务错误 → 降级
+                                if code == 11200 {
+                                    fallback("音色未授权（11200），请在控制台发音人授权管理添加试用")
+                                } else {
+                                    fallback("讯飞错误码 \(code)")
+                                }
+                                return
+                            }
+                            let st = (obj["data"] as? [String: Any])?["status"] as? Int ?? 0
+                            if st == 2 { finishAudio(); conn.cancel() }
+                        }
+                    }
+                }
+                if error != nil || isComplete || done {
+                    finishAudio()
+                } else {
+                    receive()
+                }
+            }
+        }
+        receive()
+        conn.start(queue: .global(qos: .userInitiated))
     }
 
     /// 播放讯飞返回的 mp3

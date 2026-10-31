@@ -1751,7 +1751,14 @@ struct VoiceSettingsSheet: View {
                 } header: {
                     Text("讯飞在线语音（需联网，新用户送免费额度）")
                 } footer: {
-                    Text("音色已内置你的讯飞应用（APPID/Key 已配置）；若提示 11200 请到控制台为该音色开通权限。")
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !model.xfDiag.isEmpty {
+                            Text("诊断：\(model.xfDiag)")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                        Text("音色已内置你的讯飞应用（APPID/Key 已配置）；若提示 11200 请到控制台为该音色开通权限。")
+                    }
                 }
             }
             .navigationTitle("语音播报")
