@@ -60,14 +60,14 @@ struct ContentView: View {
     @State private var mapRetried = false
     /// v1.74：高德地图服务器网络自检结果（nil=未测；true=可达；false=异常）
     @State private var mapNetOK: Bool?
-    /// v1.74：网络自检请求高德公共瓦片（无 Key，纯测连通性）
+    /// v1.75：网络自检请求高德公共瓦片（无 Key，纯测连通性）；坐标取北京城区 z8 x=211 y=97 必有内容
     private func checkMapNetwork() {
-        let url = URL(string: "https://webrd01.is.autonavi.com/appmaptile?style=7&x=116&y=50&z=8")!
+        let url = URL(string: "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=211&y=97&z=8")!
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.cachePolicy = .reloadIgnoringCacheData
         URLSession.shared.dataTask(with: req) { data, _, err in
             DispatchQueue.main.async {
-                if let d = data, d.count > 1000 {
+                if let d = data, d.count > 5000 {
                     mapNetOK = true
                 } else {
                     mapNetOK = false
@@ -704,7 +704,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.74")
+                        Text("v1.75")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
