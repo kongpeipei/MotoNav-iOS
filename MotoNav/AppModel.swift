@@ -285,6 +285,49 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.set(favorites, forKey: favKey)
     }
 
+    /// v1.81 联想地点/信息卡收藏（与点位收藏共用同一收藏夹）
+    func isTipFavorite(lat: Double, lon: Double) -> Bool {
+        favorites["\(lat),\(lon)"] != nil
+    }
+
+    /// v1.81 切换联想地点收藏（星星实心/空心 + 我的页收藏夹增删）
+    func toggleTipFavorite(name: String, lat: Double, lon: Double) {
+        let key = "\(lat),\(lon)"
+        if favorites[key] != nil {
+            favorites.removeValue(forKey: key)
+        } else {
+            favorites[key] = name
+        }
+        UserDefaults.standard.set(favorites, forKey: favKey)
+    }
+
+    /// v1.81 高德周边搜索（信息卡"搜周边"）：以该点为中心返回附近 POI
+    func placeAround(lat: Double, lon: Double) async -> [AmapTip] {
+        guard !amapKey.isEmpty else { return [] }
+        let loc = "\(lon),\(lat)"
+        guard let url = URL(string: "https://restapi.amap.com/v3/place/around?key=\(amapKey)&location=\(loc)&radius=5000&offset=15&page=1") else { return [] }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pois = obj["pois"] as? [[String: Any]] else { return [] }
+            var out: [AmapTip] = []
+            for p in pois {
+                guard let name = p["name"] as? String, !name.isEmpty,
+                      let loc2 = p["location"] as? String, !loc2.isEmpty else { continue }
+                let parts = loc2.split(separator: ",").compactMap { Double($0) }
+                guard parts.count == 2 else { continue }
+                let addr = p["address"] as? String ?? ""
+                let dist = p["distance"] as? String ?? ""
+                var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
+                if !dist.isEmpty { sub += " · 距此\(Int(Double(dist) ?? 0))米" }
+                out.append(AmapTip(name: name, sub: sub, lat: parts[1], lon: parts[0]))
+            }
+            return out
+        } catch {
+            return []
+        }
+    }
+
     func setHome(_ p: Poi) {
         homePlace = SavedPlace(name: p.name, lat: p.lat, lon: p.lon)
         let ud = UserDefaults.standard
@@ -1547,7 +1590,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// "去这里/导航到这里"触发：获取多路线方案（起点=当前定位点，终点吸附到最近道路出入口）
-    func fetchRouteChoices(to name: String, lat: Double, lon: Double) {
+    /// autoStart=true 时路线就绪后自动进入导航（地点信息卡"导航"按钮）
+    func fetchRouteChoices(to name: String, lat: Double, lon: Double, autoStart: Bool = false) {
         guard let start = currentLocation else {
             status = "请先定位后再规划路线"
             return
@@ -1611,6 +1655,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routePois = near
         fitTick += 1
         status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
+        // v1.81 直达导航：方案就绪后自动进入导航
+        if autoStart {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self = self, self.route.count >= 2 else { return }
+                if !self.navigating { self.toggleNavigation() }
+            }
+        }
     }
 
     /// 筛选距路线折线 130 米内的点位

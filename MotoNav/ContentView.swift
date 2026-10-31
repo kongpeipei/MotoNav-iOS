@@ -690,6 +690,15 @@ struct ContentView: View {
                     }
                 }
                 Section("关于") {
+                    // v1.81：App 更名为「骑士地图」（图标名同步）
+                    HStack {
+                        Label("骑士地图", systemImage: "map.fill")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Text("骑行导航")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
@@ -1372,6 +1381,23 @@ struct ContentView: View {
         return max(1, Int(ceil(mins)))
     }
 
+    /// v1.81 信息卡"搜周边"：以该点为中心拉周边 POI，按距离排序展开列表
+    private func aroundSearch(_ t: AppModel.AmapTip) {
+        tipCard = nil
+        tipRoad = nil
+        tipAoiName = nil
+        tipPolygon = nil
+        model.clearPreview()
+        searchExpanded = true
+        showSuggestions = true
+        model.status = "正在搜索「\(t.name)」周边…"
+        Task {
+            let around = await model.placeAround(lat: t.lat, lon: t.lon)
+            onlineTips = sortedByDistance(around)
+            if around.isEmpty { model.status = "「\(t.name)」周边暂无结果" }
+        }
+    }
+
     /// v1.81 地点信息卡：距离 / 摩托时间 / 沿途抓拍 / 所在道路
     private func tipInfoCard(_ t: AppModel.AmapTip) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1421,6 +1447,81 @@ struct ContentView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            // v1.81 操作行：搜周边 / 收藏 / 分享 + 导航 / 路线
+            Divider()
+                .padding(.vertical, 4)
+            HStack(spacing: 6) {
+                Button {
+                    aroundSearch(t)
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.title3)
+                        Text("搜周边")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                Button {
+                    haptic()
+                    model.toggleTipFavorite(name: t.name, lat: t.lat, lon: t.lon)
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: model.isTipFavorite(lat: t.lat, lon: t.lon) ? "star.fill" : "star")
+                            .font(.title3)
+                            .foregroundStyle(model.isTipFavorite(lat: t.lat, lon: t.lon) ? .orange : .primary)
+                        Text("收藏")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                ShareLink(item: "\(t.name) \(tipRoad ?? (!t.sub.isEmpty ? t.sub : ""))") {
+                    VStack(spacing: 2) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.title3)
+                        Text("分享")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                // 白色"导航"：直接开始导航
+                Button {
+                    tipCard = nil
+                    tipRoad = nil
+                    tipAoiName = nil
+                    tipPolygon = nil
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: t.name, lat: t.lat, lon: t.lon, autoStart: true)
+                } label: {
+                    Text("导航")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.blue)
+                        .frame(width: 76, height: 40)
+                        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.blue, lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
+                // 蓝色"路线"：开始规划路线
+                Button {
+                    tipCard = nil
+                    tipRoad = nil
+                    tipAoiName = nil
+                    tipPolygon = nil
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: t.name, lat: t.lat, lon: t.lon)
+                } label: {
+                    Text("路线")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                        .frame(width: 76, height: 40)
+                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(12)
         .background(Color(.systemBackground).opacity(0.95), in: RoundedRectangle(cornerRadius: 14))
