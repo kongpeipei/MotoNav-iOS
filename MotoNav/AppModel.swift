@@ -1279,7 +1279,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         func receive() {
             conn.receiveMessage { data, context, isComplete, error in
                 if let d = data {
-                    let op = (context?.metadata as? NWProtocolWebSocket.Metadata)?.opcode
+                    let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata)?.opcode
                     if op == .binary {
                         audio.append(d)
                     } else if op == .text {
