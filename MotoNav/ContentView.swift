@@ -47,6 +47,15 @@ struct ContentView: View {
     @State private var minimalMap = false
     /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
     @State private var uiHidden = false
+    /// v1.69 搜索面板"+"选点模式（轻点地图生成快捷卡片）
+    @State private var quickPickMode = false
+    @State private var pendingQuickCoord: CLLocationCoordinate2D?
+    @State private var showQuickNameAlert = false
+    @State private var quickName = ""
+    /// v1.69 地图加载失败诊断（高德 SDK 黑屏根因提示）
+    @State private var mapLoadFailed = false
+    @State private var mapLoadError = ""
+    @State private var reloadTick = 0
 
     var body: some View {
         ZStack {
@@ -82,6 +91,10 @@ struct ContentView: View {
                 // v1.66：沉浸模式下底部内容（搜索框/规划卡/导航卡）隐藏；导航中导航卡不受影响
                 if !uiHidden || model.navigating {
                     bottomOverlay
+                }
+                // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
+                if mapLoadFailed {
+                    mapLoadBanner
                 }
             } else {
                 settingsPage
@@ -149,6 +162,25 @@ struct ContentView: View {
                 Button(t.label) { addPoiAtPending(type: t) }
             }
             Button("取消", role: .cancel) {}
+        }
+        // v1.69 搜索面板"+"选点命名弹窗
+        .alert("命名快捷卡片", isPresented: $showQuickNameAlert) {
+            TextField("名称（如：回龙观桥下）", text: $quickName)
+            Button("保存") {
+                if let c = pendingQuickCoord {
+                    let n = quickName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    model.addQuickPoi(name: n.isEmpty ? "快捷地点" : n, lat: c.latitude, lon: c.longitude)
+                    model.status = "已添加快捷卡片「\(n.isEmpty ? "快捷地点" : n)」，点击即可直接导航"
+                }
+                pendingQuickCoord = nil
+                quickPickMode = false
+            }
+            Button("取消", role: .cancel) {
+                pendingQuickCoord = nil
+                quickPickMode = false
+            }
+        } message: {
+            Text("保存为搜索面板快捷卡片：点击直接导航，长按卡片可删除")
         }
         // 长按已有点位：删除 / 编辑 / 导航
         .confirmationDialog("点位操作", isPresented: Binding(
@@ -267,11 +299,33 @@ struct ContentView: View {
                 model.clearCategory()
             },
             onMapTap: { coord in
-                // v1.66：轻点地图 = 动态隐藏/显示全部 UI（只留当前定位按钮），高德同款沉浸式；导航中不触发
+                // v1.69："+"快捷卡片选点模式优先；否则 v1.66 轻点地图沉浸切换（导航中不触发）
                 guard !model.navigating else { return }
+                if quickPickMode {
+                    pendingQuickCoord = coord
+                    quickName = placeNameNear(coord)
+                    showQuickNameAlert = true
+                    return
+                }
                 withAnimation(.easeOut(duration: 0.2)) { uiHidden.toggle() }
             },
-            minimal: minimalMap
+            minimal: minimalMap,
+            reloadTick: reloadTick,
+            onMapLoad: { ok, err in
+                if ok {
+                    mapLoadFailed = false
+                } else {
+                    mapLoadFailed = true
+                    let e = err.lowercased()
+                    if e.contains("invalid") || e.contains("socode") || e.contains("key") {
+                        mapLoadError = "高德 Key 未生效：请在 lbs.amap.com 控制台确认「iOS 地图 SDK」已开通且安全码为 com.motonav.app.ios（可先退出重进）"
+                    } else if e.contains("network") || e.contains("timed") {
+                        mapLoadError = "网络异常：请检查网络后点重试"
+                    } else {
+                        mapLoadError = err
+                    }
+                }
+            }
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -309,6 +363,40 @@ struct ContentView: View {
             }
             Spacer()
         }
+    }
+
+    /// v1.69 地图加载失败诊断条（黑屏时提示原因 + 重试）
+    private var mapLoadBanner: some View {
+        VStack {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                Text(mapLoadError)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                Spacer()
+                Button {
+                    reloadTick += 1
+                    mapLoadFailed = false
+                    model.status = "正在重新加载地图…"
+                } label: {
+                    Text("重试")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.blue, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(10)
+            .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.2), lineWidth: 1))
+            .padding(.horizontal)
+            Spacer()
+        }
+        .padding(.top, model.navigating ? 290 : 120)
     }
 
     /// 右上角 ⋯ 菜单（导入/导出点位数据）- 已迁移到底部"我的"选项卡
@@ -383,7 +471,8 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.trailing, 12)
-                .padding(.top, 190) // v1.66：移到顶部综合导航条下方，不再被速度卡遮挡
+                // v1.69：非导航固定天气条下方（上移）；导航固定在顶部速度卡下方，位置不变不与速度卡重叠
+                .padding(.top, model.navigating ? 270 : 116)
             }
             Spacer()
         }
@@ -585,7 +674,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.68")
+                        Text("v1.69")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -647,7 +736,10 @@ struct ContentView: View {
             if !model.navigating {
                 // 导航中自动隐藏多余 UI（高德式）：仅保留导航卡/抓拍条/悬浮退出
                 categoryBar
-                historyBar
+                // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
+                if !(searchFocused && searchText.isEmpty) {
+                    historyBar
+                }
                 routeChoiceList
                 goHereBar
                 // 搜索框始终显示（底部选项卡上方）
@@ -1189,7 +1281,8 @@ struct ContentView: View {
                 }
                 .frame(width: 56, height: 56)
                 .padding(.leading, 12)
-                .padding(.top, 190) // v1.66：移到顶部综合导航条下方，不再被速度卡遮挡
+                // v1.69：非导航固定天气条下方（上移）；导航固定在顶部速度卡下方，位置不变不与速度卡重叠
+                .padding(.top, model.navigating ? 270 : 116)
                 Spacer()
             }
             Spacer()
@@ -1212,6 +1305,10 @@ struct ContentView: View {
     private var searchBar: some View {
         VStack(spacing: 4) {
             searchInputRow
+            // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
+            if searchFocused && searchText.isEmpty {
+                quickAccessPanel
+            }
             if showSuggestions && !suggestions.isEmpty {
                 suggestionsList
             }
@@ -1221,6 +1318,168 @@ struct ContentView: View {
             }
         }
         .background(.black.opacity(0.18))
+    }
+
+    /// v1.69 搜索面板：快捷卡片行 + 高德样式历史记录
+    private var quickAccessPanel: some View {
+        VStack(spacing: 6) {
+            quickCardsRow
+            if !model.searchHistory.isEmpty {
+                historyList
+            }
+        }
+    }
+
+    /// v1.69 单行快捷卡片：家 / 公司 / +（自定义选点） 横向滚动
+    private var quickCardsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                // 家
+                quickCard(icon: "house.fill", color: .blue,
+                          title: "家", sub: model.homePlace.map { displayName($0.name) } ?? "未设置") {
+                    if let h = model.homePlace {
+                        dismissKeyboard(); searchFocused = false
+                        model.planRoute(to: h.name, lat: h.lat, lon: h.lon)
+                    } else {
+                        model.status = "家未设置：长按「家」卡片用当前位置设置，或在「我的」页设置"
+                    }
+                }
+                .contextMenu {
+                    Button("用当前位置重设家") {
+                        if let loc = model.currentLocation {
+                            model.setHomeCoord(loc)
+                            model.status = "已用当前位置重设「家」"
+                        } else { model.status = "定位中，稍后再试" }
+                    }
+                }
+                // 公司
+                quickCard(icon: "briefcase.fill", color: .blue,
+                          title: "公司", sub: model.workPlace.map { displayName($0.name) } ?? "未设置") {
+                    if let w = model.workPlace {
+                        dismissKeyboard(); searchFocused = false
+                        model.planRoute(to: w.name, lat: w.lat, lon: w.lon)
+                    } else {
+                        model.status = "公司未设置：长按「公司」卡片用当前位置设置，或在「我的」页设置"
+                    }
+                }
+                .contextMenu {
+                    Button("用当前位置重设公司") {
+                        if let loc = model.currentLocation {
+                            model.setWorkCoord(loc)
+                            model.status = "已用当前位置重设「公司」"
+                        } else { model.status = "定位中，稍后再试" }
+                    }
+                }
+                // "+" 地图选点生成快捷卡片
+                quickCard(icon: quickPickMode ? "mappin.circle.fill" : "plus",
+                          color: quickPickMode ? .white : .blue,
+                          title: quickPickMode ? "选点中" : "添加",
+                          sub: quickPickMode ? "轻点地图选位置" : "地图选点") {
+                    quickPickMode.toggle()
+                    if quickPickMode {
+                        searchFocused = false
+                        model.status = "请在屏幕上轻点要保存的位置，然后命名"
+                    } else {
+                        model.status = "已取消添加"
+                    }
+                }
+                // 自定义快捷卡片（长按删除）
+                ForEach(model.quickPois) { qp in
+                    quickCard(icon: "star.fill", color: .orange,
+                              title: displayName(qp.name), sub: "快捷地点") {
+                        dismissKeyboard(); searchFocused = false
+                        model.planRoute(to: qp.name, lat: qp.lat, lon: qp.lon)
+                    }
+                    .contextMenu {
+                        Button("删除「\(displayName(qp.name))」", role: .destructive) {
+                            model.removeQuickPoi(id: qp.id)
+                            model.status = "已删除快捷卡片「\(qp.name)」"
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    /// v1.69 高德样式历史搜索记录列表（名称 + 分隔线 + 清空）
+    private var historyList: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("历史搜索")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("清空") {
+                    model.clearHistory()
+                    model.status = "搜索历史已清空"
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.searchHistory, id: \.self) { item in
+                        Button {
+                            searchText = item
+                            showSuggestions = false
+                            dismissKeyboard()
+                            doSearch()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .foregroundStyle(.gray)
+                                Text(displayName(item))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Divider().padding(.leading, 38)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+        .background(.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+        .padding(.horizontal)
+    }
+
+    /// v1.69 快捷卡片通用外观
+    private func quickCard(
+        icon: String, color: Color, title: String, sub: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(color)
+            Text(title)
+                .font(.caption.bold())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(sub)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: 78, height: 58)
+        .background(.bar, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.25), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
     }
 
     /// 搜索输入行：高德样式白底大圆角（放大镜 + 输入 + ✕ + 搜索按钮为一体）

@@ -119,8 +119,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var favorites: [String: String] = [:]
     /// 常用地点（家/公司）
     struct SavedPlace: Codable { var name: String; var lat: Double; var lon: Double }
+    /// v1.69 搜索面板快捷卡片（家/公司之外的"+"自定义点位）
+    struct QuickPoi: Codable, Identifiable, Hashable {
+        var name: String
+        var lat: Double
+        var lon: Double
+        var id: String { "\(name)|\(lat)|\(lon)" }
+    }
     @Published var homePlace: SavedPlace?
     @Published var workPlace: SavedPlace?
+    /// v1.69 自定义快捷卡片（"+"在地图选点生成，长按删除）
+    @Published var quickPois: [QuickPoi] = []
     /// 行程总结（到达或退出导航时生成）
     struct TripSummary {
         let destName: String
@@ -235,6 +244,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         loadHefeiPois()
         loadFavorites()
         loadHomeWork()
+        loadQuickPois()
         NotificationCenter.default.addObserver(
             self, selector: #selector(authorizeAndStart),
             name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -299,6 +309,33 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         workPlace = SavedPlace(name: name, lat: coord.latitude, lon: coord.longitude)
         let ud = UserDefaults.standard
         if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
+    }
+
+    // MARK: - v1.69 搜索面板自定义快捷卡片（+ 选点生成，长按删除）
+
+    private let quickKey = "quick_pois"
+
+    func loadQuickPois() {
+        if let d = UserDefaults.standard.data(forKey: quickKey),
+           let arr = try? JSONDecoder().decode([QuickPoi].self, from: d) {
+            quickPois = arr
+        }
+    }
+
+    func addQuickPoi(name: String, lat: Double, lon: Double) {
+        quickPois.append(QuickPoi(name: name, lat: lat, lon: lon))
+        saveQuickPois()
+    }
+
+    func removeQuickPoi(id: String) {
+        quickPois.removeAll { $0.id == id }
+        saveQuickPois()
+    }
+
+    private func saveQuickPois() {
+        if let d = try? JSONEncoder().encode(quickPois) {
+            UserDefaults.standard.set(d, forKey: quickKey)
+        }
     }
 
     // MARK: - 网络查询工具（v1.26：统一超时 + 备用镜像 + 动态搜索范围）

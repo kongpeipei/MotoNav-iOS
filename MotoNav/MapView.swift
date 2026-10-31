@@ -49,6 +49,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
     /// v1.63 极简模式：隐藏兴趣点/地名/类别标注（高德导航"极简"）
     let minimal: Bool
+    /// v1.69 地图重载计数（加载失败重试 +1，触发 MAMapView.reloadMap）
+    let reloadTick: Int
+    /// v1.69 地图加载状态回调：(是否成功, 错误描述)
+    var onMapLoad: ((Bool, String) -> Void)?
 
     func makeUIView(context: Context) -> MAMapView {
         let map = MAMapView(frame: .zero)
@@ -79,6 +83,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
+        context.coordinator.onMapLoad = onMapLoad
+        // v1.69 地图加载失败重试
+        if reloadTick != context.coordinator.lastReloadTick {
+            context.coordinator.lastReloadTick = reloadTick
+            if reloadTick > 0 { map.reloadMap() }
+        }
         // 当前定位箭头：坐标（WGS84→GCJ 显示）；变化时重建刷新位置
         if let loc = userLocation {
             let g = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
@@ -335,6 +345,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+        /// v1.69 地图加载状态回调
+        var onMapLoad: ((Bool, String) -> Void)?
+        var lastReloadTick = 0
         /// 当前定位箭头标注
         var userAnnotation: UserLocationAnnotation?
         /// 是否已做过首次定位居中
@@ -479,6 +492,16 @@ struct MapViewRepresentable: UIViewRepresentable {
             } else if !animated {
                 userMoved = true
             }
+        }
+
+        /// v1.69 地图加载成功（高德底图渲染就绪）
+        func mapViewDidFinishLoadingMap(_ mapView: MAMapView) {
+            onMapLoad?(true, "")
+        }
+
+        /// v1.69 地图加载失败（Key 未生效/网络异常/服务未开通），给出诊断
+        func mapViewDidFailLoadingMap(_ mapView: MAMapView, withError error: Error) {
+            onMapLoad?(false, error.localizedDescription)
         }
 
         func mapView(_ mapView: MAMapView, didSelect view: MAAnnotationView) {
