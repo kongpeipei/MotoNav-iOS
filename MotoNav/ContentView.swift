@@ -280,10 +280,6 @@ struct ContentView: View {
             navigating: model.navigating,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
-            // v1.49：图层切换 / 实时路况 / 历史轨迹回放
-            mapType: mapType,
-            trafficRoads: model.trafficRoads,
-            tripTrackLine: shownTripPoints,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -320,7 +316,11 @@ struct ContentView: View {
                 goHereLat = coord.latitude
                 goHereLon = coord.longitude
                 model.setPreview(n, lat: coord.latitude, lon: coord.longitude)
-            }
+            },
+            // v1.49：图层切换 / 实时路况 / 历史轨迹回放
+            mapType: mapType,
+            trafficRoads: model.trafficRoads,
+            tripTrackLine: shownTripPoints
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
