@@ -60,6 +60,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 合肥小区/商铺联想库（内置 + 在线刷新）
     @Published var hfPois: [String] = []
 
+    /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
+    @Published var amapKey: String {
+        didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
+    }
+
+    /// 高德「输入提示」联想候选（名称 + 副标题 + 精确坐标）
+    struct AmapTip: Identifiable {
+        let name: String
+        let sub: String
+        let lat: Double
+        let lon: Double
+        var id: String { "\(name)#\(lat)#\(lon)" }
+    }
+
     /// 类型筛选（默认全部启用）
     var enabledTypes: Set<PoiType> = Set(PoiType.allCases)
     /// 点位总开关
@@ -188,6 +202,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private override init() {
         super.init()
+        amapKey = UserDefaults.standard.string(forKey: "amapKey") ?? ""
         lm.delegate = self
         lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         pois = repo.load()
@@ -1041,6 +1056,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         for h in searchHistory { pool.insert(h) }
         for hf in hfPois { pool.insert(hf) }
         for lm in searchLandmarks where lm.matches(query) { pool.insert(lm.name) }
+        // v1.45：地图上的小区/商铺/道路名标注全部进联想池（截图里的朱山郢、油坊新城等可搜到）
+        for pl in placeLabels { pool.insert(pl.name) }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty {
             // 空输入：收藏 ⭐ 优先，其次历史，其次常驻点位
@@ -1058,6 +1075,38 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             matched = ["🔍 在线搜索「\(q)」"]
         }
         return Array(matched.prefix(10))
+    }
+
+    /// 保存/清除高德 Key（didSet 自动持久化）
+    func setAmapKey(_ k: String) { amapKey = k }
+
+    /// 高德「输入提示」联想：输入关键字实时返回 POI 候选（名称+副标题+精确坐标），需用户填写高德 Web 服务 Key
+    func amapInputTips(_ q: String) async -> [AmapTip] {
+        guard !amapKey.isEmpty, !q.isEmpty else { return [] }
+        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard let url = URL(string: "https://restapi.amap.com/v3/assistant/inputtips?key=\(amapKey)&keywords=\(enc)&city=%E5%90%88%E8%82%A5&citylimit=true") else { return [] }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tips = obj["tips"] as? [[String: Any]] else { return [] }
+            var out: [AmapTip] = []
+            for t in tips {
+                guard let name = t["name"] as? String, !name.isEmpty,
+                      let loc = t["location"] as? String, !loc.isEmpty else { continue }
+                let parts = loc.split(separator: ",").compactMap { Double($0) }
+                guard parts.count == 2 else { continue }
+                let district = t["district"] as? String ?? ""
+                let addr = t["address"] as? String ?? ""
+                var sub = ""
+                if !addr.isEmpty { sub += addr }
+                if !district.isEmpty { sub += (sub.isEmpty ? "" : " · ") + district }
+                if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
+                out.append(AmapTip(name: name, sub: sub, lat: parts[1], lon: parts[0]))
+            }
+            return Array(out.prefix(8))
+        } catch {
+            return []
+        }
     }
 
     /// 右下角定位按钮：地图回中

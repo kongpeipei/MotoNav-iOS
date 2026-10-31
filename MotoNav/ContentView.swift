@@ -9,6 +9,11 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var suggestions: [String] = []
     @State private var showSuggestions = false
+    /// 高德「输入提示」联想候选（填写高德 Key 后启用，点击直接定位跳转）
+    @State private var onlineTips: [AppModel.AmapTip] = []
+    /// 高德搜索 Key 输入弹窗
+    @State private var showAmapKeyInput = false
+    @State private var amapKeyInput = ""
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
     /// 标记该点：待标记坐标 + 备注输入
@@ -113,6 +118,19 @@ struct ContentView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("输入备注名称，保存后下次打开 App 依然保留；长按图标可拖动微调位置")
+        }
+        .alert("高德搜索Key", isPresented: $showAmapKeyInput) {
+            TextField("粘贴高德开放平台 Web 服务 Key", text: $amapKeyInput)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("保存") {
+                let k = amapKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                model.setAmapKey(k)
+                model.status = k.isEmpty ? "高德Key已清除，恢复本地联想" : "高德Key已保存，搜索输入即显示高德联想候选"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("在高德开放平台（lbs.amap.com）注册后创建应用，获取 Web 服务 Key，粘贴后搜索联想即为高德数据（含精确坐标，点击直接定位）")
         }
         .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
             ForEach(PoiType.allCases.filter(\.isCamera), id: \.self) { t in
@@ -290,6 +308,10 @@ struct ContentView: View {
                 Menu {
                     Button("导入 JSON") { showImport = true }
                     Button("导出 JSON") { exportDoc = JsonFile(text: model.exportPois()); showExport = true }
+                    Button(model.amapKey.isEmpty ? "高德搜索Key（可选，填了联想更准）" : "高德搜索Key（已启用）") {
+                        amapKeyInput = model.amapKey
+                        showAmapKeyInput = true
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title2)
@@ -897,6 +919,10 @@ struct ContentView: View {
             if showSuggestions && !suggestions.isEmpty {
                 suggestionsList
             }
+            // 高德 POI 联想候选（填写高德 Key 后显示，点击直接定位）
+            if showSuggestions && !onlineTips.isEmpty {
+                onlineTipsList
+            }
         }
         .background(.black.opacity(0.18))
     }
@@ -915,6 +941,16 @@ struct ContentView: View {
                 .onChange(of: searchText) { newValue in
                     suggestions = model.searchSuggestions(newValue).map { displayName($0) }
                     showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
+                    // 高德搜索逻辑：填写 Key 后输入即实时返回 POI 联想候选（带坐标，点击直接定位）
+                    onlineTips = []
+                    if !model.amapKey.isEmpty {
+                        let q = newValue.trimmingCharacters(in: .whitespaces)
+                        guard !q.isEmpty else { return }
+                        Task {
+                            let tips = await model.amapInputTips(q)
+                            if searchText == newValue { onlineTips = tips }
+                        }
+                    }
                 }
             // 一键清除输入内容（有内容时显示）
             if !searchText.isEmpty {
@@ -972,6 +1008,59 @@ struct ContentView: View {
             }
         }
         .frame(maxHeight: 200)
+        .background(.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+        .padding(.horizontal)
+    }
+
+    /// 高德联想候选列表（名称 + 地址副标题 + 定位图标；点击直接定位跳转，高德式搜索体验）
+    private var onlineTipsList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(onlineTips) { tip in
+                    VStack(spacing: 0) {
+                        Button {
+                            searchFocused = false
+                            showSuggestions = false
+                            dismissKeyboard()
+                            model.setPreview(tip.name, lat: tip.lat, lon: tip.lon)
+                            goHereLabel = "导航去此处"
+                            goHereName = tip.name
+                            goHereLat = tip.lat
+                            goHereLon = tip.lon
+                            model.addHistory(tip.name)
+                            model.fitTick += 1
+                            model.status = "已定位到「\(tip.name)」，点「导航去此处」规划路线"
+                        } label: {
+                            HStack {
+                                Image(systemName: "mappin.circle.fill")
+                                    .foregroundStyle(.green)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(tip.name)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Text(tip.sub)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.right.circle")
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: 190)
         .background(.bar)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
