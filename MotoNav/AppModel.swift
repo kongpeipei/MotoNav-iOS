@@ -14,12 +14,7 @@ extension Notification.Name {
     static let motoPoisChanged = Notification.Name("motoPoisChanged")
 }
 
-/// 实时路况线段（高德交通态势：1=畅通 2=缓行 3=拥堵 4=严重拥堵）
-struct TrafficRoad {
-    let name: String
-    let status: Int
-    let coords: [CLLocationCoordinate2D]
-}
+/// CLLocationCoordinate2D Codable（轨迹历史持久化）
 
 @MainActor
 final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
@@ -106,8 +101,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastSpeakAt = Date.distantPast
     private var lastSpeakPriority = 0
     private var lastSpeakText = ""
-    /// 实时路况线段（高德交通态势，v1.61 恢复）
-    @Published var trafficRoads: [TrafficRoad] = []
     /// 违拍提醒 Live Activity（灵动岛/锁屏实时显示前方抓拍点，导航中生效）
     private var liveActivity: Activity<MotoNavAttributes>?
     private var simTimer: Timer?
@@ -1140,47 +1133,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             s = s.replacingOccurrences(of: k, with: v)
         }
         return s
-    }
-
-    // MARK: - v1.61 恢复：实时路况（高德交通态势，右上"路况"按钮）
-
-    func fetchTraffic(near center: CLLocationCoordinate2D, spanMeters: Double) async {
-        guard !amapKey.isEmpty else { return }
-        let dLat = spanMeters / 111000.0
-        let dLon = spanMeters / (111000.0 * cos(center.latitude * .pi / 180))
-        let (gLat, gLon) = CoordConv.wgs2gcj(center.latitude, center.longitude)
-        let rect = String(format: "%.5f,%.5f;%.5f,%.5f",
-                          gLon - dLon, gLat - dLat, gLon + dLon, gLat + dLat)
-        guard let url = URL(string:
-            "https://restapi.amap.com/v3/traffic/status/rectangle?key=\(amapKey)&rectangle=\(rect)&level=6&extensions=base"
-        ) else { return }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 8
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let traffic = root["trafficinfo"] as? [String: Any],
-              let roads = traffic["roads"] as? [[String: Any]]
-        else { return }
-        var out: [TrafficRoad] = []
-        for r in roads {
-            guard let status = r["status"] as? String,
-                  let poly = r["polyline"] as? String else { continue }
-            var pts: [CLLocationCoordinate2D] = []
-            for pair in poly.split(separator: ";") {
-                let ll = pair.split(separator: ",")
-                guard ll.count == 2, let lon = Double(ll[0]), let lat = Double(ll[1]) else { continue }
-                let w = CoordConv.gcj2wgs(lat, lon)
-                pts.append(CLLocationCoordinate2D(latitude: w.0, longitude: w.1))
-            }
-            guard pts.count >= 2 else { continue }
-            out.append(TrafficRoad(
-                name: r["name"] as? String ?? "",
-                status: Int(status) ?? 1,
-                coords: pts))
-        }
-        if !out.isEmpty {
-            trafficRoads = out
-        }
     }
 
     // MARK: - 本地通知

@@ -43,12 +43,6 @@ struct ContentView: View {
     @State private var selectedTab = 0
     /// "我的"页面弹出
     @State private var showSettingsSheet = false
-    /// 卫星图层开关
-    @State private var showSatellite = false
-    /// 实时路况开关
-    @State private var showTraffic = false
-    /// 高德瓦片底图开关（v1.61 恢复）
-    @State private var useAmapTiles = true
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
 
@@ -261,10 +255,7 @@ struct ContentView: View {
                 goHereLat = coord.latitude
                 goHereLon = coord.longitude
                 model.setPreview(n, lat: coord.latitude, lon: coord.longitude)
-            },
-            trafficRoads: model.trafficRoads,
-            showTraffic: showTraffic,
-            useAmapTiles: useAmapTiles
+            }
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -339,54 +330,6 @@ struct ContentView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(gpsSignalColor(), in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    // v1.61 图层文字按钮：切换高德瓦片底图（默认开）
-                    Button {
-                        haptic()
-                        useAmapTiles.toggle()
-                        model.status = useAmapTiles ? "已开启高德底图" : "已切换苹果底图"
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "square.3.layers.3d")
-                                .font(.caption2.bold())
-                            Text("图层")
-                                .font(.caption.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(useAmapTiles ? Color.blue : Color.black.opacity(0.45), in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    // v1.61 路况文字按钮：拉取并显示实时路况（红黄绿）
-                    Button {
-                        haptic()
-                        showTraffic.toggle()
-                        if showTraffic {
-                            model.status = "正在加载实时路况…"
-                            if let loc = model.currentLocation {
-                                Task {
-                                    await model.fetchTraffic(near: loc, spanMeters: 12000)
-                                    model.status = model.trafficRoads.isEmpty ? "附近暂无路况数据" : "实时路况已显示（\(model.trafficRoads.count) 段）"
-                                }
-                            }
-                        } else {
-                            model.status = "实时路况已关闭"
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "wave.3.right")
-                                .font(.caption2.bold())
-                            Text("路况")
-                                .font(.caption.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(showTraffic ? Color.orange : Color.black.opacity(0.45), in: Capsule())
                         .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
@@ -501,7 +444,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.61")
+                        Text("v1.62")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
