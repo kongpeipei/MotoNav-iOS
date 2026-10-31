@@ -716,7 +716,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.79")
+                        Text("v1.80")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -2071,41 +2071,29 @@ struct VoiceSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     private let testText = "前方 500 米右转，进入包公大道，请注意安全"
     private let voices: [(vcn: String, name: String, sub: String, icon: String)] = [
+        // v1.80 语音包统一列表：本地内置（vcn=""）+ 讯飞已授权发音人（实测合成成功）
+        ("", "本地内置 · 默认中文女声", "iOS 内置中文语音，无需联网", "iphone"),
+        ("xiaoyan", "普通话女声 · 晓燕", "标准普通话，字正腔圆", "speaker.wave.2.fill"),
+        ("xiaoyu", "普通话女声 · 晓宇", "甜美普通话女声", "speaker.wave.2.fill"),
+        ("xiaomei", "普通话女声 · 小美", "温柔普通话女声", "speaker.wave.2.fill"),
+        ("xiaoqiang", "普通话男声 · 小强", "沉稳普通话男声", "speaker.wave.2.fill"),
         ("xiaorong", "四川话女声 · 小蓉", "亲切川味，导航更有味道", "speaker.wave.3.fill"),
-        ("yezi", "四川话女声 · 叶子", "清亮川腔，推荐", "speaker.wave.2.fill"),
-        ("xiaoyan", "普通话女声 · 晓颜", "标准普通话，字正腔圆", "speaker.wave.2.fill")
+        ("xiaoyue", "粤语女声 · 晓月", "标准粤语女声", "speaker.wave.2.fill"),
+        ("x4_xiaolu", "普通话女声 · 讯飞小露", "特色发音人，清亮女声", "sparkles"),
+        ("x4_xiaorong", "四川话女声 · 讯飞小蓉", "特色发音人，川味十足", "sparkles"),
+        ("x4_yezi", "四川话女声 · 叶子", "清亮川腔，推荐", "sparkles"),
+        ("x4_lingbosong", "普通话男声 · 聆伯松", "特色发音人，磁性男声", "sparkles"),
+        ("x4_lingxiaoxuan_wenrou", "普通话女声 · 聆小璇-温柔", "特色发音人，温柔女声", "sparkles")
     ]
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Button {
-                        UserDefaults.standard.set(false, forKey: "xfEnabled")
-                        model.speak("语音播报已切换为系统语音")
-                    } label: {
-                        HStack {
-                            Image(systemName: "iphone")
-                                .foregroundStyle(.gray)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("系统语音")
-                                    .foregroundStyle(.primary)
-                                Text("iOS 内置中文语音，无需联网")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if !model.xfEnabled { Image(systemName: "checkmark").foregroundStyle(.green) }
-                        }
-                    }
-                } header: {
-                    Text("语音引擎")
-                }
-                Section {
                     ForEach(voices, id: \.vcn) { v in
                         HStack(spacing: 8) {
                             Image(systemName: v.icon)
-                                .foregroundStyle(.green)
+                                .foregroundStyle(v.vcn.isEmpty ? .gray : .green)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(v.name)
                                     .foregroundStyle(.primary)
@@ -2122,19 +2110,23 @@ struct VoiceSettingsSheet: View {
                                     .foregroundStyle(.tint)
                             }
                             .buttonStyle(.borderless)
-                            if model.xfEnabled && model.xfVcn == v.vcn {
+                            if v.vcn.isEmpty ? !model.xfEnabled : (model.xfEnabled && model.xfVcn == v.vcn) {
                                 Image(systemName: "checkmark").foregroundStyle(.green)
                             }
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            UserDefaults.standard.set(true, forKey: "xfEnabled")
-                            UserDefaults.standard.set(v.vcn, forKey: "xfVcn")
+                            if v.vcn.isEmpty {
+                                UserDefaults.standard.set(false, forKey: "xfEnabled")
+                            } else {
+                                UserDefaults.standard.set(true, forKey: "xfEnabled")
+                                UserDefaults.standard.set(v.vcn, forKey: "xfVcn")
+                            }
                             model.speak("语音已切换为\(v.name)")
                         }
                     }
                 } header: {
-                    Text("讯飞在线语音（需联网，新用户送免费额度）")
+                    Text("语音包")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         if !model.xfDiag.isEmpty {
@@ -2142,7 +2134,7 @@ struct VoiceSettingsSheet: View {
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         }
-                        Text("音色已内置你的讯飞应用（APPID/Key 已配置）；若提示 11200 请到控制台为该音色开通权限。")
+                        Text("本地内置无需联网；讯飞音色为你的应用已授权发音人，需联网合成，新增音色请到讯飞控制台「发音人授权管理」开通。")
                     }
                 }
             }

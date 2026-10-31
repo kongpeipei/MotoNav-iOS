@@ -963,15 +963,26 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     var xfAppId: String { UserDefaults.standard.string(forKey: "xfAppId") ?? Self.xfAppIdDefault }
     var xfApiKey: String { UserDefaults.standard.string(forKey: "xfApiKey") ?? Self.xfApiKeyDefault }
     var xfApiSecret: String { UserDefaults.standard.string(forKey: "xfApiSecret") ?? Self.xfApiSecretDefault }
-    /// 音色：xiaorong=四川话女声(小蓉) / xiaoyan=普通话女声(晓颜) / yezi=四川话女声(叶子)
-    var xfVcn: String { UserDefaults.standard.string(forKey: "xfVcn") ?? "xiaorong" }
+    /// 音色：vcn 代码（v1.80 起仅保留讯飞已授权发音人；旧 yezi 自动迁移到特色 x4_yezi）
+    var xfVcn: String {
+        let v = UserDefaults.standard.string(forKey: "xfVcn") ?? "xiaorong"
+        return v == "yezi" ? "x4_yezi" : v
+    }
     /// 讯飞引擎开关（默认开；设置为 false 用系统语音）
     var xfEnabled: Bool { UserDefaults.standard.object(forKey: "xfEnabled") as? Bool ?? true }
     /// 当前音色显示名
     var xfVcnName: String {
         switch xfVcn {
-        case "xiaoyan": return "普通话女声·晓颜"
-        case "yezi": return "四川话女声·叶子"
+        case "xiaoyu": return "普通话女声·晓宇"
+        case "xiaomei": return "普通话女声·小美"
+        case "xiaoqiang": return "普通话男声·小强"
+        case "xiaoyue": return "粤语女声·晓月"
+        case "x4_xiaolu": return "普通话女声·讯飞小露"
+        case "x4_xiaorong": return "四川话女声·讯飞小蓉"
+        case "x4_yezi": return "四川话女声·叶子"
+        case "x4_lingbosong": return "普通话男声·聆伯松"
+        case "x4_lingxiaoxuan_wenrou": return "普通话女声·聆小璇-温柔"
+        case "xiaoyan": return "普通话女声·晓燕"
         default: return "四川话女声·小蓉"
         }
     }
@@ -989,18 +1000,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     private func speakSystem(_ text: String) {
-        // 官方语音包：优先系统最高质量中文语音
-        let u = AVSpeechUtterance(string: sweetSichuan(text))
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language == "zh-CN" }
-        u.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue }
-            ?? AVSpeechSynthesisVoice(language: "zh-CN")
-        u.rate = 0.48          // 稍慢，更柔
-        u.pitchMultiplier = 1.18 // 音调偏高，更甜
+        // v1.80 恢复最早默认中文女声（用户要求"本地内置改回原来声音"）：系统默认 zh-CN、正常语速、无语气词
+        let u = AVSpeechUtterance(string: text)
+        u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        u.rate = 0.5
         speech.speak(u)
     }
 
-    /// 讯飞在线语音合成（wss WebSocket + HMAC-SHA256 鉴权，mp3 分片返回）
     /// 讯飞在线语音合成（wss WebSocket + HMAC-SHA256 鉴权，mp3 分片返回）
     /// v1.79 fix：鉴权参数必须放 URL query（放握手 Header 被网关 401），改 URLSession WebSocket；
     ///           参数与文本合并单帧发送（分两帧会报 10163 datalist is nil）；rdn 必须为字符串
@@ -1012,7 +1018,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         xfSeq += 1
         let mySeq = xfSeq
         let vcn = xfVcn
-        let t = (vcn != "xiaoyan") ? sweetSichuan(text) : text
+        // v1.80 仅四川话音色（小蓉/讯飞小蓉/叶子）加川味语气词，普通话/粤语/男声原样播报
+        let sichuan = ["xiaorong", "x4_xiaorong", "x4_yezi"].contains(vcn)
+        let t = sichuan ? sweetSichuan(text) : text
 
         // HMAC-SHA256 鉴权（讯飞 v2/tts 要求鉴权参数放 URL query，非握手头）
         let host = "tts-api.xfyun.cn"
