@@ -67,47 +67,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 内置高德 Web 服务 Key（用户提供，供搜索联想/路线规划/点位校准使用）
     static let builtinAmapKey = "9d596e8799cf037080e4d6ab8764c246"
 
-    // MARK: - 坐标纠偏（高德 GCJ-02 → 苹果地图 WGS-84，v1.47）
-
-    private func outOfChina(_ lat: Double, _ lon: Double) -> Bool {
-        if lon < 72.004 || lon > 137.8347 { return true }
-        if lat < 0.8293 || lat > 55.8271 { return true }
-        return false
-    }
-    private func transformLat(_ x: Double, _ y: Double) -> Double {
-        var ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
-        ret += (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
-        ret += (20.0 * sin(y * .pi) + 40.0 * sin(y / 3.0 * .pi)) * 2.0 / 3.0
-        ret += (160.0 * sin(y / 12.0 * .pi) + 320.0 * sin(y * .pi / 30.0)) * 2.0 / 3.0
-        return ret
-    }
-    private func transformLon(_ x: Double, _ y: Double) -> Double {
-        var ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
-        ret += (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
-        ret += (20.0 * sin(x * .pi) + 40.0 * sin(x / 3.0 * .pi)) * 2.0 / 3.0
-        ret += (150.0 * sin(x / 12.0 * .pi) + 300.0 * sin(x / 30.0 * .pi)) * 2.0 / 3.0
-        return ret
-    }
-    /// WGS-84 → GCJ-02（请求高德接口前转换）
-    func wgs2gcj(_ lat: Double, _ lon: Double) -> (Double, Double) {
-        if outOfChina(lat, lon) { return (lat, lon) }
-        let dLat = transformLat(lon - 105.0, lat - 35.0)
-        let dLon = transformLon(lon - 105.0, lat - 35.0)
-        let radLat = lat / 180.0 * .pi
-        var magic = sin(radLat)
-        magic = 1 - 0.00669342162296594323 * magic * magic
-        let sqrtMagic = sqrt(magic)
-        let dLat2 = (dLat * 180.0) / ((6378245.0 * (1 - 0.00669342162296594323)) / (magic * sqrtMagic) * .pi)
-        let dLon2 = (dLon * 180.0) / (6378245.0 / sqrtMagic * cos(radLat) * .pi)
-        return (lat + dLat2, lon + dLon2)
-    }
-    /// GCJ-02 → WGS-84（高德接口返回后转换，用于苹果地图显示）
-    func gcj2wgs(_ lat: Double, _ lon: Double) -> (Double, Double) {
-        if outOfChina(lat, lon) { return (lat, lon) }
-        let (glat, glon) = wgs2gcj(lat, lon)
-        return (lat * 2 - glat, lon * 2 - glon)
-    }
-
     /// 高德周边搜索候选（点击地标「搜周边」结果）
     struct AmapPoi: Identifiable {
         let name: String
@@ -1218,7 +1177,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 高德周边搜索：以指定地标为中心搜周边（加油站/充电桩/餐饮等），返回 POI 列表（WGS-84 坐标）
     func amapAround(lat: Double, lon: Double, keyword: String) async -> [AmapPoi] {
         guard !amapKey.isEmpty else { return [] }
-        let (glat, glon) = wgs2gcj(lat, lon)
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
         var urlStr = "https://restapi.amap.com/v3/place/around?key=\(amapKey)&location=\(glon),\(glat)&radius=3000&offset=20&page=1&extensions=all&sortrule=default"
         let kw = keyword.trimmingCharacters(in: .whitespaces)
         if !kw.isEmpty {
@@ -1238,7 +1197,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                   let loc = p["location"] as? String else { continue }
             let parts = loc.split(separator: ",").compactMap { Double($0) }
             guard parts.count == 2 else { continue }
-            let (wlat, wlon) = gcj2wgs(parts[1], parts[0])
+            let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
             let dist = (p["distance"] as? String).flatMap { Int($0) } ?? 0
             out.append(AmapPoi(name: name,
                                address: p["address"] as? String ?? "",
@@ -1260,8 +1219,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let moved = lastRoadCoord.map { hypot(loc.latitude - $0.latitude, loc.longitude - $0.longitude) * 111000 } ?? 999
         guard now.timeIntervalSince(lastRoadUpdate) > 45 || moved > 300 else { return }
         lastRoadUpdate = now
-        lastRoadCoord = loc.coordinate
-        let (glat, glon) = wgs2gcj(loc.latitude, loc.longitude)
+        lastRoadCoord = loc
+        let (glat, glon) = CoordConv.wgs2gcj(loc.latitude, loc.longitude)
         guard let url = URL(string:
             "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(glon),\(glat)&radius=200"
         ) else { return }
@@ -1299,7 +1258,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 if !district.isEmpty { sub += (sub.isEmpty ? "" : " · ") + district }
                 if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
                 // v1.47 坐标纠偏：高德返回 GCJ-02，转 WGS-84 供苹果地图显示
-                let (wlat, wlon) = gcj2wgs(parts[1], parts[0])
+                let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
                 out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
             }
             return Array(out.prefix(8))
@@ -1313,7 +1272,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 逆地理编码：把坐标吸附到最近道路/路口（抓拍点常因数据源偏移偏离道路中心线）
     private func regeoSnap(lat: Double, lon: Double) async -> (Double, Double)? {
         guard !amapKey.isEmpty else { return nil }
-        let (glat, glon) = wgs2gcj(lat, lon)
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
         guard let url = URL(string:
             "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(glon),\(glat)"
         ) else { return nil }
@@ -1328,14 +1287,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
            let inter = inters.first,
            let loc = inter["location"] as? String {
             let parts = loc.split(separator: ",").compactMap { Double($0) }
-            if parts.count == 2 { return gcj2wgs(parts[1], parts[0]) }
+            if parts.count == 2 { return CoordConv.gcj2wgs(parts[1], parts[0]) }
         }
         if let roads = regeo["roads"] as? [[String: Any]], !roads.isEmpty {
             // 取 distance 最近的（regeo 已按距离排序）
             let road = roads[0]
             if let loc = road["location"] as? String {
                 let parts = loc.split(separator: ",").compactMap { Double($0) }
-                if parts.count == 2 { return gcj2wgs(parts[1], parts[0]) }
+                if parts.count == 2 { return CoordConv.gcj2wgs(parts[1], parts[0]) }
             }
         }
         return nil
