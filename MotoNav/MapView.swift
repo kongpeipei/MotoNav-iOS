@@ -55,8 +55,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 高德 SDK 正式 Key（AppDelegate 已设，此处幂等兜底）
         AMapServices.shared().apiKey = "6fd752bc12caa258f066729617db0066"
         map.showsCompass = false // 使用自绘指南针（左上角）
-        map.pitchEnabled = true   // 双指俯仰调节 3D 角度
-        map.rotateEnabled = true  // 双指旋转地图
+        map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
+        map.isRotateEnabled = true  // 双指旋转地图
         map.delegate = context.coordinator
         // 当前定位箭头标注（高德 SDK 不启用内置定位，避免双定位；用我们自己的 CLLocationManager 数据）
         let userAnn = UserLocationAnnotation(coordinate: CLLocationCoordinate2D(latitude: 0, longitude: 0))
@@ -237,20 +237,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.underPolyline = under
                 let main = polyline(gcjRoute)
                 context.coordinator.mainPolyline = main
-                map.addOverlay(under)
-                map.addOverlay(main)
+                map.add(under)
+                map.add(main)
             } else {
                 for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
                     let alt = polyline(pts.map { gcj($0) })
                     context.coordinator.alternatePolylines.append(alt)
-                    map.addOverlay(alt)
+                    map.add(alt)
                 }
                 let under = polyline(gcjRoute)
                 context.coordinator.underPolyline = under
                 let main = polyline(gcjRoute)
                 context.coordinator.mainPolyline = main
-                map.addOverlay(under)
-                map.addOverlay(main)
+                map.add(under)
+                map.add(main)
             }
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
@@ -456,8 +456,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                   let map = gesture.view as? MAMapView else { return }
             let pt = gesture.location(in: map)
             for a in map.annotations {
-                guard !(a is UserLocationAnnotation) else { continue }
-                let ap = map.convert(a.coordinate, toPointTo: map)
+                guard !(a is UserLocationAnnotation), let ann = a as? MAAnnotation else { continue }
+                let ap = map.convert(ann.coordinate, toPointTo: map)
                 let d = hypot(pt.x - ap.x, pt.y - ap.y)
                 // 命中任何标注（点位/地点/类别/起点终点）→ 交给 didSelect
                 if d < 40 {
@@ -501,8 +501,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 当前位置：高德同款实心蓝色指向箭头
             if annotation is UserLocationAnnotation {
                 let id = "userLoc"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MAAnnotationView(annotation: annotation, reuseIdentifier: id)
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MAAnnotationView(annotation: annotation, reuseIdentifier: id))!
                 v.image = MapViewRepresentable.makeUserIcon()
                 v.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
                 v.centerOffset = .zero
@@ -511,71 +511,65 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             if let re = annotation as? RouteEndAnnotation {
                 let id = "routeEnd"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MAMarkerAnnotationView
-                    ?? MAMarkerAnnotationView(annotation: re, reuseIdentifier: id)
-                v.markerTintColor = re.kind == "start" ? .systemGreen : .systemRed
-                v.glyphText = re.kind == "start" ? "起" : "终"
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MAAnnotationView(annotation: re, reuseIdentifier: id))!
+                v.image = MapViewRepresentable.markerImage(
+                    color: re.kind == "start" ? .systemGreen : .systemRed,
+                    text: re.kind == "start" ? "起" : "终")
+                v.canShowCallout = false
                 return v
             }
             if let pa = annotation as? PreviewAnnotation {
                 let id = "preview"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MAMarkerAnnotationView
-                    ?? MAMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
-                v.markerTintColor = .systemGreen
-                v.glyphText = "✓"
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MAAnnotationView(annotation: pa, reuseIdentifier: id))!
+                v.image = MapViewRepresentable.markerImage(color: .systemGreen, text: "✓")
+                v.canShowCallout = false
                 return v
             }
             if let ga = annotation as? GasAnnotation {
                 let id = "gas"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MAMarkerAnnotationView
-                    ?? MAMarkerAnnotationView(annotation: ga, reuseIdentifier: id)
-                v.markerTintColor = .systemOrange
-                v.glyphText = "油"
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MAAnnotationView(annotation: ga, reuseIdentifier: id))!
+                v.image = MapViewRepresentable.markerImage(color: .systemOrange, text: "油")
+                v.canShowCallout = false
                 return v
             }
             if let pla = annotation as? PlaceAnnotation {
                 let id = "place"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MAMarkerAnnotationView
-                    ?? MAMarkerAnnotationView(annotation: pla, reuseIdentifier: id)
-                v.markerTintColor = .systemGray
-                v.glyphText = nil
-                v.titleVisibility = .visible // 直接显示小区/商铺名称
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MAAnnotationView(annotation: pla, reuseIdentifier: id))!
+                v.image = MapViewRepresentable.placeLabelImage(pla.place.name)
+                v.centerOffset = CGPoint(x: 0, y: -10)
                 v.canShowCallout = false
                 return v
             }
             if let ca = annotation as? CategoryAnnotation {
                 let id = "category"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MAMarkerAnnotationView
-                    ?? MAMarkerAnnotationView(annotation: ca, reuseIdentifier: id)
-                // 按类别着色：学校蓝 / 医院红 / 加油站橙
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MAAnnotationView(annotation: ca, reuseIdentifier: id))!
+                let color: UIColor
                 switch ca.result.kind {
-                case "医院": v.markerTintColor = .systemRed
-                case "加油站": v.markerTintColor = .systemOrange
-                default: v.markerTintColor = .systemBlue
+                case "医院": color = .systemRed
+                case "加油站": color = .systemOrange
+                default: color = .systemBlue
                 }
-                v.glyphText = ca.result.kind == "加油站" ? "油" : "点"
-                v.titleVisibility = .visible
+                v.image = MapViewRepresentable.markerImage(
+                    color: color, text: ca.result.kind == "加油站" ? "油" : "点")
                 v.canShowCallout = false
-                v.displayPriority = 1 // 抓拍/类别结果优先显示
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
             let id = "poi"
-            let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MAMarkerAnnotationView
-                ?? MAMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
-            v.markerTintColor = pa.poi.type.color
-            v.titleVisibility = .adaptive
-            v.glyphText = String(pa.poi.type.label.prefix(1))
+            let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                ?? MAAnnotationView(annotation: pa, reuseIdentifier: id))!
             // 沿途点位：白色描边高亮（优先）；用户自定义/移动过的点位：橙色描边
-            if pa.onRoute {
-                v.layer.borderWidth = 2.5
-                v.layer.borderColor = UIColor.white.cgColor
-            } else if pa.poi.isCustom {
-                v.layer.borderWidth = 2
-                v.layer.borderColor = UIColor.orange.cgColor
-            } else {
-                v.layer.borderWidth = 0
-            }
+            let border: UIColor? = pa.onRoute ? .white : (pa.poi.isCustom ? .orange : nil)
+            v.image = MapViewRepresentable.markerImage(
+                color: pa.poi.type.color,
+                text: String(pa.poi.type.label.prefix(1)),
+                border: border)
+            v.canShowCallout = false
             return v
         }
 
@@ -728,6 +722,56 @@ extension MapViewRepresentable {
             c.addPath(arrow.cgPath)
             c.fillPath()
             c.restoreGState()
+        }
+    }
+
+    /// v1.68 高德 SDK 标注圆点：彩色圆 + 单字（替代已移除的 MAMarkerAnnotationView）
+    static func markerImage(color: UIColor, text: String, border: UIColor? = nil) -> UIImage {
+        let size: CGFloat = 26
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { ctx in
+            let c = ctx.cgContext
+            let rect = CGRect(x: 1.5, y: 1.5, width: size - 3, height: size - 3)
+            c.setFillColor(color.cgColor)
+            c.fillEllipse(in: rect)
+            if let b = border {
+                c.setStrokeColor(b.cgColor)
+                c.setLineWidth(b.isEqual(UIColor.white) ? 2.5 : 2)
+                c.strokeEllipse(in: rect)
+            }
+            let para = NSMutableParagraphStyle()
+            para.alignment = .center
+            (text as NSString).draw(in: CGRect(x: 0, y: (size - 15) / 2, width: size, height: 15),
+                withAttributes: [
+                    .font: UIFont.boldSystemFont(ofSize: 12),
+                    .foregroundColor: UIColor.white,
+                    .paragraphStyle: para,
+                ])
+        }
+    }
+
+    /// v1.68 小区/商铺名称标签（高德地名气泡样式）
+    static func placeLabelImage(_ name: String) -> UIImage {
+        let font = UIFont.systemFont(ofSize: 11)
+        let w = max((name as NSString).size(withAttributes: [.font: font]).width + 12, 22)
+        let h: CGFloat = 20
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: w, height: h))
+        return renderer.image { ctx in
+            let rect = CGRect(x: 0, y: 0, width: w, height: h)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: 6)
+            UIColor(white: 1, alpha: 0.9).setFill()
+            path.fill()
+            UIColor.black.withAlphaComponent(0.15).setStroke()
+            path.lineWidth = 0.5
+            path.stroke()
+            let para = NSMutableParagraphStyle()
+            para.alignment = .center
+            (name as NSString).draw(in: CGRect(x: 2, y: 3, width: w - 4, height: 14),
+                withAttributes: [
+                    .font: font,
+                    .foregroundColor: UIColor.black,
+                    .paragraphStyle: para,
+                ])
         }
     }
 }
