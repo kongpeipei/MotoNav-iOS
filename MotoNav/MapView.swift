@@ -1,4 +1,6 @@
 import SwiftUI
+import MAMapKit
+import AMapFoundationKit
 import UIKit
 import CoreLocation
 
@@ -53,7 +55,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onMapLoad: ((Bool, String) -> Void)?
 
     func makeUIView(context: Context) -> MAMapView {
-        let map = MAMapView(frame: .zero)
+        // v1.73：初始 frame 必须非零（黑屏根因修复）——MAMapView 渲染层依赖初始尺寸，
+        // frame .zero 时 3D 渲染层不启动：数据加载完成回调正常、画面纯黑
+        let map = MAMapView(frame: UIScreen.main.bounds)
+        map.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // 高德 SDK 正式 Key（AppDelegate 已设，此处幂等兜底）
         AMapServices.shared().apiKey = "6fd752bc12caa258f066729617db0066"
         // v1.70：浅灰兜底背景——瓦片/渲染层未就绪时显示浅灰而非纯黑，便于区分"Key/服务问题"
@@ -294,10 +299,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setCenter(CLLocationCoordinate2D(latitude: g.0, longitude: g.1), animated: true)
             }
         }
-        // v1.72：2D SDK 无俯仰（骑行导航 2D 顶视即高德骑行风格）；导航不倾斜
+        // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
             context.coordinator.lastPitchState = isNav
+            context.coordinator.setRegionProgrammatically {
+                map.cameraDegree = isNav ? 45 : 0
+            }
         }
         // 缩放按钮（+/-）：按地图中心缩放
         if zoomInTick != context.coordinator.lastZoomInTick {

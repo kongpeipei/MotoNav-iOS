@@ -1,6 +1,6 @@
 platform :ios, '17.0'
 target 'MotoNav' do
-  # v1.72：换高德 2D 地图 SDK（AMap2DMap，渲染管线与 3D 不同，规避 3D 渲染黑屏；官方静态集成）
+  # v1.73：回高德 3D SDK（2D 旧版无 Swift module 集成成本高）；黑屏改从渲染层初始化修复
   pod 'AMapFoundation'
-  pod 'AMap2DMap'
+  pod 'AMap3DMap'
 end
