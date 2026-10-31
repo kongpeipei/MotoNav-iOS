@@ -4,6 +4,7 @@ import AVFoundation
 import UserNotifications
 import UIKit
 import ActivityKit
+import CryptoKit
 
 extension Notification.Name {
     /// 触发点位提醒（object 为 Poi）
@@ -1120,7 +1121,116 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             speak("语音播报已开启")
         } else {
             speech.stopSpeaking(at: .immediate)
+            xfPlayer?.stop()
         }
+    }
+
+    // MARK: - v1.52 讯飞在线语音合成（真·四川话 + 普通话女声，失败自动降级系统语音）
+    // 用户已在讯飞开放平台开通「在线语音合成」并创建应用（APPID/APIKey/APISecret）
+    static let xfAppIdDefault = "5ad38c61"
+    static let xfApiKeyDefault = "65eb7d0144b094c4c34be0a1a942f1a5"
+    static let xfApiSecretDefault = "MGI5M2YzOGM3ZDRjNTAyYmM2YWQ1ZDY0"
+    var xfAppId: String { UserDefaults.standard.string(forKey: "xfAppId") ?? Self.xfAppIdDefault }
+    var xfApiKey: String { UserDefaults.standard.string(forKey: "xfApiKey") ?? Self.xfApiKeyDefault }
+    var xfApiSecret: String { UserDefaults.standard.string(forKey: "xfApiSecret") ?? Self.xfApiSecretDefault }
+    /// 音色：xiaorong=四川话女声(小蓉) / xiaoyan=普通话女声(晓颜) / yezi=四川话女声(叶子)
+    var xfVcn: String { UserDefaults.standard.string(forKey: "xfVcn") ?? "xiaorong" }
+    /// 讯飞引擎开关（默认开；设置为 false 用系统语音）
+    var xfEnabled: Bool { UserDefaults.standard.object(forKey: "xfEnabled") as? Bool ?? true }
+    /// 当前音色显示名
+    var xfVcnName: String {
+        switch xfVcn {
+        case "xiaoyan": return "普通话女声·晓颜"
+        case "yezi": return "四川话女声·叶子"
+        default: return "四川话女声·小蓉"
+        }
+    }
+    private var xfPlayer: AVAudioPlayer?
+    private var xfSeq = 0
+
+    private func speakSystem(_ text: String) {
+        // v1.49 官方语音包：优先系统最高质量中文语音（iOS 增强音色）
+        let u = AVSpeechUtterance(string: text)
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language == "zh-CN" }
+        u.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue }
+            ?? AVSpeechSynthesisVoice(language: "zh-CN")
+        u.rate = 0.48          // 稍慢，更柔
+        u.pitchMultiplier = 1.18 // 音调偏高，更甜
+        speech.speak(u)
+    }
+
+    /// 讯飞在线语音合成（WebAPI v2，mp3 流式返回）
+    private func speakXf(_ text: String) {
+        let appId = xfAppId, apiKey = xfApiKey, apiSecret = xfApiSecret
+        guard !appId.isEmpty, !apiKey.isEmpty, !apiSecret.isEmpty else {
+            speakSystem(text); return
+        }
+        xfSeq += 1
+        let mySeq = xfSeq
+        let vcn = xfVcn
+        // 四川话音色配川味语气词，普通话晓颜用标准话术
+        let t = (vcn != "xiaoyan") ? sweetSichuan(text) : text
+        Task {
+            // HMAC-SHA256 鉴权头
+            let host = "tts-api.xfyun.cn"
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(identifier: "GMT")
+            df.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+            let date = df.string(from: Date())
+            let origin = "host: \(host)\ndate: \(date)\nGET /v2/tts HTTP/1.1"
+            let key = SymmetricKey(data: Data(apiSecret.utf8))
+            let mac = HMAC<SHA256>.authenticationCode(for: Data(origin.utf8), using: key)
+            let sig = Data(mac).base64EncodedString()
+            let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(sig)\""
+            let auth = Data(authOrigin.utf8).base64EncodedString()
+            guard let url = URL(string: "https://tts-api.xfyun.cn/v2/tts") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 12
+            req.setValue(host, forHTTPHeaderField: "host")
+            req.setValue(date, forHTTPHeaderField: "date")
+            req.setValue(auth, forHTTPHeaderField: "authorization")
+            req.setValue("application/json", forHTTPHeaderField: "content-type")
+            let body: [String: Any] = [
+                "common": ["app_id": appId],
+                "business": ["aue": "lame", "sfl": 1, "auf": "audio/L16;rate=16000",
+                             "vcn": vcn, "speed": 55, "volume": 60, "pitch": 50,
+                             "tte": "UTF8", "rdn": 0],
+                "data": ["status": 2, "text": Data(t.utf8).base64EncodedString()]
+            ]
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                guard mySeq == self.xfSeq else { return } // 已被更新的播报取代
+                if let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                   !data.isEmpty, data.first != 0x7b { // 非 JSON（{ = 0x7b）→ 音频流
+                    let ok = self.playXf(data)
+                    if !ok { self.speakSystem(text) }
+                } else if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let code = root["code"] as? Int, code != 0 {
+                    // 讯飞业务错误（如 11200 音色未授权）→ 降级系统语音
+                    self.speakSystem(text)
+                } else {
+                    self.speakSystem(text)
+                }
+            } catch {
+                if mySeq == self.xfSeq { self.speakSystem(text) }
+            }
+        }
+    }
+
+    /// 播放讯飞返回的 mp3
+    @discardableResult
+    private func playXf(_ data: Data) -> Bool {
+        xfPlayer?.stop()
+        guard let p = try? AVAudioPlayer(data: data) else { return false }
+        p.volume = 1.0
+        p.prepareToPlay()
+        p.play()
+        xfPlayer = p
+        return true
     }
 
     func speak(_ text: String, priority: Int = 0) {
@@ -1132,19 +1242,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         if priority > lastSpeakPriority && now.timeIntervalSince(lastSpeakAt) < 6 {
             speech.stopSpeaking(at: .immediate)
+            xfPlayer?.stop()
         }
         lastSpeakAt = now
         lastSpeakPriority = priority
         lastSpeakText = text
-        // v1.49 官方语音包：优先系统最高质量中文语音（iOS 增强音色）
-        let u = AVSpeechUtterance(string: sweetSichuan(text))
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language == "zh-CN" }
-        u.voice = voices.max { $0.quality.rawValue < $1.quality.rawValue }
-            ?? AVSpeechSynthesisVoice(language: "zh-CN")
-        u.rate = 0.48          // 稍慢，更柔
-        u.pitchMultiplier = 1.18 // 音调偏高，更甜
-        speech.speak(u)
+        if xfEnabled {
+            speakXf(text)
+        } else {
+            speakSystem(text)
+        }
     }
 
     /// 川味语气词化（先长短语后短词，避免嵌套替换错乱）

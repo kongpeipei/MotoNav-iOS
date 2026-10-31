@@ -28,6 +28,8 @@ struct ContentView: View {
     @State private var trafficTimerStarted = false
     /// v1.51：高德瓦片底图（A 选项，默认开：底图与路线同源消除偏差）
     @State private var useAmapTiles = true
+    /// v1.52：语音播报设置弹窗（高德式音色选择）
+    @State private var showVoiceSettings = false
     @State private var longPressCoord: CLLocationCoordinate2D?
     @State private var showLongPressMenu = false
     /// 标记该点：待标记坐标 + 备注输入
@@ -83,6 +85,10 @@ struct ContentView: View {
             PoiDetailSheet(poi: p, model: model) { close in
                 poiDetail = nil
             }
+        }
+        // v1.52：语音播报设置（讯飞音色选择，高德式底部弹窗）
+        .sheet(isPresented: $showVoiceSettings) {
+            VoiceSettingsSheet(model: model)
         }
         .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
@@ -417,6 +423,13 @@ struct ContentView: View {
                         }
                     } label: {
                         Label("超速提醒：\(model.speedLimit == 0 ? "关" : "\(model.speedLimit) km/h")", systemImage: "speedometer")
+                    }
+                    // v1.52：语音播报引擎（高德式音色设置，讯飞在线 TTS）
+                    Button {
+                        showVoiceSettings = true
+                    } label: {
+                        Label("语音播报：\(model.xfEnabled ? model.xfVcnName : "系统语音")",
+                              systemImage: "speaker.wave.2.fill")
                     }
                     // v1.49：图层切换（标准/卫星）
                     Button(mapType == .standard ? "图层：标准（当前）" : "图层：标准") {
@@ -1587,6 +1600,89 @@ struct JsonFile: FileDocument {
 }
 
 /// 点位详情气泡（高德式地点卡片）：名称/类型/距我/收藏/分享/导航/设为常用
+/// v1.52 语音播报设置（高德式：音色列表 + 喇叭试听 + 选中勾）
+struct VoiceSettingsSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    private let testText = "前方 500 米右转，进入包公大道，请注意安全"
+    private let voices: [(vcn: String, name: String, sub: String, icon: String)] = [
+        ("xiaorong", "四川话女声 · 小蓉", "亲切川味，导航更有味道", "speaker.wave.3.fill"),
+        ("yezi", "四川话女声 · 叶子", "清亮川腔，推荐", "speaker.wave.2.fill"),
+        ("xiaoyan", "普通话女声 · 晓颜", "标准普通话，字正腔圆", "speaker.wave.2.fill")
+    ]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("语音引擎") {
+                    Button {
+                        UserDefaults.standard.set(false, forKey: "xfEnabled")
+                        model.speak("语音播报已切换为系统语音")
+                    } label: {
+                        HStack {
+                            Image(systemName: "iphone")
+                                .foregroundStyle(.gray)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("系统语音")
+                                    .foregroundStyle(.primary)
+                                Text("iOS 内置中文语音，无需联网")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if !model.xfEnabled { Image(systemName: "checkmark").foregroundStyle(.green) }
+                        }
+                    }
+                }
+                Section("讯飞在线语音（需联网，新用户送免费额度）") {
+                    ForEach(voices, id: \.vcn) { v in
+                        Button {
+                            UserDefaults.standard.set(true, forKey: "xfEnabled")
+                            UserDefaults.standard.set(v.vcn, forKey: "xfVcn")
+                            model.speak("语音已切换为\(v.name)")
+                        } label: {
+                            HStack {
+                                Image(systemName: v.icon)
+                                    .foregroundStyle(.green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(v.name)
+                                        .foregroundStyle(.primary)
+                                    Text(v.sub)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                // 喇叭试听
+                                Button {
+                                    model.speak(testText)
+                                } label: {
+                                    Image(systemName: "play.circle")
+                                        .font(.title3)
+                                        .foregroundStyle(.tint)
+                                }
+                                .buttonStyle(.borderless)
+                                if model.xfEnabled && model.xfVcn == v.vcn {
+                                    Image(systemName: "checkmark").foregroundStyle(.green)
+                                }
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("音色已内置你的讯飞应用（APPID/Key 已配置）；若提示 11200 请到控制台为该音色开通权限。")
+                }
+            }
+            .navigationTitle("语音播报")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.height(430)])
+    }
+}
+
 struct PoiDetailSheet: View {
     let poi: Poi
     @ObservedObject var model: AppModel
