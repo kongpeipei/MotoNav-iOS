@@ -17,10 +17,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16
+      - name: Select Xcode
         run: |
-          APP=$(ls /Applications | grep '^Xcode_16' | sort | tail -1)
-          if [ -n "$APP" ]; then sudo xcode-select -s "/Applications/$APP"; fi
+          ls /Applications | grep -i xcode
+          APP=$(ls /Applications | grep '^Xcode' | sort | tail -1)
+          echo "选用: $APP"
+          sudo xcode-select -s "/Applications/$APP"
           xcodebuild -version
 
       - name: Install CocoaPods
