@@ -280,24 +280,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
-        // v1.51 高德瓦片底图（A 选项）：全删后重插（若开启），boundingMapRect 已带 GCJ→WGS 常数校正
+        // v1.51 高德瓦片底图（A 选项）：全删后重插（若开启），renderer 负责 GCJ→WGS 重投影
         if useAmapTiles {
             if let o = context.coordinator.amapTileOverlay {
                 if !map.overlays.contains(where: { $0 === o }) {
                     map.insertOverlay(o, at: 0, level: .aboveLabels)
                 }
             } else {
-                let o = AmapTileOverlay(urlTemplate: AmapTileOverlay.tileURL)
-                o.canReplaceMapContent = true
-                o.minimumZ = 3
-                o.maximumZ = 19
-                // 合肥中心 WGS→GCJ 偏差换算成 MKMapPoint（x≈+4088, y≈+1754）
-                let shift = MKMapPoint(
-                    x: 4087.9, y: 1754.3)
-                o.boundingMapRect = MKMapRect(
-                    x: -shift.x, y: -shift.y,
-                    width: MKMapRect.world.size.width,
-                    height: MKMapRect.world.size.height)
+                let o = AmapTileOverlay()
                 context.coordinator.amapTileOverlay = o
                 map.insertOverlay(o, at: 0, level: .aboveLabels)
             }
@@ -727,9 +717,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
                 return r
             }
-            if let tile = overlay as? MKTileOverlay {
-                // v1.51 高德瓦片：必须返回专用 renderer，否则瓦片不绘制
-                return MKTileOverlayRenderer(tileOverlay: tile)
+            if overlay is AmapTileOverlay {
+                // v1.51 高德瓦片：必须返回专用 renderer（GCJ→WGS 重投影），否则瓦片不绘制
+                return AmapTileRenderer(overlay: overlay)
             }
             return MKOverlayRenderer(overlay: overlay)
         }
@@ -774,11 +764,84 @@ final class PreviewAnnotation: NSObject, MKAnnotation {
 }
 
 /// v1.51 高德在线瓦片底图（公开免费瓦片 webrd*.is.autonavi.com，无 Key）。
-/// 瓦片为 GCJ-02 网格，boundingMapRect 带常数校正（合肥中心偏移）使其与 WGS 地图对齐，
-/// 底图与高德路线/高德路网同源，消除"路线不在道路上"的路网偏差。
-final class AmapTileOverlay: MKTileOverlay {
+/// 高德瓦片为 GCJ-02 网格；自定义 renderer 把每张瓦片按 GCJ→WGS 平移绘制到 WGS 位置
+/// （逐瓦片中心对齐，残差仅瓦片内偏移梯度 ≈ 数米），底图与高德路线同源，消除路网偏差。
+final class AmapTileOverlay: NSObject, MKOverlay {
     /// 高德标准底图瓦片模板（公开服务，无需 Key）
     static let tileURL = "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}"
+    let coordinate = kCLLocationCoordinate2DInvalid
+    let boundingMapRect = MKMapRect.world
+}
+
+/// 瓦片重投影 renderer：在 WGS 网格上逐瓦片请求 GCJ 瓦片并按中心对齐绘制
+final class AmapTileRenderer: MKOverlayRenderer {
+    private static let zMin = 3, zMax = 19
+    private var cache: [String: UIImage] = [:]
+    private var pending: Set<String> = []
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
+        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
+        let n = 1 << z
+        let per = MKMapRect.world.size.width / Double(n)
+        let x0 = max(0, Int(floor(mapRect.minX / per)))
+        let x1 = min(n - 1, Int(floor(mapRect.maxX / per)))
+        let y0 = max(0, Int(floor(mapRect.minY / per)))
+        let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
+        guard x1 >= x0, y1 >= y0 else { return }
+        ctx.setFillColor(UIColor.systemGray5.cgColor)
+        for x in x0...x1 {
+            for y in y0...y1 {
+                // WGS 瓦片中心 → GCJ 瓦片索引（中心对齐近似）
+                let lat = tileLat(y, z)
+                let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
+                let g = CoordConv.wgs2gcj(lat, lon)
+                let gx = min(n - 1, max(0, Int(floor((g.1 + 180.0) / 360.0 * Double(n)))))
+                let gy = min(n - 1, max(0, tileY(g.0, z)))
+                let key = "\(z)-\(gx)-\(gy)"
+                let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
+                                                    width: per, height: per), zoomScale: zoomScale)
+                if let img = cache[key], let cg = img.cgImage {
+                    ctx.draw(cg, in: rect)
+                } else {
+                    ctx.fill(rect) // 未下载先浅色占位
+                    if !pending.contains(key) {
+                        pending.insert(key)
+                        fetchTile(gx, gy, z, key)
+                    }
+                }
+            }
+        }
+    }
+
+    private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        guard let url = URL(string: AmapTileOverlay.tileURL
+            .replacingOccurrences(of: "{x}", with: "\(x)")
+            .replacingOccurrences(of: "{y}", with: "\(y)")
+            .replacingOccurrences(of: "{z}", with: "\(z)")) else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self, let data, let img = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                self.cache[key] = img
+                self.pending.remove(key)
+                if self.cache.count > 400 {
+                    self.cache.removeFirst(self.cache.count - 400) // 内存缓存上限
+                }
+                self.setNeedsDisplay()
+            }
+        }.resume()
+    }
+
+    /// 瓦片 y → 中心纬度（Web Mercator）
+    private func tileLat(_ y: Int, _ z: Int) -> Double {
+        let n = Double(1 << z)
+        return atan(sinh(.pi * (1 - 2.0 * (Double(y) + 0.5) / n))) * 180.0 / .pi
+    }
+    /// 纬度 → 瓦片 y
+    private func tileY(_ lat: Double, _ z: Int) -> Int {
+        let n = Double(1 << z)
+        let r = lat / 180.0 * .pi
+        return Int(floor((1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0 * n))
+    }
 }
 
 /// v1.50 热门/最近常搜索地点标注（点击直接规划路线）
