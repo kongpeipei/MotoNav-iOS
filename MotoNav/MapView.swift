@@ -799,7 +799,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 let gy = min(n - 1, max(0, tileY(g.0, z)))
                 let key = "\(z)-\(gx)-\(gy)"
                 let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
-                                                    width: per, height: per), zoomScale: zoomScale)
+                                                    width: per, height: per))
                 if let img = cache[key], let cg = img.cgImage {
                     ctx.draw(cg, in: rect)
                 } else {
@@ -824,7 +824,12 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 self.cache[key] = img
                 self.pending.remove(key)
                 if self.cache.count > 400 {
-                    self.cache.removeFirst(self.cache.count - 400) // 内存缓存上限
+                    // Dictionary 无 removeFirst：清最旧若干条目（键序近似 FIFO）
+                    var drop = 50
+                    while drop > 0, let k = self.cache.keys.first {
+                        self.cache.removeValue(forKey: k)
+                        drop -= 1
+                    }
                 }
                 self.setNeedsDisplay()
             }
