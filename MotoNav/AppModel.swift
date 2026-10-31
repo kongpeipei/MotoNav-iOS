@@ -1624,6 +1624,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeChoices = list
                 selectedRouteIdx = 0
                 applyRouteChoice(list[0], name: name)
+                // v1.81 直达导航：方案就绪后自动进入导航
+                if autoStart {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                        guard let self = self, self.route.count >= 2 else { return }
+                        if !self.navigating { self.toggleNavigation() }
+                    }
+                }
             }
         }
     }
@@ -1655,13 +1662,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routePois = near
         fitTick += 1
         status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
-        // v1.81 直达导航：方案就绪后自动进入导航
-        if autoStart {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                guard let self = self, self.route.count >= 2 else { return }
-                if !self.navigating { self.toggleNavigation() }
-            }
-        }
     }
 
     /// 筛选距路线折线 130 米内的点位
