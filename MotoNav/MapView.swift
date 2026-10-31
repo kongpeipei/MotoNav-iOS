@@ -795,8 +795,12 @@ final class AmapTileOverlay: NSObject, MKOverlay {
 /// 瓦片重投影 renderer：在 WGS 网格上逐瓦片请求 GCJ 瓦片并按中心对齐绘制
 final class AmapTileRenderer: MKOverlayRenderer {
     private static let zMin = 3, zMax = 19
+    /// v1.53-fix：cache/pending/inflight 会被主线程（下载回调）与 VectorKit 渲染线程（draw）并发访问，
+    /// 必须用锁保护，否则数据竞争导致 EXC_BAD_ACCESS（真机启动闪退根因，崩溃栈 AmapTileRenderer.draw）
+    private let lock = NSLock()
     private var cache: [String: UIImage] = [:]
     private var pending: Set<String> = []
+    private var inflight = 0
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
         let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
@@ -829,35 +833,44 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 let key = "\(z)-\(gx)-\(gy)"
                 let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
                                                     width: per, height: per))
-                if let img = cache[key], let cg = img.cgImage {
+                // v1.53-fix：锁内快照缓存/待下载状态，锁外绘制/下载，杜绝渲染线程与主线程数据竞争
+                lock.lock()
+                let hit = cache[key]
+                let needFetch = hit == nil && !pending.contains(key)
+                if needFetch { pending.insert(key) }
+                lock.unlock()
+                if let hit, let cg = hit.cgImage {
                     ctx.draw(cg, in: rect)
                 } else {
                     ctx.fill(rect) // 未下载先浅色占位
-                    if !pending.contains(key) {
-                        pending.insert(key)
-                        fetchTile(gx, gy, z, key)
-                    }
+                    if needFetch { fetchTile(gx, gy, z, key) }
                 }
             }
         }
     }
 
-    // v1.53 并发限制：最多同时下载 16 个瓦片，防止网络慢时大量请求堆积卡顿
-    private var inflight = 0
-
     private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        // 并发限制与 pending 维护全部走锁
+        lock.lock()
         if inflight >= 16 {
             pending.remove(key) // 并发满：移出待下载，待下次重绘再试
+            lock.unlock()
             return
         }
         guard let url = URL(string: AmapTileOverlay.tileURL
             .replacingOccurrences(of: "{x}", with: "\(x)")
             .replacingOccurrences(of: "{y}", with: "\(y)")
-            .replacingOccurrences(of: "{z}", with: "\(z)")) else { return }
+            .replacingOccurrences(of: "{z}", with: "\(z)")) else {
+            pending.remove(key)
+            lock.unlock()
+            return
+        }
         inflight += 1
+        lock.unlock()
         URLSession.shared.dataTask(with: url) { [weak self] data, resp, err in
             guard let self else { return }
             DispatchQueue.main.async {
+                self.lock.lock()
                 self.inflight -= 1
                 if let data, let img = UIImage(data: data) {
                     self.cache[key] = img
@@ -874,6 +887,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
                     self.pending.remove(key) // 失败瓦片：移出待下载，避免永久悬挂
                 }
+                self.lock.unlock()
             }
         }.resume()
     }
