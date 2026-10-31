@@ -1285,9 +1285,11 @@ struct ContentView: View {
                     let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
                     let lights = model.routeTurns.count
                     let snaps = model.routePois.count
-                    let arrive = Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0)))
-                    let af = DateFormatter()
-                    af.dateFormat = "HH:mm"
+                    let arriveTxt: String = {
+                        let f = DateFormatter()
+                        f.dateFormat = "HH:mm"
+                        return f.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
+                    }()
                     HStack(spacing: 0) {
                         Button {
                             haptic()
@@ -1308,7 +1310,7 @@ struct ContentView: View {
                         exitCellDivider
                         exitStatusCell("\(snaps)", "抓拍")
                         exitCellDivider
-                        exitStatusCell(af.string(from: arrive), "到达")
+                        exitStatusCell(arriveTxt, "到达")
                     }
                     .padding(.vertical, 8)
                     .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 16))
