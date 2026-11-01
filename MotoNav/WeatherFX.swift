@@ -83,9 +83,9 @@ enum WeatherFX {
 
     // MARK: - 绘制入口
 
-    static func draw(in ctx: inout GraphicsContext,
+    static func draw(ctx: GraphicsContext,
                      size: CGSize,
-                     time t: Double,
+                     t: Double,
                      config: WeatherFXConfig,
                      lightMode: Bool) {
         guard size.width > 1, size.height > 1 else { return }
@@ -96,15 +96,15 @@ enum WeatherFX {
 
         switch config.phenomenon {
         case .rain:
-            drawRain(&ctx, size: size, t: t, intensity: config.intensity, base: base)
+            drawRain(ctx, size: size, t: t, intensity: config.intensity, base: base)
         case .snow:
-            drawSnow(&ctx, size: size, t: t, intensity: config.intensity, base: base)
+            drawSnow(ctx, size: size, t: t, intensity: config.intensity, base: base)
         }
     }
 
     // MARK: - 雨
 
-    private static func drawRain(_ ctx: inout GraphicsContext,
+    private static func drawRain(_ ctx: GraphicsContext,
                                  size: CGSize,
                                  t: Double,
                                  intensity: WeatherIntensity,
@@ -114,15 +114,15 @@ enum WeatherFX {
         let gust = 0.14 + sin(t * 0.31) * 0.09 + sin(t * 1.7 + 1.3) * 0.02
 
         // 远层：细、淡、慢，模糊最多（空气透视）
-        rainLayer(&ctx, size: size, t: t, count: Int(78 * s), salt: 100,
+        rainLayer(ctx, size: size, t: t, count: Int(78 * s), salt: 100,
                   speed: 300...430, length: 12...20, width: 0.7,
                   opacity: 0.26, blur: 1.1, gust: gust, base: base)
         // 中层
-        rainLayer(&ctx, size: size, t: t, count: Int(58 * s), salt: 400,
+        rainLayer(ctx, size: size, t: t, count: Int(58 * s), salt: 400,
                   speed: 470...640, length: 20...32, width: 1.15,
                   opacity: 0.36, blur: 0.45, gust: gust, base: base)
         // 近层：长、粗、快，最实
-        rainLayer(&ctx, size: size, t: t, count: Int(30 * s), salt: 700,
+        rainLayer(ctx, size: size, t: t, count: Int(30 * s), salt: 700,
                   speed: 700...960, length: 32...52, width: 1.75,
                   opacity: 0.46, blur: 0.15, gust: gust, base: base)
 
@@ -148,7 +148,7 @@ enum WeatherFX {
         }
     }
 
-    private static func rainLayer(_ ctx: inout GraphicsContext,
+    private static func rainLayer(_ ctx: GraphicsContext,
                                   size: CGSize,
                                   t: Double,
                                   count: Int,
@@ -192,7 +192,7 @@ enum WeatherFX {
 
     // MARK: - 雪
 
-    private static func drawSnow(_ ctx: inout GraphicsContext,
+    private static func drawSnow(_ ctx: GraphicsContext,
                                  size: CGSize,
                                  t: Double,
                                  intensity: WeatherIntensity,
@@ -202,24 +202,24 @@ enum WeatherFX {
         let wind = sin(t * 0.21) * 10 + sin(t * 0.07) * 6
 
         // 远层：小、淡、慢、糊
-        snowLayer(&ctx, size: size, t: t, count: Int(70 * s), salt: 1300,
+        snowLayer(ctx, size: size, t: t, count: Int(70 * s), salt: 1300,
                   radius: 0.9...1.8, speed: 26...44, sway: 12,
                   opacity: 0.42, blur: 1.2, wind: wind * 0.5, base: base)
         // 中层
-        snowLayer(&ctx, size: size, t: t, count: Int(46 * s), salt: 1600,
+        snowLayer(ctx, size: size, t: t, count: Int(46 * s), salt: 1600,
                   radius: 1.8...3.2, speed: 42...68, sway: 20,
                   opacity: 0.62, blur: 0.5, wind: wind, base: base)
         // 近层：大而虚（镜头景深散焦），飘得最快
-        snowLayer(&ctx, size: size, t: t, count: Int(20 * s), salt: 1900,
+        snowLayer(ctx, size: size, t: t, count: Int(20 * s), salt: 1900,
                   radius: 3.4...6.2, speed: 66...104, sway: 30,
                   opacity: 0.72, blur: 1.6, wind: wind * 1.5, base: base)
 
         // 少量近处"晶体"雪花：六角细枝 + 自转，点出雪花的形态
-        crystalLayer(&ctx, size: size, t: t, count: Int(9 * max(0.6, s)),
+        crystalLayer(ctx, size: size, t: t, count: Int(9 * max(0.6, s)),
                      salt: 2200, radius: 2.6...4.4, opacity: 0.5, base: base)
     }
 
-    private static func snowLayer(_ ctx: inout GraphicsContext,
+    private static func snowLayer(_ ctx: GraphicsContext,
                                   size: CGSize,
                                   t: Double,
                                   count: Int,
@@ -258,7 +258,7 @@ enum WeatherFX {
         }
     }
 
-    private static func crystalLayer(_ ctx: inout GraphicsContext,
+    private static func crystalLayer(_ ctx: GraphicsContext,
                                      size: CGSize,
                                      t: Double,
                                      count: Int,
@@ -330,23 +330,16 @@ struct WeatherOverlay: View {
     var body: some View {
         Group {
             if let cfg = WeatherFX.config(for: code) {
-                animatedCanvas(cfg)
+                TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 : 1.0 / 50.0)) { tl in
+                    Canvas { ctx, size in
+                        // 减弱动态时冻结在一个稳定帧上（仍有静态雨雪幕，但不晃）
+                        let t = reduceMotion ? 6.0 : tl.date.timeIntervalSinceReferenceDate
+                        WeatherFX.draw(ctx: ctx, size: size, t: t, config: cfg, lightMode: lightMode)
+                    }
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
         }
-    }
-
-    @ViewBuilder
-    private func animatedCanvas(_ cfg: WeatherFXConfig) -> some View {
-        let interval: Double = reduceMotion ? 1.0 : 1.0 / 50.0
-        TimelineView(.animation(minimumInterval: interval, paused: reduceMotion)) { tl in
-            // 显式指定 Canvas<EmptyView>：避免泛型 Symbols 在 ViewBuilder 里推断失败
-            Canvas<EmptyView>(rendersAsynchronously: true) { ctx, size in
-                // 减弱动态时冻结在一个稳定帧上（仍有静态雨雪幕，但不晃）
-                let t = reduceMotion ? 6.0 : tl.date.timeIntervalSinceReferenceDate
-                WeatherFX.draw(in: &ctx, size: size, t: t, config: cfg, lightMode: lightMode)
-            }
-        }
-        .allowsHitTesting(false)
-        .transition(.opacity)
     }
 }
