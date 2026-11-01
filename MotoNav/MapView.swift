@@ -991,6 +991,8 @@ final class AmapTileRenderer: MKOverlayRenderer {
                         if !FileManager.default.fileExists(atPath: url.path) {
                             try? data.write(to: url)
                         }
+                        // v1.92 节流：原实现每张瓦片落盘都全量枚举目录+排序一次，
+                        // 骑行滚动地图会连续下载数百张 → 数百次目录枚举。改为每 50 张清一次
                         Self.trimDiskIfNeeded()
                     }
                     if self.cache.count > 200 {
@@ -1009,23 +1011,36 @@ final class AmapTileRenderer: MKOverlayRenderer {
         }.resume()
     }
 
-    /// v1.90 磁盘瓦片超量清理：超过上限时删除最旧的，避免缓存无限膨胀
+    /// v1.92 磁盘瓦片超量清理：超过上限时删除最旧的，避免缓存无限膨胀
+    /// 节流：每落盘 50 张才真正扫描一次目录（App 进后台时也会补清一次）
+    private static var tileWritesSinceTrim = 0
+    /// 清理专用串行队列（与落盘队列分离，主线程进后台时也能安全触发）
+    private static let trimQueue = DispatchQueue(label: "amap.tile.trim")
     private static func trimDiskIfNeeded() {
-        let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(
-            at: diskDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: []) else { return }
-        guard files.count > diskMaxFiles else { return }
-        let sorted = files.sorted { a, b in
-            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-                ?? .distantPast
-            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-                ?? .distantPast
-            return da < db
-        }
-        for f in sorted.prefix(files.count - diskMaxFiles + 200) {
-            try? fm.removeItem(at: f)
+        tileWritesSinceTrim += 1
+        if tileWritesSinceTrim < 50 { return }
+        tileWritesSinceTrim = 0
+        trimDiskNow()
+    }
+    /// 立即清理一次（App 进后台时调用；内部派发到串行队列，不与瓦片落盘争抢 IO）
+    static func trimDiskNow() {
+        trimQueue.async {
+            let fm = FileManager.default
+            guard let files = try? fm.contentsOfDirectory(
+                at: diskDir,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: []) else { return }
+            guard files.count > diskMaxFiles else { return }
+            let sorted = files.sorted { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                    ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                    ?? .distantPast
+                return da < db
+            }
+            for f in sorted.prefix(files.count - diskMaxFiles + 200) {
+                try? fm.removeItem(at: f)
+            }
         }
     }
 

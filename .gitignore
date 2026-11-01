@@ -1,6 +1,10 @@
-Android_MotoNav/build/
-Android_MotoNav/app/build/
-Android_MotoNav/.gradle/
-Android_MotoNav/.idea/
-Android_MotoNav/local.properties
-Android_MotoNav/app/.cxx/
+# 构建期密钥：仓库中 MotoNav/Secrets.swift 只允许保留 __SECRET_*__ 占位符，
+# 真实密钥必须走 GitHub Actions Secrets 注入，切勿在本地填入后提交
+.env
+
+.DS_Store
+xcuserdata/
+build/
+build_widget/
+*.ipa
+*.zip

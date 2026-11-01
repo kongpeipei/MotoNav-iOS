@@ -32,7 +32,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 多路线方案（点"去这里"后展示，选择后应用）
     @Published var routeChoices: [RouteChoice] = []
     @Published var selectedPoi: Poi?
-    @Published var navigating = false
+    @Published var navigating = false {
+        // v1.92：开始/结束导航时同步定位频率——导航中强制取消 50 米降频，保证提醒时效
+        didSet { if oldValue != navigating { updateLocationFilter() } }
+    }
     @Published var searchHistory: [String] = []
     /// 定位按钮点击计数（驱动地图回中）
     @Published var locateTick = 0
@@ -48,8 +51,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cruiseMode = false
     @Published var cruiseTick = 0
     private var cruiseBase: CLLocationCoordinate2D?
-    /// v1.90 省电模式（电量≤20% 或系统低电量模式自动开启：降定位频率 + 地图调暗）
+    /// v1.90 省电模式（电量≤20% 或系统低电量模式自动开启：降定位频率）
     @Published var powerSaving = false
+    /// v1.92 进入省电前的 distanceFilter 原值（退出省电时还原，避免反向升频）
+    private var baseDistanceFilter: CLLocationDistance = kCLDistanceFilterNone
+    /// v1.92 电量复查节流时间戳（秒）
+    private var lastPowerCheck: TimeInterval = 0
     /// 省电模式总开关（默认开；"我的"页可关）
     var powerSaveEnabled: Bool { UserDefaults.standard.object(forKey: "powerSaveEnabled") as? Bool ?? true }
     /// 当前选中的路线方案下标（高德式：默认选中推荐，卡片点击切换）
@@ -78,9 +85,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var hfPois: [String] = []
 
     /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
-    /// 高德开放平台 Web 服务 Key（内置兜底 Key；用户可覆盖，保证搜索联想/路线规划始终可用）
-    static let builtinAmapKey = "9d596e8799cf037080e4d6ab8764c246"
-    @Published var amapKey: String = "9d596e8799cf037080e4d6ab8764c246" {
+    /// 高德开放平台 Web 服务 Key（v1.92：内置 Key 改由构建期注入，源码不再含明文）
+    /// 未注入时为空串 → 在线联想/路线规划自动跳过，其余功能不受影响
+    static var builtinAmapKey: String { AppSecrets.value(AppSecrets.amapKey) }
+    @Published var amapKey: String = AppSecrets.value(AppSecrets.amapKey) {
         didSet { UserDefaults.standard.set(amapKey, forKey: "amapKey") }
     }
 
@@ -276,7 +284,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
-    /// v1.90 省电模式应用：电量≤20% 或系统低电量模式 → 定位 distanceFilter 降到 50 米（降频省电）
+    /// v1.92 省电模式应用：电量≤20% 或系统低电量模式 → 非导航态下降低定位频率
+    /// 修复：退出省电时原代码写死 kCLDistanceFilterNone（每次移动都回调），
+    ///       反而比省电前更耗电；现在改为还原进入省电前记录的原始值。
     func applyPowerSaving() {
         let level = UIDevice.current.batteryLevel
         let lowBattery = level >= 0 && level <= 0.20 // batteryLevel=-1 表示未知（模拟器/未开启监控）
@@ -284,12 +294,46 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let on = powerSaveEnabled && (lowBattery || sysLow)
         guard on != powerSaving else { return }
         powerSaving = on
-        lm.distanceFilter = on ? 50 : kCLDistanceFilterNone
+        updateLocationFilter()
         if on {
-            status = "已开启省电模式：降低定位频率、调暗地图（电量恢复后自动关闭）"
+            status = "已开启省电模式：降低定位频率（电量恢复后自动关闭）"
         } else {
             status = "省电模式已关闭"
         }
+    }
+
+    /// 定位频率按「省电 + 是否导航」切换：
+    /// - 省电且非导航 → 50 米过滤（省电）
+    /// - 导航中一律不降频，否则转向/电子眼提醒会被推迟数十米，骑到跟前才报
+    /// v1.92 新增：退出省电时还原 baseDistanceFilter，而不是无脑设 kCLDistanceFilterNone
+    private func updateLocationFilter() {
+        if powerSaving && !navigating {
+            baseDistanceFilter = lm.distanceFilter
+            lm.distanceFilter = 50
+        } else {
+            lm.distanceFilter = baseDistanceFilter
+        }
+    }
+
+    /// v1.92 到达震动（骑行时头盔+风噪下「嗡」一声几乎无感，改为三段成功型触感，辨识度高）
+    /// 用 UINotificationFeedbackGenerator：有触觉引擎的设备反馈更清晰，无引擎设备自动降级
+    private func vibrationArrived() {
+        // 每次新建一个生成器：避免实例在 asyncAfter 之前被释放导致后续两下没有反馈
+        for i in 0...2 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.18) {
+                let gen = UINotificationFeedbackGenerator()
+                gen.notificationOccurred(.success)
+            }
+        }
+    }
+
+    /// v1.92 后台补判电量：batteryStateDidChange 通知在 App 挂起时收不到，
+    /// 而后台定位恰恰最耗电；改为在定位回调里低频（≥60 秒）复查一次电量/低电量模式
+    private func throttledPowerSavingCheck() {
+        let now = Date().timeIntervalSince1970
+        if now - lastPowerCheck < 60 { return }
+        lastPowerCheck = now
+        applyPowerSaving()
     }
 
     // MARK: - 收藏 / 家 / 公司（v1.29）
@@ -967,6 +1011,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             currentLocation = coord
             locationAccuracy = loc.horizontalAccuracy
             currentSpeed = loc.speed > 0 ? loc.speed : 0
+            // v1.92 后台/前台都靠定位回调复查电量（通知在挂起时收不到）
+            throttledPowerSavingCheck()
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
             checkNavigation(at: coord)
@@ -1103,9 +1149,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 语音（讯飞在线四川话女声优先，失败自动降级系统 TTS 川味甜妹）
 
     /// 讯飞开放平台「摩卫士」应用三值（v1.52 用户实名认证后提供，可被 UserDefaults 覆盖）
-    static let xfAppIdDefault = "5ad38c61"
-    static let xfApiKeyDefault = "65eb7d0144b094c4c34be0a1a942f1a5"
-    static let xfApiSecretDefault = "MGI5M2YzOGM3ZDRjNTAyYmM2YWQ1ZDY0"
+    // v1.92：三项默认值改由构建期注入，源码不再含明文；未注入时为空 → 自动改用系统 TTS
+    static var xfAppIdDefault: String { AppSecrets.value(AppSecrets.xfAppId) }
+    static var xfApiKeyDefault: String { AppSecrets.value(AppSecrets.xfApiKey) }
+    static var xfApiSecretDefault: String { AppSecrets.value(AppSecrets.xfApiSecret) }
     var xfAppId: String { UserDefaults.standard.string(forKey: "xfAppId") ?? Self.xfAppIdDefault }
     var xfApiKey: String { UserDefaults.standard.string(forKey: "xfApiKey") ?? Self.xfApiKeyDefault }
     var xfApiSecret: String { UserDefaults.standard.string(forKey: "xfApiSecret") ?? Self.xfApiSecretDefault }
@@ -1933,7 +1980,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"
             // v1.90 到达震动提醒（骑行中不低头也感知到站）
-            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+            vibrationArrived()
             navigating = false
             UIApplication.shared.isIdleTimerDisabled = false
             navigateFollowTick += 1

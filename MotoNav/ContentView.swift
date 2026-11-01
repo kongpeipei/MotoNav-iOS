@@ -97,8 +97,9 @@ struct ContentView: View {
                 if !uiHidden && !model.cruiseMode {
                     weatherFX
                 }
-                // v1.90 省电模式：低电量时地图加一层轻黑罩（调暗省电），不拦截手势
-                if model.powerSaving {
+                // v1.92 省电调暗：仅非导航态盖轻黑罩（OLED 上省电），
+                // 导航中不再遮挡——骑行户外阳光 + 头盔镜片下，地图变暗会看不清路口与电子眼
+                if model.powerSaving && !model.navigating {
                     Color.black.opacity(0.25)
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
@@ -333,6 +334,9 @@ struct ContentView: View {
         .onChange(of: scenePhase) { phase in
             if phase == .active {
                 model.checkClipboard()
+            } else if phase == .background {
+                // v1.92 进后台才做瓦片缓存清理（IO 放到后台，前台滚动地图不卡）
+                AmapTileRenderer.trimDiskNow()
             }
         }
         // 导航中保持屏幕常亮（骑行看导航不被锁屏；退出导航恢复）
@@ -882,7 +886,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.91")
+                        Text("v1.92")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }

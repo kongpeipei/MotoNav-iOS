@@ -49,7 +49,7 @@
 					<key>UISceneConfigurationName</key>
 					<string>CarPlay</string>
 					<key>UISceneDelegateClassName</key>
-					<string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
+					<string></string>
 				</dict>
 			</array>
 		</dict>

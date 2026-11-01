@@ -6,6 +6,16 @@ struct MotoNavAttributes: ActivityAttributes {
         var poiName: String
         var poiType: String
         var distanceM: Int
+
+        public init(poiName: String, poiType: String, distanceM: Int) {
+            self.poiName = poiName
+            self.poiType = poiType
+            self.distanceM = distanceM
+        }
     }
     var destName: String
+
+    public init(destName: String) {
+        self.destName = destName
+    }
 }

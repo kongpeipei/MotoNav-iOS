@@ -1,86 +1,352 @@
-# 云端编译 IPA（无 Mac 方案）
-# 用法：把 MotoNaviOS 推送到自己的 GitHub 仓库，本工作流在 GitHub 的 macOS 虚拟机上
-#       编译出「未签名 IPA」，下载后用全能签等工具签名安装。
-# 触发方式：Actions 页手动运行（workflow_dispatch），或 push 到 main 分支。
+# =============================================================================
+# 云端编译「未签名 IPA」 —— 全程不需要 Mac，GitHub 免费 macOS 机器出包
+#
+# 产物：MotoNav-unsigned-v<版本>-b<构建号>.ipa（未签名，专供全能签/Sideloadly/AltStore 重签）
+# 触发：Actions 页手动 Run workflow，或 push 到 main
+#
+# 设计要点（相对旧版的关键改动）
+#   1. 用归档(archive)+导出(export)流程，而不是裸 build：
+#      IPA 里才会自动带上 PlugIns/Widget、版本号、PrivacyInfo 等，结构符合真机要求。
+#   2. 体积优化：剥离 .dSYM/.swiftmodule/.swiftdoc，Swift 标准库只保留 arm64 切片。
+#   3. 分段构建 + 日志落盘：任一步失败都能在日志/artifact 里定位（编译 / 归档 / 导出）。
+#   4. 密钥注入：高德 Key 与讯飞三值从仓库 Secrets 注入 MotoNav/Secrets.swift，
+#      源码不含明文（泄露的旧 Key 请到控制台重新生成后再填）。
+#   5. 构建前自动修补 Live Activity 初始化器 / CarPlay 场景安全性（.ci/sync_extensions.py）。
+#   6. 可选开关：fix_widget_point 一键切换 Widget 扩展点，不改工程即可重出包。
+# =============================================================================
 name: Build IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      fix_widget_point:
+        description: "Widget 扩展点切换（默认 widgetkit，异常时选 activitykit）"
+        type: choice
+        default: widgetkit
+        options:
+          - widgetkit
+          - activitykit-extension
+          - activitykit
+      optimize_size:
+        description: "剥离 Swift 标准库与调试符号（瘦身）"
+        type: boolean
+        default: true
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'Android_MotoNav/**'
+
+# 同一分支只跑最新一次，避免重复排队
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: MotoNav.xcodeproj
+  SCHEME: MotoNav
+  SCHEME_PATH: MotoNav.xcodeproj/xcshareddata/xcschemes/MotoNav.xcscheme
+  BUNDLE_ID: com.motonav.app.ios
+  WIDGET_ID: com.motonav.app.ios.Widget
+  ARTIFACT: MotoNav-unsigned
 
 jobs:
   build:
-    # v1.76：macos-latest 队列曾瞬时不可用（3秒无日志失败），改用稳定的 macos-14 长期支持镜像
+    # macos-15 = Xcode 16.x 镜像（工程 objectVersion 77 / 文件系统同步组，需要 Xcode 16+）
     runs-on: macos-15
+    timeout-minutes: 40
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Select Xcode
+      - name: 0) 环境自检
         run: |
-          ls /Applications | grep -i xcode
-          APP=$(ls /Applications | grep '^Xcode' | sort | tail -1)
-          echo "选用: $APP"
-          sudo xcode-select -s "/Applications/$APP"
+          set -e
+          sw_vers
           xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
+          echo "runner: $RUNNER_NAME / $RUNNER_OS $(uname -m)"
 
-      - name: Build app (unsigned)
+      - name: 1) Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 2) 打印仓库文件清单（文件同步组工程必须保证目录结构完整）
         run: |
+          set -e
+          echo "== 顶层 =="; ls -la
+          echo "== 关键文件核对 =="
+          for f in "$PROJECT/project.pbxproj" "$SCHEME_PATH" \
+                   Config/Info.plist Config/MotoNav.entitlements \
+                   WidgetConfig/Info.plist MotoNav.xcodeproj/project.xcworkspace/contents.xcworkspacedata; do
+            if [ -e "$f" ]; then echo "  OK   $f"; else echo "  MISS $f"; fi
+          done
+          echo "== Swift 源文件数 ==";
+          find MotoNav MotoNavWidget -name '*.swift' | sort | sed 's/^/  /'
+          echo "== scheme 列表 =="; xcodebuild -list -project "$PROJECT" || true
+
+      - name: 3) 密钥注入（高德 Key / 讯飞三值，来自仓库 Secrets）
+        env:
+          IN_AMAP_KEY: ${{ secrets.AMAP_KEY }}
+          IN_XF_APP_ID: ${{ secrets.XF_APP_ID }}
+          IN_XF_API_KEY: ${{ secrets.XF_API_KEY }}
+          IN_XF_API_SECRET: ${{ secrets.XF_API_SECRET }}
+        run: |
+          set -e
+          SECFILE=MotoNav/Secrets.swift
+          # 文件缺失（例如网页上传漏了这个文件）→ 现场生成占位模板，保证能编译
+          if [ ! -f "$SECFILE" ]; then
+            echo "[warn] $SECFILE 缺失，生成占位模板"
+            mkdir -p MotoNav
+            cat > "$SECFILE" <<'EOF'
+          import Foundation
+          enum AppSecrets {
+              static let amapKey = "__SECRET_AMAP_KEY__"
+              static let xfAppId = "__SECRET_XF_APP_ID__"
+              static let xfApiKey = "__SECRET_XF_API_KEY__"
+              static let xfApiSecret = "__SECRET_XF_API_SECRET__"
+              static func value(_ s: String) -> String {
+                  if s.hasPrefix("__SECRET_") && s.hasSuffix("__") { return "" }
+                  return s
+              }
+          }
+          EOF
+          fi
+          # 用 Python 替换，避免密钥里的 / + = 等字符破坏 sed 语法
+          python3 - "$SECFILE" <<'PY'
+          import os, sys, pathlib
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+          mapping = {
+              "__SECRET_AMAP_KEY__": os.environ.get("IN_AMAP_KEY", ""),
+              "__SECRET_XF_APP_ID__": os.environ.get("IN_XF_APP_ID", ""),
+              "__SECRET_XF_API_KEY__": os.environ.get("IN_XF_API_KEY", ""),
+              "__SECRET_XF_API_SECRET__": os.environ.get("IN_XF_API_SECRET", ""),
+          }
+          for k, v in mapping.items():
+              if v.strip():
+                  s = s.replace('"' + k + '"', '"' + v.strip() + '"')
+          p.write_text(s, encoding="utf-8")
+          PY
+          # 只报告是否注入，绝不打印密钥内容
+          python3 - "$SECFILE" <<'PY'
+          import sys, pathlib
+          s = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          for k in ["amapKey", "xfAppId", "xfApiKey", "xfApiSecret"]:
+              for line in s.splitlines():
+                  if "let %s = " % k in line:
+                      v = line.split("=", 1)[1].strip().strip('"')
+                      print("  %s: %s" % (k, "已注入" if v and not v.startswith("__SECRET_") else "未注入（功能自动降级）"))
+                      break
+          PY
+
+      - name: 4) 工程兜底修补（Live Activity 初始化器 / CarPlay 场景安全性）
+        run: |
+          set -e
+          FIX_WIDGET_POINT="${{ inputs.fix_widget_point || 'widgetkit' }}" \
+            python3 .ci/sync_extensions.py .
+          echo "---- Config/Info.plist 当前 CarPlay 段 ----"
+          plutil -extract UIApplicationSceneManifest xml1 -o - Config/Info.plist || true
+
+      - name: 5) 版本号（版本/构建号写进 IPA，便于不同批次区分）
+        run: |
+          set -e
+          MARKETING=$(grep -m1 'MARKETING_VERSION' "$PROJECT/project.pbxproj" | sed -E 's/.*MARKETING_VERSION = ([^;]+);.*/\1/')
+          BUILD_NO=$(date -u +%Y%m%d%H%M)
+          echo "MARKETING=$MARKETING" >> "$GITHUB_ENV"
+          echo "BUILD_NO=$BUILD_NO" >> "$GITHUB_ENV"
+          echo "版本 $MARKETING ($BUILD_NO)  提交 ${GITHUB_SHA::7}"
+
+      - name: 6) 生成无签名导出配置
+        run: |
+          set -e
+          cat > ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>-</string>
+            <key>provisioningProfiles</key>
+            <dict/>
+            <key>teamID</key>
+            <string></string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>destination</key>
+            <string>export</string>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+            <key>compileBitcode</key>
+            <false/>
+            <key>uploadSymbols</key>
+            <false/>
+            <key>embedOnDemandResources</key>
+            <false/>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint ExportOptions.plist
+
+      - name: 7) 全量编译（先单独跑一遍，报错在这里就能看到完整日志）
+        run: |
+          set -e
           xcodebuild \
-            -project MotoNav.xcodeproj \
-            -scheme MotoNav \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath build \
-            build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            ENABLE_USER_SCRIPT_SANDBOXING=NO
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            SWIFT_COMPILATION_MODE=singlefile \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            -quiet \
+            build > compile.log 2>&1 || { echo "=== 编译失败 ==="; tail -120 compile.log; exit 1; }
+          echo "编译检查通过（日志行数 $(wc -l < compile.log)）"
 
-      - name: Build widget (unsigned)
+      - name: 8) Archive（打进 Widget/PlugIns、PrivacyInfo、UIBackgroundModes 等）
         run: |
-          xcodebuild \
-            -project MotoNav.xcodeproj \
-            -target MotoNavWidget \
+          set -e
+          rm -rf "$RUNNER_TEMP/dd-archive"
+          set -o pipefail
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Release \
-            -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            SYMROOT=build_widget \
-            build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            -archivePath "$RUNNER_TEMP/MotoNav.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            MARKETING_VERSION="$MARKETING" \
+            CURRENT_PROJECT_VERSION="$BUILD_NO" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_BITCODE=NO \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            SWIFT_COMPILATION_MODE=wholemodule \
+            VALIDATE_PRODUCT=NO \
+            -verbose > archive.log 2>&1 || { echo "=== archive 失败，尾部日志 ==="; tail -150 archive.log; exit 1; }
+          tail -40 archive.log
+          echo "---- archive 内容 ----"
+          ls -la "$RUNNER_TEMP/MotoNav.xcarchive/Products/Applications/"
+          find "$RUNNER_TEMP/MotoNav.xcarchive/Products/Applications" -maxdepth 3 -name '*.appex' -o -maxdepth 3 -name 'PrivacyInfo.xcprivacy'
 
-      - name: Embed widget extension (PlugIns)
+      - name: 9) 导出 IPA（无签名）
+        id: export
         run: |
-          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
-          WIDGET=$(find build_widget/Release-iphoneos build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.appex" 2>/dev/null | head -1)
-          test -n "$APP_PATH"
-          test -n "$WIDGET"
-          mkdir -p "$APP_PATH/PlugIns"
-          cp -R "$WIDGET" "$APP_PATH/PlugIns/"
-          echo "embedded: $WIDGET"
+          set -e
+          set -o pipefail
+          rm -rf "$RUNNER_TEMP/export"
+          mkdir -p "$RUNNER_TEMP/export"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/MotoNav.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates NO \
+            -verbose > export.log 2>&1 || echo "(exportArchive 返回非 0，继续走手工装包)"
+          tail -40 export.log || true
 
-      - name: Ad-hoc sign (便于全能签重签)
+          if ls "$RUNNER_TEMP/export"/*.ipa >/dev/null 2>&1; then
+            echo "== 走 exportArchive 成功 =="
+            cp "$RUNNER_TEMP/export"/*.ipa "$RUNNER_TEMP/raw.ipa"
+          else
+            echo "== exportArchive 未产出 IPA（无签名的常见情况），改为手工装包 =="
+            APP=$(find "$RUNNER_TEMP/MotoNav.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' | head -1)
+            test -n "$APP"
+            rm -rf "$RUNNER_TEMP/Payload"; mkdir -p "$RUNNER_TEMP/Payload"
+            cp -R "$APP" "$RUNNER_TEMP/Payload/"
+            (cd "$RUNNER_TEMP" && zip -qry raw.ipa Payload)
+          fi
+          ls -lh "$RUNNER_TEMP/raw.ipa"
+
+      - name: 10) 瘦身（剥离调试符号 / Swift 标准库去重）
         run: |
-          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
-          echo "APP=$APP_PATH"
-          test -n "$APP_PATH"
-          codesign --force --sign - "$APP_PATH"
+          set -e
+          if [ "${{ inputs.optimize_size }}" = "false" ]; then
+            echo "已选择不瘦身，跳过"; exit 0
+          fi
+          WORK="$RUNNER_TEMP/fat"; rm -rf "$WORK"; mkdir -p "$WORK"
+          cp "$RUNNER_TEMP/raw.ipa" "$WORK/"
+          (cd "$WORK" && unzip -q raw.ipa -d payload)
 
-      - name: Package IPA
+          # a) .app 内的 dSYM 类调试附件（重签后无意义，占用可观）
+          find "$WORK/payload" -name '*.dSYM' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          find "$WORK/payload" -name '*.swiftmodule' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          find "$WORK/payload" -name '*.swiftdoc' -delete 2>/dev/null || true
+
+          # b) 只保留 arm64 的 Swift 标准库（模拟器 x86_64 切片对真机无用）
+          for d in "$WORK/payload/Payload"/*.app/Frameworks "$WORK/payload/Payload"/*.app/PlugIns/*.appex/Frameworks; do
+            [ -d "$d" ] || continue
+            find "$d" -name '*.dylib' -type f | while read -r lib; do
+              lipo -info "$lib" 2>/dev/null | grep -q 'x86_64' && \
+                lipo -remove x86_64 "$lib" -output "$lib" 2>/dev/null || true
+            done
+          done
+
+          # c) 确认主可执行文件没被 strip_all 破坏（仅去符号表以外的冗余段）
+          APP="$WORK/payload/Payload/$(ls "$WORK/payload/Payload" | head -1)"
+          EXEC="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          file "$EXEC"; lipo -info "$EXEC" || true
+
+          (cd "$WORK/payload" && zip -qry ../thin.ipa Payload)
+          echo "raw:  $(du -h "$WORK/raw.ipa" | cut -f1)"
+          echo "thin: $(du -h "$WORK/thin.ipa" | cut -f1)"
+          cp "$WORK/thin.ipa" "$RUNNER_TEMP/final.ipa"
+
+      - name: 11) 产物校验与命名
         run: |
-          APP_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
-          test -n "$APP_PATH"
-          rm -rf Payload
-          mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
-          zip -qr MotoNav-unsigned.ipa Payload
-          ls -la MotoNav-unsigned.ipa
+          set -e
+          [ -f "$RUNNER_TEMP/final.ipa" ] || cp "$RUNNER_TEMP/raw.ipa" "$RUNNER_TEMP/final.ipa"
+          OUT="${ARTIFACT}-v${MARKETING}-b${BUILD_NO}.ipa"
+          cp "$RUNNER_TEMP/final.ipa" "$OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
 
-      - name: Upload IPA artifact
+          echo "== IPA 结构 =="
+          unzip -l "$OUT" | awk '{print $4}' | grep -E 'Payload/[^/]+/?$|Payload/.*\.app/(Info\.plist|PlugIns/|PrivacyInfo|PkgInfo)|Payload/.*\.appex/Info\.plist' | head -20
+
+          APP=$(unzip -Z1 "$OUT" | grep -E '^Payload/[^/]+\.app/$' | head -1)
+          echo "== 主 App: $APP =="
+          unzip -Z1 "$OUT" | grep -E "^${APP}PlugIns/" | head -10 || echo "  (无 PlugIns)"
+          echo "== 大小 =="; ls -lh "$OUT"
+          shasum -a 256 "$OUT" | tee "$OUT.sha256"
+
+      - name: 12) Info.plist 关键项抽查
+        run: |
+          set -e
+          T="$RUNNER_TEMP/inspect"; rm -rf "$T"; mkdir -p "$T"
+          unzip -q "$OUT" -d "$T"
+          APP=$(find "$T/Payload" -maxdepth 1 -name '*.app' | head -1)
+          for k in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion MinimumOSVersion CFBundleDisplayName; do
+            printf '  %-28s %s\n' "$k" "$(/usr/libexec/PlistBuddy -c "Print :$k" "$APP/Info.plist" 2>/dev/null || echo '-')"
+          done
+          echo "  UIBackgroundModes: $(/usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP/Info.plist" 2>/dev/null | tr '\n' ' ')"
+          echo "  NSLocationAlways...: $(/usr/libexec/PlistBuddy -c 'Print :NSLocationAlwaysAndWhenInUseUsageDescription' "$APP/Info.plist" >/dev/null 2>&1 && echo 已配置 || echo 缺失)"
+          echo "  架构: $(file "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")" | sed 's/.*: //')"
+          echo "  签名状态: $(codesign -dv "$APP" 2>&1 | head -2 || true)"
+
+      - name: 13) 上传 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: MotoNav-unsigned.ipa
-          path: MotoNav-unsigned.ipa
+          name: ${{ env.ARTIFACT }}
+          path: |
+            ${{ env.OUT }}
+            ${{ env.OUT }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 14) 失败时也保留编译日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            compile.log
+            archive.log
+            export.log
+            ${{ runner.temp }}/MotoNav.xcarchive/Info.plist
+          if-no-files-found: ignore
+          retention-days: 7
