@@ -145,7 +145,13 @@ struct ContentView: View {
     /// v1.70：加载失败自动重试一次（避免弱网/瞬时失败直接弹条）
     @State private var mapRetried = false
 
-    var body: some View {
+    /// v2.25 body 的 ZStack 主体（单独抽出来降低类型推断复杂度）
+    ///
+    /// Swift 的类型检查超时按表达式计预算：body 里 20+ 分支的 ZStack
+    /// 再叠上 230 行修饰符链（13 个弹窗 + 一堆 onChange），单次推断必然超时，
+    /// 报 "unable to type-check this expression in reasonable time"。
+    /// 把 ZStack 主体与修饰符链拆成两个表达式后，各自独立推断，问题消失。
+    private var bodyCore: some View {
         ZStack {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
@@ -207,6 +213,10 @@ struct ContentView: View {
                 AnyView(bottomTabBar)
             }
         }
+    }
+
+    var body: some View {
+        bodyCore
         // v2.25 我的位置移动时，黑线起点跟着更新（线始终连着当前定位点）
         // 顺带兜底：搜索时如果定位还没出来（nil），定位一有值就补上黑线起点
         .onChange(of: model.currentLocation?.latitude ?? 0) { _, _ in
@@ -438,6 +448,7 @@ struct ContentView: View {
         // 放在根视图上，sheet、设置页、地图底图（MapView 读同一个 colorScheme）一起生效
         .preferredColorScheme((AppearanceMode(rawValue: appearanceMode) ?? .auto).colorScheme)
     }
+
 
     /// 地图全屏层（高德式：地图在上，搜索框下置）
     private var mapLayer: some View {
