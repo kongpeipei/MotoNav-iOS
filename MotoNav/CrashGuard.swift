@@ -84,6 +84,14 @@ enum CrashGuard {
                 contents: Data("=== 骑士地图崩溃日志（出现 [崩溃] 行说明进程非正常退出）===\n".utf8))
         }
 
+        // v2.10：每次启动插一条分隔线，避免看到的是上一次留下的旧崩溃
+        if let fh = try? FileHandle(forWritingTo: crashFileURL) {
+            let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+            fh.seekToEndOfFile()
+            fh.write(Data("\n--- 启动 v\(v) ---\n".utf8))
+            try? fh.close()
+        }
+
         // 1) Objective-C 异常：不在信号上下文，可以正常用 Foundation。
         //    注意：这个闭包必须是 @convention(c)，**不能引用任何 static 成员**
         //    （引用就等于捕获 self/元类型，编译直接报 "cannot be formed from a closure
@@ -142,6 +150,15 @@ enum CrashGuard {
                 StartupLog.mark("main-BLOCKED", "8 秒后主线程仍未执行排队任务，首屏卡死")
             }
         }
+    }
+
+    /// v2.10 自检页直接显示崩溃日志尾：用户截图一张就够了，不用去「文件」App 里翻
+    static func tailForScreen(n: Int) -> String {
+        guard let d = try? Data(contentsOf: crashFileURL),
+              let text = String(data: d, encoding: .utf8) else { return "崩溃日志：无" }
+        let lines = text.split(separator: "\n").filter { !$0.hasPrefix("===") }.map(String.init)
+        guard !lines.isEmpty else { return "崩溃日志：空（说明不是信号/异常能抓到的死法）" }
+        return "崩溃日志尾：\n" + lines.suffix(n).joined(separator: "\n")
     }
 
     /// 当前进程占用内存（MB）。用来判断是不是被系统按内存超限杀掉（jetsam）。

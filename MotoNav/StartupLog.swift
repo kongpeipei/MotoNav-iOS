@@ -74,18 +74,35 @@ enum StartupLog {
         syncLock.lock()
         defer { syncLock.unlock() }
         let url = fileURL
-        var data = (try? Data(contentsOf: url)) ?? Data()
+
+        // v2.10：改成"真追加 + fsync"。
+        // 旧写法是"整文件读出来 → 拼上这一行 → 原子重写"，一行日志要重写整个文件；
+        // 进程在重写瞬间被硬杀，最后一行就没了——之前几版看不出死在哪，很可能就是这个原因。
+        // 现在每行都是 O_APPEND 写一次，写完立刻 fsync，硬杀也不丢。
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path,
+                                           contents: Data("=== 骑士地图启动日志 ===\n".utf8))
+        }
         // 日志上限 64KB：超过就砍掉前半段，防止长期使用无限增长
-        if data.count > 64 * 1024 {
-            data = data.suffix(32 * 1024)
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let sz = attrs[.size] as? NSNumber, sz.intValue > 64 * 1024,
+           let data = try? Data(contentsOf: url) {
+            try? Data(data.suffix(32 * 1024)).write(to: url, options: .atomic)
         }
+        guard let fh = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? fh.close() }
+        fh.seekToEndOfFile()
         // 每次启动插一条分隔线，方便分辨"这次"和"上次"
-        if data.isEmpty {
-            data.append(Data("=== 骑士地图启动日志 ===\n".utf8))
+        if !wroteSeparator {
+            wroteSeparator = true
+            fh.write(Data("\n=== 骑士地图启动日志 ===\n".utf8))
         }
-        data.append(Data(line.utf8))
-        try? data.write(to: url, options: .atomic)
+        fh.write(Data(line.utf8))
+        fsync(fh.fileDescriptor)
     }
+
+    /// 本次进程是否已经写过启动分隔线（只在第一次写日志时插一条）
+    private static var wroteSeparator = false
 
     /// 取最后 n 行（诊断页直接显示在屏幕上，用户不用去「文件」App 找）
     static func tail(_ n: Int) -> String {

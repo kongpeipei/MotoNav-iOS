@@ -40,6 +40,8 @@ import UIKit
 final class DiagRootController: UIViewController {
     /// 点「载入主界面」时回调（AppDelegate 里换根视图）
     var onLoadUI: (() -> Void)?
+    /// v2.10 点「精简界面」时回调（只地图 + 搜索卡，用来验证哪个浮层把进程带崩）
+    var onLoadLite: (() -> Void)?
 
     private let clock = UILabel()
     private let tailLabel = UILabel()
@@ -72,7 +74,8 @@ final class DiagRootController: UIViewController {
         clock.text = "--:--:--"
 
         let hint = UILabel()
-        hint.text = "自动尝试载入主界面；若失败会退回这一页"
+        hint.text = "主界面闪退后会自动回到这一页。\n先点「载入主界面」；再闪退就点「精简界面」，并把这一屏截下来"
+        hint.numberOfLines = 0
         hint.font = .systemFont(ofSize: 13)
         hint.textColor = UIColor.white.withAlphaComponent(0.75)
         hint.textAlignment = .center
@@ -80,7 +83,8 @@ final class DiagRootController: UIViewController {
         tailLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         tailLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         tailLabel.numberOfLines = 0
-        tailLabel.text = StartupLog.tail(10)
+        // v2.10：先把崩溃钩子抓到的信号贴在最前面，再贴启动日志尾，一个屏幕看完
+        tailLabel.text = CrashGuard.tailForScreen(n: 6) + "\n" + StartupLog.tail(9)
 
         // 手动载入按钮：自动载入失败后仍能一键重试，App 永远"打得开"
         let loadBtn = UIButton(type: .system)
@@ -93,7 +97,20 @@ final class DiagRootController: UIViewController {
         loadBtn.addTarget(self, action: #selector(loadTapped), for: .touchUpInside)
         loadBtn.heightAnchor.constraint(equalToConstant: 46).isActive = true
 
-        let stack = UIStackView(arrangedSubviews: [title, sub, clock, hint, loadBtn, tailLabel])
+        // v2.10：精简界面按钮（只地图 + 搜索卡）。主界面一进去就闪退时点这个，
+        //   能开 → 说明地图没问题、是某个底部浮层；打不开 → 说明问题在地图/宿主层。
+        let liteBtn = UIButton(type: .system)
+        liteBtn.setTitle("精简界面（只地图+搜索）", for: .normal)
+        liteBtn.setTitleColor(.white, for: .normal)
+        liteBtn.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        liteBtn.layer.borderColor = UIColor.white.withAlphaComponent(0.7).cgColor
+        liteBtn.layer.borderWidth = 1
+        liteBtn.layer.cornerRadius = 12
+        liteBtn.translatesAutoresizingMaskIntoConstraints = false
+        liteBtn.addTarget(self, action: #selector(liteTapped), for: .touchUpInside)
+        liteBtn.heightAnchor.constraint(equalToConstant: 40).isActive = true
+
+        let stack = UIStackView(arrangedSubviews: [title, sub, clock, hint, loadBtn, liteBtn, tailLabel])
         stack.axis = .vertical
         stack.spacing = 14
         stack.alignment = .fill
@@ -126,6 +143,11 @@ final class DiagRootController: UIViewController {
     @objc private func loadTapped() {
         StartupLog.markSync("manual-load-tap")
         onLoadUI?()
+    }
+
+    @objc private func liteTapped() {
+        StartupLog.markSync("manual-lite-tap")
+        onLoadLite?()
     }
 
     deinit { timer?.invalidate() }
@@ -162,6 +184,8 @@ final class MotoHost: UIHostingController<AnyView> {
 /// 如果它上屏了、切到 ContentView 才死，那就锁定在 ContentView。
 struct BootstrapView: View {
     @EnvironmentObject var model: AppModel
+    /// v2.10 精简模式（透传给 ContentView）
+    var lite: Bool = false
     @State private var showContent = false
 
     var body: some View {
@@ -172,7 +196,7 @@ struct BootstrapView: View {
                 .ignoresSafeArea()
 
             if showContent {
-                ContentView()
+                ContentView(lite: lite)
                     .environmentObject(model)
                     .transition(.opacity)
             } else {

@@ -62,6 +62,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         win.backgroundColor = UIColor(red: 0.06, green: 0.55, blue: 0.32, alpha: 1)
         let diag = DiagRootController()
         diag.onLoadUI = { [weak self] in self?.switchToSwiftUI() }
+        diag.onLoadLite = { [weak self] in self?.switchToSwiftUI(lite: true) }
         win.rootViewController = diag
         win.makeKeyAndVisible()
         window = win
@@ -72,24 +73,34 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         StartupLog.mark("scene-check", "scenes=\(scenes) state=\(UIApplication.shared.applicationState.rawValue)")
 
         if attempt <= 1 {
+            // 第一次：正常自动进主界面（诊断探针全开）
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.switchToSwiftUI()
             }
-        } else {
+        } else if attempt == 2 {
+            // 第二次：停在自检页，让用户能看清屏幕上的崩溃/日志再手动点
             StartupLog.mark("safe-hold", "上次启动未到首屏，停在自检页等手动载入")
+        } else {
+            // v2.10 第三次起：自动进**精简界面**，保证 App 至少能用；
+            // 自检页上的「载入主界面」随时可以再试完整版
+            StartupLog.mark("safe-hold", "已连续 \(attempt - 1) 次没到首屏，自动改用精简界面")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.switchToSwiftUI(lite: true)
+            }
         }
 
         return true
     }
 
     /// 从纯 UIKit 首屏切到 SwiftUI（分两段：极简视图 → 真正主界面）
-    private func switchToSwiftUI() {
+    /// - Parameter lite: v2.10 精简模式（只地图 + 一条搜索卡），主界面反复闪退时用它兜底
+    private func switchToSwiftUI(lite: Bool = false) {
         guard let win = window else {
             StartupLog.mark("swap-no-window")
             return
         }
-        StartupLog.markSync("swap-begin")
-        let root = AnyView(BootstrapView().environmentObject(AppModel.shared))
+        StartupLog.markSync("swap-begin", lite ? "lite" : "full")
+        let root = AnyView(BootstrapView(lite: lite).environmentObject(AppModel.shared))
         let host = MotoHost(rootView: root)
         win.rootViewController = host
         StartupLog.mark("swap-done")

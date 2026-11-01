@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    /// v2.10 精简模式：只渲染地图 + 一条搜索卡（不建 DraggableFloat、不建选项卡、不建电警按钮）。
+    /// 连续启动失败时由启动器自动切到这个模式，保证 App 至少能打开用。
+    var lite: Bool = false
     /// v1.99 组队骑行（地图队友点 + 我的页队伍面板）
     @StateObject private var team = TeamRide.shared
     /// v1.99 足迹（我的-足迹）
@@ -127,7 +130,9 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                 }
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
-                if !uiHidden {
+                // v2.10：精简模式下这一整组浮层（指南针/路线胶囊/缩放键/比例尺）都不建，
+                //        用来把"浮层带崩进程"和"地图本身有问题"彻底分开
+                if !uiHidden && !lite {
                     // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
                     // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
                     if !showRouteOverview {
@@ -191,7 +196,12 @@ struct ContentView: View {
                 // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
                 if !uiHidden {
                     BodyProbe("bf-bottom")
-                    bottomOverlay
+                    // v2.10：精简模式下换成不含 DraggableFloat 的简单搜索卡
+                    if lite {
+                        liteBottom
+                    } else {
+                        bottomOverlay
+                    }
                 }
                 // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
                 if model.tripSummary != nil {
@@ -354,8 +364,11 @@ struct ContentView: View {
         .onAppear {
             // v2.03：首屏已渲染 → 启动链路走通。若设备上 startup.log 停在这行之前，
             // 说明是签名/entitlement 被杀，不是代码问题。
-            StartupLog.markSync("ui-ready")
-            UserDefaults.standard.set(0, forKey: "motonav.bootAttempts")
+            StartupLog.markSync("ui-ready", lite ? "lite" : "full")
+            // 精简模式不算"启动成功"：否则下次又会先试完整版、再崩一次，来回折腾用户
+            if !lite {
+                UserDefaults.standard.set(0, forKey: "motonav.bootAttempts")
+            }
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
@@ -423,7 +436,8 @@ struct ContentView: View {
 
     /// 地图全屏层（高德式：地图在上，搜索框下置）
     private var mapLayer: some View {
-        MapViewRepresentable(
+        let _ = StartupLog.markOnce("ml-enter")
+        return MapViewRepresentable(
             pois: model.pois,
             userLocation: model.currentLocation,
             route: model.route,
@@ -1277,6 +1291,56 @@ struct ContentView: View {
         }
     }
 
+    /// v2.10 精简模式底部卡：一条搜索框，不套 DraggableFloat、不做拖动/左滑删除。
+    /// 用途单一——主界面某个浮层把进程带崩时，这里能稳定显示，App 仍有搜索可用。
+    private var liteBottom: some View {
+        let _ = StartupLog.markOnce("lite-bottom")
+        return VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline)
+                    .foregroundStyle(.gray)
+                TextField("查找地点、公交、地铁", text: $searchText)
+                    .font(.subheadline)
+                    .submitLabel(.search)
+                    .onSubmit { expandSearchResults() }
+                Button {
+                    expandSearchResults()
+                } label: {
+                    Text("搜索")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color(red: 0.0, green: 0.75, blue: 0.95), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(height: 52)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26))
+            .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+            .padding(.horizontal, 14)
+            if !model.routeChoices.isEmpty {
+                Button {
+                    haptic()
+                    model.toggleNavigation()
+                } label: {
+                    Text("开始导航")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 14)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 22)
+    }
+
     /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         // v1.81.2 底部每张卡均可自由拖动，位置持久化（默认贴底序列）
@@ -1923,7 +1987,8 @@ struct ContentView: View {
 
     /// 类别搜索结果横条（学校/医院/加油站，点击直接规划路线）
     private var categoryBar: some View {
-        Group {
+        let _ = StartupLog.markOnce("cat-enter")
+        return Group {
             if !model.categoryResults.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -3053,7 +3118,8 @@ struct ContentView: View {
 
     /// v1.80 首页底部主卡片：搜索框 + 导航/我的 合并为一个整体卡片
     private var bottomMainCard: some View {
-        VStack(spacing: 6) {
+        let _ = StartupLog.markOnce("bmc-enter")
+        return VStack(spacing: 6) {
             // v1.99 快捷词：未聚焦时一行"回家 / 去公司"，省一次输入
             if !searchFocused, model.homePlace != nil || model.workPlace != nil {
                 HStack(spacing: 6) {
@@ -3299,7 +3365,8 @@ struct ContentView: View {
 
     /// 搜索输入行：高德样式白底大圆角（放大镜 + 输入 + ✕ + 搜索按钮为一体）
     private var searchInputRow: some View {
-        HStack(spacing: 8) {
+        let _ = StartupLog.markOnce("sic-enter")
+        return HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.subheadline)
                 .foregroundStyle(.gray)
@@ -3991,7 +4058,11 @@ private struct DraggableFloat<Content: View>: View {
         self.lockX = lockX
         self.deleteLabel = deleteLabel
         self.onSwipeLeft = onSwipeLeft
+        // v2.10 探针：浮层外壳构造 / 内部卡片构造完成，各打一笔，
+        // 崩溃时就能区分"壳子有问题"还是"卡片内容有问题"
+        StartupLog.markOnce("df-\(key)-shell")
         self.content = content()
+        StartupLog.markOnce("df-\(key)-ok")
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
         // v1.99 缩放/定位按钮默认位置改到"搜索框右上方"：一次性作废旧坐标，
