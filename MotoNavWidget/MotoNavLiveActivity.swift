@@ -69,3 +69,12 @@ struct MotoNavLiveActivity: Widget {
         }
     }
 }
+
+/// 扩展入口：WidgetKit 必须有 @main WidgetBundle，否则扩展没有入口，
+/// 链接阶段会把上面所有 UI 代码当死代码裁掉（产物只剩几十 KB 空壳）。
+@main
+struct MotoNavWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        MotoNavLiveActivity()
+    }
+}

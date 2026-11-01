@@ -325,6 +325,15 @@ jobs:
           EXT_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /tmp/appex.plist 2>/dev/null || echo '-')
           echo "  appex: $EXT_ID / 扩展点=$EXT_POINT"
           [ "$EXT_POINT" = "com.apple.widgetkit-extension" ] || { echo "!! 扩展点异常: $EXT_POINT"; exit 1; }
+          # 扩展必须真的链接了 WidgetKit/SwiftUI —— 否则是空壳（缺 @main 时会被链接器全部裁掉）
+          unzip -o -q "$OUT" -d /tmp/appexchk "${APP}PlugIns/MotoNavWidget.appex/MotoNavWidget" || true
+          EXT_BIN="/tmp/appexchk/${APP}PlugIns/MotoNavWidget.appex/MotoNavWidget"
+          if [ -f "$EXT_BIN" ]; then
+            echo "  扩展二进制大小: $(ls -lh "$EXT_BIN" | awk '{print $5}')"
+            otool -L "$EXT_BIN" | grep -q "WidgetKit.framework" || {
+              echo "!! 扩展未链接 WidgetKit，说明 Widget 代码被裁成空壳（通常缺 @main WidgetBundle）"
+              otool -L "$EXT_BIN"; exit 1; }
+          fi
           case "$EXT_ID" in
             com.motonav.app.ios.*) echo "  扩展 BundleID 前缀正确" ;;
             *) echo "!! 扩展 BundleID 不是主应用 ID 的子标识: $EXT_ID"; exit 1 ;;
