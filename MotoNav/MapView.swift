@@ -121,9 +121,9 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// v2.22 用户手动移动了地图（通知业务层）
     var onUserMovedChanged: ((Bool) -> Void)?
     /// v2.22 起点内部道路：定位点 → 道路入口（WGS）
-    var routeStartLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)?
+    var routeStartLink: RouteLink?
     /// v2.22 终点内部道路：道路出口 → 终点（WGS）
-    var routeEndLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)?
+    var routeEndLink: RouteLink?
     /// v2.22 入口箭头：起点入口朝向（"left"/"straight"/"right"）
     var routeStartArrow: String = "straight"
     /// v2.22 出口箭头：终点入口朝向

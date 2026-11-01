@@ -27,6 +27,12 @@ final class CompassState: ObservableObject {
 }
 
 
+/// v2.22 内部道路连接段（定位点 ↔ 道路出入口）
+struct RouteLink {
+    let from: CLLocationCoordinate2D
+    let to: CLLocationCoordinate2D
+}
+
 /// v2.19 路线途经点（名称 + WGS-84 坐标）
 struct RouteWaypoint: Identifiable, Equatable {
     let id = UUID()
@@ -2915,22 +2921,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.22 起点内部道路连接：定位点 → 路线起点（道路入口）
     /// 高德规划时起点会被吸附到最近的道路出入口，两者之间有一段小区/园区内部道路。
     /// 这里算出这段连接，配合蓝色虚线 + 入口处的白色转向箭头（高德式）。
-    var routeStartLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)? {
+    var routeStartLink: RouteLink? {
         guard navigating, let loc = currentLocation, route.count > 1 else { return nil }
         let entry = route[0]
         let d = distanceM(loc, entry)
         guard d > 20 else { return nil }   // 已在路上，不需要连接线
-        return (from: loc, to: entry)
+        return RouteLink(from: loc, to: entry)
     }
 
     /// v2.22 终点内部道路连接：路线终点（道路出口）→ 目的地
-    var routeEndLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)? {
+    var routeEndLink: RouteLink? {
         guard navigating, route.count > 1, destLat != 0 || destLon != 0 else { return nil }
         let exit = route[route.count - 1]
         let target = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
         let d = distanceM(exit, target)
         guard d > 20 else { return nil }
-        return (from: exit, to: target)
+        return RouteLink(from: exit, to: target)
     }
 
     /// v2.22 起点入口转向箭头（按路线第一段相对定位点的方位判断左/直/右）

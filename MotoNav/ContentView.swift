@@ -628,14 +628,14 @@ struct ContentView: View {
             traveledIdx: model.traveledIdx,
             navScaleTarget: model.navScaleTarget,
             navScaleTick: model.navScaleTick,
-            routeStartLink: model.routeStartLink,
-            routeEndLink: model.routeEndLink,
-            routeStartArrow: model.routeStartArrow,
-            routeEndArrow: model.routeEndArrow,
             onUserMovedChanged: { moved in
                 // v2.22 导航中移动地图 → 收起提示卡，只留"继续导航"
                 model.navUserMoved = moved
-            }
+            },
+            routeStartLink: model.routeStartLink,
+            routeEndLink: model.routeEndLink,
+            routeStartArrow: model.routeStartArrow,
+            routeEndArrow: model.routeEndArrow
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
