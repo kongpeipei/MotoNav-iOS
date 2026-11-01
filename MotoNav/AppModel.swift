@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import CoreLocation
 import AVFoundation
 import UserNotifications
@@ -12,6 +13,17 @@ extension Notification.Name {
     static let motoAlert = Notification.Name("motoAlert")
     /// 点位列表变化（供 CarPlay 同步）
     static let motoPoisChanged = Notification.Name("motoPoisChanged")
+}
+
+/// v2.13 指南针独立状态。
+///
+/// 为什么单独拎出来：磁力计回调 10~20Hz，如果朝向往 AppModel 的 `@Published heading` 里写，
+/// 每一次都会让 `ContentView.body` 整体重新求值 —— 而 body 是 4000 行的单一函数
+/// （v2.11 为绕开栈溢出还套了大量 AnyView，AnyView 会让内部子树在求值时**立刻**构建）。
+/// 20 次/秒 × 整棵树，主线程直接被打满：启动后画面停在闪屏、连 1 秒后的关闭任务都排不上。
+/// 拆成独立 ObservableObject 后，朝向变化只让那个 56pt 的小圆圈重算。
+final class CompassState: ObservableObject {
+    @Published var angle: Double = 0
 }
 
 
@@ -81,7 +93,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 当前选中的路线方案下标（高德式：默认选中推荐，卡片点击切换）
     @Published var selectedRouteIdx = 0
     /// 手机朝向（度，0=北，顺时针）
+    ///
+    /// v2.13：只在导航中更新。导航时地图要跟着手机转向，这时发布一次是值得的；
+    /// 平时全部走 `compass`，避免 10~20Hz 的朝向回调把整个界面重算打满主线程。
     @Published var heading: Double = 0
+    /// 指南针朝向（独立发布，只驱动指南针小圆圈）
+    let compass = CompassState()
     /// 自定义背景图片（相册选择，v1.11 已移除入口，保留字段兼容旧数据）
     @Published var bgImage: UIImage?
     /// 天气文本（小图标 + 温度，显示在 ⋯ 左侧）
@@ -1270,12 +1287,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // trueHeading 无效（磁干扰/未校准）时退回磁北，否则会把指南针打成 0
         let h = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         Task { @MainActor in
-            // v2.12 节流：朝向回调可达 10~20Hz，而 heading 变化会让整个界面重算一次。
-            // 2° 以内肉眼看不出来，直接丢掉，界面刷新频率能降一个数量级。
-            let diff = abs(h - heading)
+            // v2.13 分流：
+            //  · compass.angle 只驱动指南针小圈，随便高频更新；
+            //  · heading 会触发 ContentView 整树重算，只有导航中（地图要跟着转）才写。
+            let diff = abs(h - compass.angle)
             let delta = min(diff, 360 - diff)
             guard delta >= 2 else { return }
-            heading = h
+            compass.angle = h
+            // 导航中地图要跟着手机转，这时才发布 heading；再叠加 4° 死区，
+            // 把 20Hz 压到 5Hz 左右 —— 4° 在这块 56pt 的指北针和 200 米视野上看不出来。
+            if navigating {
+                let hd = abs(h - heading)
+                if min(hd, 360 - hd) >= 4 { heading = h }
+            }
         }
     }
 
@@ -2157,6 +2181,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         } else {
             guard route.count >= 2 else { status = "请先搜索目的地并规划路线"; return }
             navigating = true
+            // v2.13：平时 heading 不更新，进入导航先把当前朝向补上，避免地图一开就转到正北
+            heading = compass.angle
             UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
             pitchDeg = 45         // v2.01 开始导航：3D 45° 俯视 + 约 200 米视野（见 MapView）
             navigateFollowTick += 1

@@ -32,7 +32,43 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         )
         win.makeKeyAndVisible()
         window = win
+        installSplash(on: win)
         return true
+    }
+
+    /// v2.13 启动闪屏改到 UIKit 层。
+    ///
+    /// 旧做法是放在 ContentView 的 ZStack 里，靠 `onAppear` 起一个 Task 在 1 秒后置 false。
+    /// 那个 Task 需要主线程空闲才能跑；一旦视图树在重算，它永远排不上队，
+    /// 表现就是「黑底 + 骑士地图四个字，一直不进主界面」。
+    /// 现在改成盖在 window 上的一个 UIView，用 UIView.animate 淡出：
+    /// 动画由 CoreAnimation 驱动，不依赖 SwiftUI 的任何状态更新，1 秒后必定消失。
+    private func installSplash(on win: UIWindow) {
+        let splash = UIView(frame: win.bounds)
+        splash.backgroundColor = .black
+        splash.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // 不拦截触摸：底下的主界面可以先加载、可以先点
+        splash.isUserInteractionEnabled = false
+
+        let label = UILabel()
+        label.text = "骑士地图"
+        label.textColor = .white
+        // 楷体：不同系统版本 PostScript 名不一样，逐个兜底，最后用系统粗体
+        label.font = UIFont(name: "STKaitiSC-Regular", size: 48)
+            ?? UIFont(name: "Kaiti SC", size: 48)
+            ?? UIFont.systemFont(ofSize: 48, weight: .bold)
+        label.sizeToFit()
+        label.center = CGPoint(x: splash.bounds.midX, y: splash.bounds.midY)
+        label.autoresizingMask = [.flexibleTopMargin, .flexibleBottomMargin,
+                                 .flexibleLeftMargin, .flexibleRightMargin]
+        splash.addSubview(label)
+        win.addSubview(splash)
+
+        UIView.animate(withDuration: 0.35, delay: 0.9, options: [.curveEaseOut]) {
+            splash.alpha = 0
+        } completion: { _ in
+            splash.removeFromSuperview()
+        }
     }
 
     /// 通过 motonav:// 链接直接规划路线

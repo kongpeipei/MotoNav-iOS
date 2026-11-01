@@ -100,9 +100,6 @@ struct ContentView: View {
     @State private var favSearch = ""
     /// v1.97 "我的-常用地点"编辑目标（点铅笔后进入搜索选点，卡片收藏键确认）
     @State private var slotTarget: CommonPlaceSlot?
-    /// v1.86 启动闪屏（全屏黑+白色楷体"骑士地图"，1 秒后淡出）
-    @State private var showSplash = true
-    @State private var splashTask: Task<Void, Never>?
     /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
     @State private var tripAutoDismissTask: Task<Void, Never>?
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
@@ -235,17 +232,6 @@ struct ContentView: View {
             if !model.navigating && !uiHidden && selectedTab == 1 {
                 AnyView(bottomTabBar)
             }
-            // v1.86 启动闪屏：全屏黑色 + 白色楷体"骑士地图"，1 秒后淡出进入首页
-            if showSplash {
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    Text("骑士地图")
-                        .font(.custom("Kaiti SC", size: 48).weight(.bold))
-                        .foregroundStyle(.white)
-                }
-                .transition(.opacity)
-                .zIndex(999)
-            }
         }
         // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
         .onChange(of: model.navigating) { _, nv in
@@ -372,13 +358,6 @@ struct ContentView: View {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
-            // v1.86 启动闪屏 1 秒后自动跳转首页（淡出）
-            splashTask = Task {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                await MainActor.run {
-                    withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
-                }
-            }
             // v1.85 指南针/GPS 默认位置上移到最高处：仅一次重置旧拖动记忆（之后用户拖动仍会持久化）
             if !UserDefaults.standard.bool(forKey: "uiPosV185Applied") {
                 for k in ["compass.x", "compass.y", "zoom.x", "zoom.y"] {
@@ -2822,34 +2801,10 @@ struct ContentView: View {
     private var compassOverlay: some View {
         // v1.80 指南针可自由拖动，位置持久化（下次打开保持）
         // v1.85 默认位置移到最高处（屏幕顶部）
+        // v2.13：内容换成独立子视图 CompassDial，朝向走它自己的 ObservableObject，
+        //        这样 10~20Hz 的磁力计回调只重算这 56pt，不会拖垮整个 ContentView。
         DraggableFloat(key: "compass", defaultPos: CGPoint(x: 0.10, y: 0.05)) {
-            ZStack {
-                Circle().fill(.ultraThinMaterial)
-                Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
-                // 红色指北针（随手机朝向旋转）
-                Image(systemName: "location.north.fill")
-                    .font(.title3)
-                    .foregroundStyle(.red)
-                    .rotationEffect(.degrees(model.heading))
-                // 四方位：北（上）东（右）南（下）西（左）
-                Text("北")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.red)
-                    .offset(y: -20)
-                Text("东")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.secondary)
-                    .offset(x: 19)
-                Text("南")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.secondary)
-                    .offset(y: 20)
-                Text("西")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.secondary)
-                    .offset(x: -19)
-            }
-            .frame(width: 56, height: 56)
+            CompassDial(compass: model.compass)
         }
     }
 
@@ -4014,6 +3969,44 @@ private struct SwipeDeleteRow<Content: View>: View {
 /// v1.81.2 支持 onSwipeLeft：向左大幅滑动（>80pt 且横向为主）触发回调关闭，否则正常拖动记忆
 /// v1.81.4 支持 lockX：仅上下移动（横向锁定在初始 x）
 /// v1.81.4 支持 deleteLabel：左滑时卡片后跟红色"左拉删除"卡（大小同卡片），滑过一半触发删除回调
+/// v2.13 指南针表盘（独立子视图）。
+///
+/// 朝向单独走 `CompassState`：磁力计 10~20Hz，若由 ContentView 直接观察，
+/// 每次回调都会让 4000 行的 body 整体重算一次；拆出来以后只有这 56pt 重算。
+private struct CompassDial: View {
+    @ObservedObject var compass: CompassState
+
+    var body: some View {
+        ZStack {
+            Circle().fill(.ultraThinMaterial)
+            Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
+            // 红色指北针（随手机朝向旋转）
+            Image(systemName: "location.north.fill")
+                .font(.title3)
+                .foregroundStyle(.red)
+                .rotationEffect(.degrees(compass.angle))
+            // 四方位：北（上）东（右）南（下）西（左）
+            Text("北")
+                .font(.caption2.bold())
+                .foregroundStyle(.red)
+                .offset(y: -20)
+            Text("东")
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+                .offset(x: 19)
+            Text("南")
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+                .offset(y: 20)
+            Text("西")
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+                .offset(x: -19)
+        }
+        .frame(width: 56, height: 56)
+    }
+}
+
 private struct DraggableFloat<Content: View>: View {
     let key: String
     var lockX: Bool = false
