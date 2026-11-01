@@ -65,6 +65,8 @@ struct ContentView: View {
     @State private var splashTask: Task<Void, Never>?
     /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
     @State private var tripAutoDismissTask: Task<Void, Never>?
+    /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
+    @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
@@ -446,13 +448,15 @@ struct ContentView: View {
                 let isRain = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].contains(code)
                 let isSnow = [71, 73, 75, 77, 85, 86].contains(code)
                 if isRain || isSnow {
+                    // v1.87 浅色外观用深蓝（浅色地图上更明显），深色外观用白
+                    let fxBase: Color = colorScheme == .light ? Color(red: 0.10, green: 0.28, blue: 0.60) : .white
                     TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
                         Canvas { ctx, size in
                             let t = tl.date.timeIntervalSinceReferenceDate
                             if isRain {
-                                drawRainFX(ctx: ctx, size: size, t: t)
+                                drawRainFX(ctx: ctx, size: size, t: t, base: fxBase)
                             } else {
-                                drawSnowFX(ctx: ctx, size: size, t: t)
+                                drawSnowFX(ctx: ctx, size: size, t: t, base: fxBase)
                             }
                         }
                     }
@@ -469,25 +473,31 @@ struct ContentView: View {
     }
 
     /// 雨丝：斜向短直线匀速下落
-    private func drawRainFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval) {
+    /// v1.87 雨丝：降速（约 260~560 px/s，原 650~1270 太快）+ 长短不一 + 倾角各异 + 透明度随机 + 轻微横漂
+    private func drawRainFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval, base: Color) {
         let n = 150
         for i in 0..<n {
             let r1 = fxHash(i)
             let r2 = fxHash(i + 500)
+            let r3 = fxHash(i + 900)
+            let r4 = fxHash(i + 1300)
             let x0 = r1 * size.width
-            let speed = 650 + r2 * 620
-            let y = (t * speed + r2 * 9000).truncatingRemainder(dividingBy: size.height + 220) - 110
-            let len = 14 + r2 * 14
-            let x = x0 - y * 0.16
+            let speed = 260 + r2 * 300
+            let y = (t * speed + r2 * 9000).truncatingRemainder(dividingBy: size.height + 260) - 130
+            // 长短不一（18~48）、倾角各异（0.08~0.26）、透明度随机（0.30~0.60）
+            let len = 18 + r3 * 30
+            let slope = 0.08 + r4 * 0.18
+            let sway = sin(t * 1.6 + r2 * 6.28318) * 6
+            let x = x0 + sway - y * slope
             var p = Path()
             p.move(to: CGPoint(x: x, y: y))
-            p.addLine(to: CGPoint(x: x - len * 0.16, y: y + len))
-            ctx.stroke(p, with: .color(.white.opacity(0.42)), lineWidth: 1.1)
+            p.addLine(to: CGPoint(x: x - len * slope, y: y + len))
+            ctx.stroke(p, with: .color(base.opacity(0.30 + r1 * 0.30)), lineWidth: 0.9 + r2 * 0.7)
         }
     }
 
-    /// 雪花：白色小圆点，下落 + 横向摆动
-    private func drawSnowFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval) {
+    /// 雪花：小圆点，下落 + 横向摆动（v1.87 颜色随外观模式，浅色背景用深色点）
+    private func drawSnowFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval, base: Color) {
         let n = 90
         for i in 0..<n {
             let r1 = fxHash(i)
@@ -499,7 +509,7 @@ struct ContentView: View {
             let x = (x0 + sway + size.width).truncatingRemainder(dividingBy: size.width)
             let d = 1.6 + r1 * 2.4
             ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: d, height: d)),
-                     with: .color(.white.opacity(0.82)))
+                     with: .color(base.opacity(colorScheme == .light ? 0.60 : 0.82)))
         }
     }
 
@@ -843,7 +853,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.86")
+                        Text("v1.87")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
