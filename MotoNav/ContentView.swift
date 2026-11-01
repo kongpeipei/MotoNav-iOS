@@ -17,6 +17,8 @@ struct ContentView: View {
     @State private var searchExpanded = false
     /// v1.81 点击联想地点主体后：地图高亮该点并显示地点信息卡
     @State private var tipCard: AppModel.AmapTip?
+    /// v1.95 轻点地图任意位置 → 地点介绍卡（逆地理编码结果）
+    @State private var tapPlace: TapPlaceInfo?
     /// v1.81.2 退出导航确认态：点状态卡左侧×后切换为"退出导航/取消"两按钮
     @State private var showExitConfirm = false
     // v1.81.4 导航全览：导航退出卡"全览"→ 缩放显示全程路线 + 固定全览/取消全览(13s倒计时) 操作条
@@ -184,7 +186,12 @@ struct ContentView: View {
         }
         // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
         .onChange(of: model.navigating) { _, nv in
-            if nv { showExitConfirm = false } else { endRouteOverview() }
+            if nv {
+                showExitConfirm = false
+                tapPlace = nil          // v1.95 进入导航时收起地点卡，避免和导航卡叠在一起
+            } else {
+                endRouteOverview()
+            }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
@@ -209,6 +216,11 @@ struct ContentView: View {
                 pendingMarkCoord = coord
                 markName = ""
                 showMarkNameAlert = true
+            }
+            // v1.95 轻点地图改为弹出地点卡后，沉浸模式的入口移到这里
+            Button("隐藏界面（沉浸模式）") {
+                tapPlace = nil
+                withAnimation(.easeOut(duration: 0.2)) { uiHidden = true }
             }
             Button("取消", role: .cancel) {}
         }
@@ -413,7 +425,7 @@ struct ContentView: View {
                 model.clearCategory()
             },
             onMapTap: { coord in
-                // v1.69："+"快捷卡片选点模式优先；否则 v1.66 轻点地图沉浸切换（导航中不触发）
+                // v1.69："+"快捷卡片选点模式优先；否则 v1.95 轻点地图 → 地点介绍卡
                 guard !model.navigating else { return }
                 if quickPickMode {
                     pendingQuickCoord = coord
@@ -421,7 +433,12 @@ struct ContentView: View {
                     showQuickNameAlert = true
                     return
                 }
-                withAnimation(.easeOut(duration: 0.2)) { uiHidden.toggle() }
+                // 沉浸态下轻点＝恢复界面（否则隐藏 UI 后没有出口）
+                if uiHidden {
+                    withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
+                    return
+                }
+                showTapPlace(coord)
             },
             minimal: minimalMap,
             reloadTick: reloadTick,
@@ -458,79 +475,13 @@ struct ContentView: View {
         .onTapGesture { dismissKeyboard() }
     }
 
-    /// 天气条：屏幕最上边居中一行（与左上角指南针分离不重复；导航中隐藏，高德导航顶部只留导航信息）
-    /// v1.81.4 全屏天气动画（高德同款）：下雨=斜落雨丝，下雪=飘落雪花
-    /// 透明 Canvas 覆盖整个地图，不拦截任何手势；顶部天气胶囊卡已移除
+    /// v1.95 全屏天气动画（Apple 天气同款分层粒子）
+    /// 透明 Canvas 覆盖地图，不拦截任何手势；沉浸模式与巡航模式暂停（省电、不挡视野）
     private var weatherFX: some View {
         Group {
             if let code = model.weatherCode {
-                let isRain = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].contains(code)
-                let isSnow = [71, 73, 75, 77, 85, 86].contains(code)
-                if isRain || isSnow {
-                    // v1.87 浅色外观用深蓝（浅色地图上更明显），深色外观用白
-                    let fxBase: Color = colorScheme == .light ? Color(red: 0.10, green: 0.28, blue: 0.60) : .white
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
-                        Canvas { ctx, size in
-                            let t = tl.date.timeIntervalSinceReferenceDate
-                            if isRain {
-                                drawRainFX(ctx: ctx, size: size, t: t, base: fxBase)
-                            } else {
-                                drawSnowFX(ctx: ctx, size: size, t: t, base: fxBase)
-                            }
-                        }
-                    }
-                    .allowsHitTesting(false)
-                }
+                WeatherOverlay(code: code, lightMode: colorScheme == .light)
             }
-        }
-    }
-
-    /// 确定性伪随机 [0,1)，粒子用（无状态，直接按索引哈希）
-    private func fxHash(_ i: Int) -> Double {
-        let x = Double(i) * 0.6180339887498948
-        return x - floor(x)
-    }
-
-    /// 雨丝：斜向短直线匀速下落
-    /// v1.87 降速（260~560 px/s）+ 长短不一 + 倾角各异 + 透明度随机 + 轻微横漂
-    /// v1.90 高德同款：向右下统一斜落（斜率 0.15~0.28）、密度 170 条、线宽 0.8~1.5、
-    /// 长度 22~40、透明度 0.35~0.60、速度 300~520 px/s
-    private func drawRainFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval, base: Color) {
-        let n = 170
-        for i in 0..<n {
-            let r1 = fxHash(i)
-            let r2 = fxHash(i + 500)
-            let r3 = fxHash(i + 900)
-            let r4 = fxHash(i + 1300)
-            let x0 = r1 * size.width
-            let speed = 300 + r2 * 220
-            let y = (t * speed + r2 * 9000).truncatingRemainder(dividingBy: size.height + 260) - 130
-            // 长度（22~40）、倾角（0.15~0.28，向右下）、透明度（0.35~0.60）
-            let len = 22 + r3 * 18
-            let slope = 0.15 + r4 * 0.13
-            let sway = sin(t * 1.6 + r2 * 6.28318) * 4
-            let x = x0 + sway + y * slope
-            var p = Path()
-            p.move(to: CGPoint(x: x, y: y))
-            p.addLine(to: CGPoint(x: x + len * slope, y: y + len))
-            ctx.stroke(p, with: .color(base.opacity(0.35 + r1 * 0.25)), lineWidth: 0.8 + r2 * 0.7)
-        }
-    }
-
-    /// 雪花：小圆点，下落 + 横向摆动（v1.87 颜色随外观模式，浅色背景用深色点）
-    private func drawSnowFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval, base: Color) {
-        let n = 90
-        for i in 0..<n {
-            let r1 = fxHash(i)
-            let r2 = fxHash(i + 300)
-            let x0 = r1 * size.width
-            let speed = 50 + r2 * 70
-            let y = (t * speed + r2 * 4000).truncatingRemainder(dividingBy: size.height + 140) - 70
-            let sway = sin(t * 1.3 + r2 * 6.28318) * 26
-            let x = (x0 + sway + size.width).truncatingRemainder(dividingBy: size.width)
-            let d = 1.6 + r1 * 2.4
-            ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: d, height: d)),
-                     with: .color(base.opacity(colorScheme == .light ? 0.60 : 0.82)))
         }
     }
 
@@ -886,7 +837,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.94")
+                        Text("v1.95")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -956,7 +907,12 @@ struct ContentView: View {
         // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
             if !model.navigating && !model.cruiseMode {
-                if let t = tipCard {
+                if let tp = tapPlace {
+                    // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
+                    DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+                                   deleteLabel: "关闭",
+                                   onSwipeLeft: { closeTapPlace() }) { tapPlaceCard(tp) }
+                } else if let t = tipCard {
                     DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
@@ -974,7 +930,7 @@ struct ContentView: View {
                     }
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
-                if tipCard == nil && model.routeChoices.isEmpty {
+                if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { bottomMainCard }
                 }
             } else {
@@ -991,6 +947,195 @@ struct ContentView: View {
         tipRoad = nil
         tipAoiName = nil
         tipPolygon = nil
+    }
+
+    // MARK: - v1.95 轻点地图 → 地点介绍卡
+
+    /// 关闭地点介绍卡
+    private func closeTapPlace() {
+        tapPlace = nil
+    }
+
+    /// 轻点地图：先用本地标签兜底出卡（不等网络），再异步替换为高德解析结果
+    private func showTapPlace(_ coord: CLLocationCoordinate2D) {
+        haptic()
+        let lat = coord.latitude
+        let lon = coord.longitude
+        let seed = placeNameNear(coord)
+        tapPlace = TapPlaceInfo(lat: lat, lon: lon, name: seed, loading: true)
+        Task {
+            let info = await model.amapTapPlace(lat: lat, lon: lon)
+            guard var cur = tapPlace, cur.lat == lat, cur.lon == lon else { return }
+            if let info = info {
+                cur.name = info.name.isEmpty ? seed : info.name
+                cur.address = info.address
+                cur.poiType = info.type
+                cur.road = info.road
+            }
+            cur.loading = false
+            tapPlace = cur
+        }
+    }
+
+    /// 地点介绍卡：名称 / 类型 / 地址 / 距离 / 收藏·搜周边·标记·分享 / 导航
+    private func tapPlaceCard(_ p: TapPlaceInfo) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                    Image(systemName: p.icon)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.blue)
+                }
+                .frame(width: 38, height: 38)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(p.name)
+                            .font(.headline)
+                            .lineLimit(1)
+                        if p.loading {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                    if !p.poiType.isEmpty {
+                        Text(p.poiType)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else if p.loading {
+                        Text("正在解析地点…")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button {
+                    haptic()
+                    closeTapPlace()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !p.address.isEmpty {
+                Text(p.address)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 12) {
+                if let d = distText(p.lat, p.lon) {
+                    Label(d, systemImage: "location.fill")
+                }
+                if let mins = motoMinutes(p.lat, p.lon) {
+                    Label("摩托约\(mins)分钟", systemImage: "clock.fill")
+                }
+                if !p.road.isEmpty {
+                    Label(p.road, systemImage: "road.lanes").lineLimit(1)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Divider()
+                .padding(.vertical, 2)
+
+            HStack(spacing: 6) {
+                Button {
+                    haptic()
+                    model.toggleTipFavorite(name: p.name, lat: p.lat, lon: p.lon)
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: model.isTipFavorite(lat: p.lat, lon: p.lon) ? "star.fill" : "star")
+                            .font(.title3)
+                            .foregroundStyle(model.isTipFavorite(lat: p.lat, lon: p.lon) ? .orange : .primary)
+                        Text("收藏")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    haptic()
+                    let tip = AppModel.AmapTip(name: p.name, sub: p.road, lat: p.lat, lon: p.lon)
+                    closeTapPlace()
+                    aroundSearch(tip)
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.title3)
+                        Text("搜周边")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    haptic()
+                    pendingMarkCoord = p.coordinate
+                    markName = p.name
+                    showMarkNameAlert = true
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.title3)
+                        Text("标记")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+
+                ShareLink(item: "\(p.name) \(p.address)\n坐标 \(String(format: "%.6f,%.6f", p.lat, p.lon))") {
+                    VStack(spacing: 2) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.title3)
+                        Text("分享")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button {
+                    haptic()
+                    let name = p.name
+                    let lat = p.lat
+                    let lon = p.lon
+                    closeTapPlace()
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: true)
+                } label: {
+                    Text("导航")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                        .frame(width: 76, height: 40)
+                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.black.opacity(0.06))
+        )
+        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .padding(.horizontal, 16)
     }
 
     /// v1.81.3 左滑关闭路线规划卡（清掉路线方案，搜索主卡自动恢复）
@@ -1922,6 +2067,7 @@ struct ContentView: View {
     /// v1.81 点击联想地点主体 / 长按地图地点名：地图定位 + 北向上 + 底部地点信息卡
     /// 注：不画黄圈高亮、不做路线规划（点卡片"路线"按钮才规划），仅地图居中 + 北向上
     private func showTipCard(name: String, lat: Double, lon: Double, sub: String) {
+        tapPlace = nil
         tipCard = AppModel.AmapTip(name: name, sub: sub, lat: lat, lon: lon)
         tipRoad = nil
         tipAoiName = nil

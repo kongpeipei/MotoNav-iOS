@@ -1661,6 +1661,51 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// v1.95 轻点地图：逆地理编码取地点名称/地址/类型（地点介绍卡数据源）
+    /// 与 amapRegeoInfo 的区别是在同一请求里额外解析 pois[]，用来给出"这是什么地方"而不是只给道路名
+    func amapTapPlace(lat: Double, lon: Double) async -> (name: String, address: String, type: String, road: String)? {
+        guard !amapKey.isEmpty else { return nil }
+        let loc = String(format: "%.6f,%.6f", lon, lat)
+        let urlStr = "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=all&radius=150&roadlevel=0"
+        guard let url = URL(string: urlStr) else { return nil }
+        do {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 8
+            let (data, _) = try await URLSession.shared.data(for: req)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let re = obj["regeocode"] as? [String: Any] else { return nil }
+
+            let addr = re["formatted_address"] as? String ?? ""
+
+            // 优先取最近 POI（高德按距离升序返回），没有再退到 AOI（小区/园区）
+            var name = ""
+            var typeName = ""
+            if let pois = re["pois"] as? [[String: Any]], let first = pois.first {
+                name = (first["name"] as? String) ?? ""
+                let raw = (first["type"] as? String) ?? ""
+                typeName = raw.split(separator: ";").last.map(String.init) ?? raw
+            }
+            if name.isEmpty, let aois = re["aois"] as? [[String: Any]], let a0 = aois.first {
+                let n = (a0["name"] as? String) ?? ""
+                if !n.isEmpty {
+                    name = n
+                    let raw = (a0["type"] as? String) ?? ""
+                    typeName = raw.split(separator: ";").last.map(String.init) ?? raw
+                }
+            }
+            if name.isEmpty && addr.isEmpty { return nil }
+
+            var road = ""
+            if let rs = re["roads"] as? [[String: Any]], let r0 = rs.first,
+               let n = r0["name"] as? String, !n.isEmpty {
+                road = n
+            }
+            return (name.isEmpty ? "地图选点" : name, addr, typeName, road)
+        } catch {
+            return nil
+        }
+    }
+
     /// 规划到任意目的地并高亮沿途抓拍点位（起点/终点自动吸附到最近道路出入口）
     func planRoute(to name: String, lat: Double, lon: Double) {
         guard let start = currentLocation else {

@@ -88,3 +88,40 @@ extension CLLocationCoordinate2D: Equatable {
         l.latitude == r.latitude && l.longitude == r.longitude
     }
 }
+
+/// 轻点地图后的地点介绍卡数据（高德逆地理编码结果）
+/// name/address/poiType 三个字段在解析完成前用本地标签兜底，loading 期间卡片显示骨架
+struct TapPlaceInfo: Identifiable, Equatable {
+    let lat: Double
+    let lon: Double
+    var name: String
+    var address: String = ""
+    /// 高德 POI 类型，已取末级（如「商务住宅;住宅区;住宅小区」→「住宅小区」）
+    var poiType: String = ""
+    var road: String = ""
+    var loading: Bool = false
+
+    var id: String { "\(lat),\(lon)" }
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    /// 类型 → SF Symbol（卡片左上角图标）
+    var icon: String {
+        let t = poiType + " " + name
+        func has(_ keys: [String]) -> Bool { keys.contains { t.contains($0) } }
+        if has(["餐饮", "美食", "餐厅", "小吃", "咖啡", "茶", "快餐", "面馆", "火锅"]) { return "fork.knife" }
+        if has(["购物", "商场", "超市", "便利店", "市场", "数码", "烟酒"]) { return "cart.fill" }
+        if has(["学校", "教育", "大学", "中学", "小学", "幼儿园", "培训"]) { return "graduationcap.fill" }
+        if has(["医院", "医疗", "诊所", "药房", "药店", "卫生"]) { return "cross.case.fill" }
+        if has(["住宿", "酒店", "宾馆", "旅馆", "民宿"]) { return "bed.double.fill" }
+        if has(["交通", "地铁", "公交", "车站", "停车场", "加油站", "充电"]) { return "car.fill" }
+        if has(["银行", "金融", "ATM", "信用社"]) { return "banknote.fill" }
+        if has(["公园", "景点", "风景", "绿地", "广场", "寺", "塔"]) { return "leaf.fill" }
+        if has(["公司", "写字楼", "产业园", "工厂", "企业", "大厦"]) { return "building.2.fill" }
+        if has(["住宅", "小区", "公寓", "花园", "村", "苑"]) { return "house.fill" }
+        if has(["道路", "路", "街", "巷", "桥", "隧道"]) { return "road.lanes" }
+        return "mappin.circle.fill"
+    }
+}
