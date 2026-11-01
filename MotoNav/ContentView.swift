@@ -853,7 +853,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.87")
+                        Text("v1.88")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1225,6 +1225,16 @@ struct ContentView: View {
         }
     }
 
+    /// v1.87 用时格式化：<60秒"1分钟内"，<60分钟"x 分钟"，≥60分钟"x 小时y 分钟"（不出现"100分钟"）
+    private func durationTxt(_ sec: Int) -> String {
+        if sec < 60 { return "1分钟内" }
+        let m = sec / 60
+        if m < 60 { return "\(m) 分钟" }
+        let h = m / 60
+        let rm = m % 60
+        return rm == 0 ? "\(h) 小时" : "\(h) 小时\(rm) 分钟"
+    }
+
     /// 单张高德式方案卡：大分钟 + 里程·抓拍 + 标签，选中蓝框高亮
     private func routeChoiceCard(_ c: RouteChoice, selected: Bool) -> some View {
         let sel = selected
@@ -1232,7 +1242,7 @@ struct ContentView: View {
             ? "\(c.distanceM)米"
             : String(format: "%.1f公里", Double(c.distanceM) / 1000.0)
         return VStack(alignment: .leading, spacing: 3) {
-            Text(c.durationS < 60 ? "1分钟内" : "\(c.durationS / 60) 分钟")
+            Text(durationTxt(c.durationS))
                 .font(.system(size: 17, weight: .heavy))
                 .foregroundStyle(.primary)
             Text("\(distTxt) · 抓拍\(c.poiCount)")
@@ -1389,7 +1399,7 @@ struct ContentView: View {
                                 .foregroundStyle(.white.opacity(0.8))
                         }
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("\(max(ns.remainS, 0) / 60) 分钟")
+                            Text(durationTxt(max(ns.remainS, 0)))
                                 .font(.system(size: 24, weight: .heavy))
                                 .foregroundStyle(.white)
                             Text("剩余时间")
@@ -1513,7 +1523,7 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title3)
-                                .foregroundStyle(.black.opacity(0.45))
+                                .foregroundStyle(colorScheme == .light ? .black.opacity(0.45) : .white.opacity(0.7))
                                 .padding(.horizontal, 10)
                         }
                         .buttonStyle(.plain)
@@ -1533,7 +1543,7 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(.black.opacity(0.7))
+                                .foregroundStyle(colorScheme == .light ? .black.opacity(0.7) : .white.opacity(0.85))
                                 .padding(.horizontal, 12)
                         }
                         .buttonStyle(.plain)
@@ -1542,14 +1552,16 @@ struct ContentView: View {
                     HStack {
                         Text("预计 \(arriveTxt) 到达")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(colorScheme == .light ? .secondary : .white.opacity(0.7))
                         Spacer()
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
                     .padding(.vertical, 12)
-                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
-                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                    // v1.87 深色模式退出卡纯黑底（浅色模式保持白底）
+                    .background(colorScheme == .light ? Color(.systemBackground).opacity(0.97) : Color.black.opacity(0.94), in: RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
+                        colorScheme == .light ? Color.black.opacity(0.08) : Color.white.opacity(0.16), lineWidth: 1))
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                     .padding(.horizontal, 14)
                 }
@@ -1667,15 +1679,15 @@ struct ContentView: View {
         .padding(.horizontal, 14)
     }
 
-    /// 退出导航状态卡单格（大字+小标签，白底黑字；v1.85 字号随卡片放大）
+    /// 退出导航状态卡单格（大字+小标签；v1.85 字号随卡片放大，v1.87 深色模式白字）
     private func exitStatusCell(_ big: String, _ small: String) -> some View {
         VStack(spacing: 2) {
             Text(big)
                 .font(.system(size: 28, weight: .heavy))
-                .foregroundStyle(.black)
+                .foregroundStyle(colorScheme == .light ? .black : .white)
             Text(small)
                 .font(.caption)
-                .foregroundStyle(.black.opacity(0.55))
+                .foregroundStyle(colorScheme == .light ? .black.opacity(0.55) : .white.opacity(0.7))
         }
         .frame(minWidth: 0, maxWidth: .infinity)
     }
