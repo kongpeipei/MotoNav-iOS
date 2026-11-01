@@ -6,6 +6,24 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A10000000000000000000030 /* MotoNavWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001F /* MotoNavWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A10000000000000000000031 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10000000000000000000030 /* MotoNavWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		A10000000000000000000010 /* MotoNav.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MotoNav.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000000000000000000001F /* MotoNavWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MotoNavWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -78,6 +96,7 @@
 				A10000000000000000000017 /* Sources */,
 				A10000000000000000000012 /* Frameworks */,
 				A10000000000000000000018 /* Resources */,
+				A10000000000000000000031 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
@@ -331,7 +350,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.92;
+				MARKETING_VERSION = 1.93;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -358,7 +377,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.92;
+				MARKETING_VERSION = 1.93;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -382,7 +401,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.92;
+				MARKETING_VERSION = 1.93;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.ios.Widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -406,7 +425,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.92;
+				MARKETING_VERSION = 1.93;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.ios.Widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

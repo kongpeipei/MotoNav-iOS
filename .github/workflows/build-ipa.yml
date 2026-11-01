@@ -310,7 +310,25 @@ jobs:
 
           APP=$(unzip -Z1 "$OUT" | grep -E '^Payload/[^/]+\.app/$' | head -1)
           echo "== 主 App: $APP =="
-          unzip -Z1 "$OUT" | grep -E "^${APP}PlugIns/" | head -10 || echo "  (无 PlugIns)"
+          PLUGINS=$(unzip -Z1 "$OUT" | grep -E "^${APP}PlugIns/" | head -10 || true)
+          if [ -z "$PLUGINS" ]; then
+            echo "!! 包里没有 PlugIns/，Widget 扩展缺失（Live Activity 会失效）"
+            unzip -Z1 "$OUT" | head -20
+            exit 1
+          fi
+          echo "$PLUGINS"
+          # 扩展必须存在且声明 widgetkit 扩展点，否则装机后灵动岛/锁屏不显示
+          unzip -Z1 "$OUT" | grep -q "PlugIns/MotoNavWidget.appex/Info.plist" || {
+            echo "!! PlugIns 中缺少 MotoNavWidget.appex"; unzip -Z1 "$OUT" | grep PlugIns; exit 1; }
+          unzip -p "$OUT" "${APP}PlugIns/MotoNavWidget.appex/Info.plist" > /tmp/appex.plist
+          EXT_POINT=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' /tmp/appex.plist 2>/dev/null || echo '-')
+          EXT_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /tmp/appex.plist 2>/dev/null || echo '-')
+          echo "  appex: $EXT_ID / 扩展点=$EXT_POINT"
+          [ "$EXT_POINT" = "com.apple.widgetkit-extension" ] || { echo "!! 扩展点异常: $EXT_POINT"; exit 1; }
+          case "$EXT_ID" in
+            com.motonav.app.ios.*) echo "  扩展 BundleID 前缀正确" ;;
+            *) echo "!! 扩展 BundleID 不是主应用 ID 的子标识: $EXT_ID"; exit 1 ;;
+          esac
           echo "== 大小 =="; ls -lh "$OUT"
           shasum -a 256 "$OUT" | tee "$OUT.sha256"
 
