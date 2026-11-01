@@ -882,7 +882,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.90")
+                        Text("v1.91")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
