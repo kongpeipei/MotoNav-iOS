@@ -408,9 +408,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// v1.81 高德周边搜索（信息卡"搜周边"）：以该点为中心返回附近 POI
+    /// v1.98 坐标口径统一：入参/返回都是 WGS-84（地图网格），高德接口前后各转一次
     func placeAround(lat: Double, lon: Double) async -> [AmapTip] {
         guard !amapKey.isEmpty else { return [] }
-        let loc = "\(lon),\(lat)"
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
+        let loc = String(format: "%.6f,%.6f", glon, glat)
         guard let url = URL(string: "https://restapi.amap.com/v3/place/around?key=\(amapKey)&location=\(loc)&radius=5000&offset=15&page=1") else { return [] }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -422,11 +424,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                       let loc2 = p["location"] as? String, !loc2.isEmpty else { continue }
                 let parts = loc2.split(separator: ",").compactMap { Double($0) }
                 guard parts.count == 2 else { continue }
+                let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
                 let addr = p["address"] as? String ?? ""
                 let dist = p["distance"] as? String ?? ""
                 var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
                 if !dist.isEmpty { sub += " · 距此\(Int(Double(dist) ?? 0))米" }
-                out.append(AmapTip(name: name, sub: sub, lat: parts[1], lon: parts[0]))
+                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
             }
             return out
         } catch {
@@ -1696,7 +1699,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 if !addr.isEmpty { sub += addr }
                 if !district.isEmpty { sub += (sub.isEmpty ? "" : " · ") + district }
                 if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
-                out.append(AmapTip(name: name, sub: sub, lat: parts[1], lon: parts[0]))
+                // v1.98 高德给的是 GCJ-02，转 WGS 后与地图/路线同一口径（否则点搜索结果会偏 500 米）
+                let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
             }
             return Array(out.prefix(20))
         } catch {
@@ -1726,7 +1731,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v1.81 高德逆地理：道路描述 + 区域（AOI）名称与多边形（extensions=all）
     func amapRegeoInfo(lat: Double, lon: Double) async -> (road: String?, aoiName: String?, polygon: [CLLocationCoordinate2D]?) {
         guard !amapKey.isEmpty else { return (nil, nil, nil) }
-        let loc = "\(lon),\(lat)"
+        // v1.98 入参 WGS-84 → 高德要 GCJ-02；AOI 多边形返回后转回 WGS 再画
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
+        let loc = String(format: "%.6f,%.6f", glon, glat)
         guard let url = URL(string: "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=all") else { return (nil, nil, nil) }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
@@ -1758,7 +1765,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     for pair in poly.split(separator: ";") {
                         let parts = pair.split(separator: ",").compactMap { Double($0) }
                         if parts.count == 2 {
-                            pts.append(CLLocationCoordinate2D(latitude: parts[1], longitude: parts[0]))
+                            let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+                            pts.append(CLLocationCoordinate2D(latitude: wlat, longitude: wlon))
                         }
                     }
                     if pts.count > bestCount {
@@ -1778,11 +1786,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 与 amapRegeoInfo 的区别是在同一请求里额外解析 pois[]，用来给出"这是什么地方"而不是只给道路名
     func amapTapPlace(lat: Double, lon: Double) async -> (name: String, address: String, type: String, road: String)? {
         guard !amapKey.isEmpty else { return nil }
-        // v1.96 入参是系统定位/MKMapView 的 WGS-84，高德接口要 GCJ-02，
-        // 不转换会解析到偏 500 米外的另一个地点（名字和地址都会错）
+        // v1.98 入参是地图/定位的 WGS-84，高德接口要 GCJ-02，请求前转换
         let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
         let loc = String(format: "%.6f,%.6f", glon, glat)
-        let urlStr = "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=all&radius=150&roadlevel=0"
+        let urlStr = "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=all&radius=200&roadlevel=0"
         guard let url = URL(string: urlStr) else { return nil }
         do {
             var req = URLRequest(url: url)
@@ -1793,13 +1800,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
             let addr = re["formatted_address"] as? String ?? ""
 
-            // 优先取最近 POI（高德按距离升序返回），没有再退到 AOI（小区/园区）
+            // v1.98 名称取"离点击点最近"的 POI（高德 pois[].distance 单位米），
+            // 超过 120 米就不用它——否则点了 A 地，卡片会显示旁边 B 店的名字
             var name = ""
             var typeName = ""
-            if let pois = re["pois"] as? [[String: Any]], let first = pois.first {
-                name = (first["name"] as? String) ?? ""
-                let raw = (first["type"] as? String) ?? ""
-                typeName = raw.split(separator: ";").last.map(String.init) ?? raw
+            if let pois = re["pois"] as? [[String: Any]] {
+                let sorted = pois.compactMap { p -> (String, String, Double)? in
+                    guard let n = p["name"] as? String, !n.isEmpty else { return nil }
+                    let raw = (p["type"] as? String) ?? ""
+                    let t = raw.split(separator: ";").last.map(String.init) ?? raw
+                    let d = Double((p["distance"] as? String) ?? "9999") ?? 9999
+                    return (n, t, d)
+                }.sorted { $0.2 < $1.2 }
+                if let best = sorted.first, best.2 <= 120 {
+                    name = best.0
+                    typeName = best.1
+                }
             }
             if name.isEmpty, let aois = re["aois"] as? [[String: Any]], let a0 = aois.first {
                 let n = (a0["name"] as? String) ?? ""
@@ -1812,9 +1828,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if name.isEmpty && addr.isEmpty { return nil }
 
             var road = ""
-            if let rs = re["roads"] as? [[String: Any]], let r0 = rs.first,
-               let n = r0["name"] as? String, !n.isEmpty {
-                road = n
+            if let rs = re["roads"] as? [[String: Any]] {
+                // 多条道路时取最近的一条（高德按距离升序返回 roads）
+                for r in rs {
+                    if let n = r["name"] as? String, !n.isEmpty { road = n; break }
+                }
             }
             return (name.isEmpty ? "地图选点" : name, addr, typeName, road)
         } catch {
@@ -1834,25 +1852,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let from = start
         let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            // 起点=当前定位点（蓝箭头，不吸附，避免起点偏移）；终点吸附到最近可通行出入口（失败回退原坐标）
-            async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
-            let e = await eSnap
-            let from2 = from
-            let end2 = e ?? rawEnd
-            let r = await RouteFetcher.fetch(from: from2, to: end2)
-            if let r = r {
+            // v1.98 与 fetchRouteChoices 对齐：直接用高德多方案（不再走 OSRM 吸附），
+            // 取推荐方案作为当前路线，方案列表一并保留供切换
+            let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey)
+            if let r = choices.first {
+                if choices.count > 1 {
+                    routeChoices = choices.map { c -> RouteChoice in
+                        RouteChoice(points: c.points, distanceM: c.distanceM, durationS: c.durationS,
+                                    turns: c.turns, label: c.label, poiCount: nearbyPoisOnRoute(c.points).count)
+                    }
+                    selectedRouteIdx = 0
+                }
                 route = r.points
                 routeTurns = r.turns
                 routeDistanceM = r.distanceM
                 routeDurationS = r.durationS
                 lastTurnSpoken = -1
-        farAnnounced.removeAll()
+                farAnnounced.removeAll()
                 let near = nearbyPoisOnRoute(r.points)
                 routePois = near
                 fitTick += 1
                 status = routeSummary(name, distanceM: r.distanceM, durationS: r.durationS, poiCount: near.count)
             } else {
-                fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon)
+                fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon)
             }
         }
     }
@@ -1923,22 +1945,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let from = start
         let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
-            // v1.65：起点也吸附到最近车辆出入口，并用步行路线连接当前位置→出入口（GPS在小区/停车场时路线不再悬空）
-            async let sSnap = RouteFetcher.nearest(lat: from.latitude, lon: from.longitude)
-            async let eSnap = RouteFetcher.nearest(lat: rawEnd.latitude, lon: rawEnd.longitude)
-            let s = await sSnap
-            let e = await eSnap
-            let walkLeg = await RouteFetcher.walkPoints(from: from, to: s ?? from)
-            let from2 = s ?? from
-            let end2 = e ?? rawEnd
-            let choices = await RouteFetcher.fetchAll(from: from2, to: end2, amapKey: amapKey)
+            // v1.98 不再用 OSRM 做起点吸附/步行连接：OSM 路网与高德底图不同源，
+            // 吸附点常落到高德认不出的路上，表现为"路线起点悬空、整条线压不到路"。
+            // 高德规划接口本身会把起终点吸附到可通行道路，直接传原始坐标最稳。
+            let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey)
             if choices.isEmpty {
-                fallbackStraightLine(from: from2, to: end2, name: name, lat: lat, lon: lon, walkLeg: walkLeg)
+                fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon, walkLeg: [])
             } else {
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
                 let list = choices.map { c -> RouteChoice in
                     let n = nearbyPoisOnRoute(c.points).count
-                    return RouteChoice(points: walkLeg + c.points, distanceM: c.distanceM,
+                    return RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
                                        label: c.label, poiCount: n)
                 }
@@ -2105,13 +2122,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "路线已重新规划，请按新路线行驶"
         guard let start = currentLocation else { return }
         Task {
-            // 重规划起点=当前定位点（蓝箭头），终点仍吸附最近出入口
-            let from2 = start
-            let end2 = await RouteFetcher.nearest(lat: destLat, lon: destLon) ??
-                CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
-            if let r = await RouteFetcher.fetch(
-                from: from2,
-                to: end2) {
+            // v1.98 偏航重规划也走高德（与规划同源），不再用 OSRM 吸附终点
+            let dest = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
+            let choices = await RouteFetcher.fetchAll(from: start, to: dest, amapKey: amapKey)
+            if let r = choices.first {
                 route = r.points
                 routeTurns = r.turns
                 routeDistanceM = r.distanceM

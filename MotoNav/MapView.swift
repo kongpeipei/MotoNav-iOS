@@ -50,6 +50,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
     /// 轻点地图空白处选点（显示"导航到这里"）
     var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+    /// v1.98 轻点地图上的备选路线 → 切换为该方案
+    var onRouteChoiceTap: ((Int) -> Void)?
     /// v1.63 极简模式：隐藏兴趣点/地名/类别标注（高德导航"极简"）
     let minimal: Bool
     /// v1.69 地图重载计数（加载失败重试 +1，触发瓦片强制重绘）
@@ -84,6 +86,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
         tap.delegate = context.coordinator
         map.addGestureRecognizer(tap)
+        // v1.98 双击地图放大（以双击点为锚点），并让单击等双击失败再响应，
+        // 否则双击的第一下会被当成轻点 → 弹出地点卡/隐藏界面
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.delegate = context.coordinator
+        map.addGestureRecognizer(doubleTap)
+        tap.require(toFail: doubleTap)
         return map
     }
 
@@ -96,6 +105,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPlaceLongPress = onPlaceLongPress
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
+        context.coordinator.onRouteChoiceTap = onRouteChoiceTap
+        context.coordinator.choiceRoutes = choiceRoutes
+        context.coordinator.selectedRouteIdx = selectedRouteIdx
+        context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
         context.coordinator.onMapLoad = onMapLoad
         // v1.69 地图加载失败重试（v1.78：移除重插瓦片 overlay 强制重绘）
         if reloadTick != context.coordinator.lastReloadTick {
@@ -400,30 +413,20 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.amapRenderer?.dark = isNav
         }
         // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
+        // v1.98 修复"点 +/- 没反应"：跟随模式（.follow/.followWithHeading）下 MapKit 会
+        // 立刻把镜头拉回定位点，setRegion 被覆盖；先退出跟随再缩放
         if zoomInTick != context.coordinator.lastZoomInTick {
             context.coordinator.lastZoomInTick = zoomInTick
             if zoomInTick > 0 {
                 let reg = map.region
-                context.coordinator.setRegionProgrammatically {
-                    map.setRegion(MKCoordinateRegion(
-                        center: reg.center,
-                        span: MKCoordinateSpan(latitudeDelta: reg.span.latitudeDelta * 0.5,
-                                               longitudeDelta: reg.span.longitudeDelta * 0.5)),
-                        animated: true)
-                }
+                context.coordinator.zoom(map, by: 0.5, center: reg.center)
             }
         }
         if zoomOutTick != context.coordinator.lastZoomOutTick {
             context.coordinator.lastZoomOutTick = zoomOutTick
             if zoomOutTick > 0 {
                 let reg = map.region
-                context.coordinator.setRegionProgrammatically {
-                    map.setRegion(MKCoordinateRegion(
-                        center: reg.center,
-                        span: MKCoordinateSpan(latitudeDelta: reg.span.latitudeDelta * 2.0,
-                                               longitudeDelta: reg.span.longitudeDelta * 2.0)),
-                        animated: true)
-                }
+                context.coordinator.zoom(map, by: 2.0, center: reg.center)
             }
         }
     }
@@ -443,6 +446,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPlaceLongPress: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+        /// v1.98 备选路线点击切换
+        var onRouteChoiceTap: ((Int) -> Void)?
+        var choiceRoutes: [[CLLocationCoordinate2D]] = []
+        var selectedRouteIdx = 0
+        /// v1.98 规划态：此时轻点地图任何位置（含地名标签）都应退出规划回首页
+        var planning = false
         /// v1.69 地图加载回调（MKMapView 渲染完成/失败）
         var onMapLoad: ((Bool, String) -> Void)?
         /// v1.69 重载计数记忆
@@ -491,6 +500,30 @@ struct MapViewRepresentable: UIViewRepresentable {
         func setRegionProgrammatically(_ block: () -> Void) {
             programmaticMove = true
             block()
+        }
+
+        /// v1.98 统一缩放入口：先脱离跟随（否则 MapKit 会立刻回中，表现为按钮点了没反应）
+        func zoom(_ map: MKMapView, by factor: Double, center: CLLocationCoordinate2D) {
+            if map.userTrackingMode != .none {
+                map.setUserTrackingMode(.none, animated: false)
+            }
+            userMoved = true
+            let span = map.region.span
+            let lat = min(89.0, max(0.0005, span.latitudeDelta * factor))
+            let lon = min(179.0, max(0.0005, span.longitudeDelta * factor))
+            setRegionProgrammatically {
+                map.setRegion(MKCoordinateRegion(center: center,
+                                                 span: MKCoordinateSpan(latitudeDelta: lat, longitudeDelta: lon)),
+                              animated: true)
+            }
+        }
+
+        /// v1.98 双击地图放大：以双击位置为中心，缩放步长比点按钮略缓（2 倍 → 0.55 倍跨度）
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended, let map = gesture.view as? MKMapView else { return }
+            let pt = gesture.location(in: map)
+            let center = map.convert(pt, toCoordinateFrom: map)
+            zoom(map, by: 0.55, center: center)
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -590,6 +623,25 @@ struct MapViewRepresentable: UIViewRepresentable {
                     hit = a
                 }
             }
+            // v1.98 先判断是否点到备选路线（屏幕 28pt 内）→ 切换方案，和点方案卡等价
+            if choiceRoutes.count > 1 {
+                var bestIdx = -1
+                var bestD = CGFloat.greatestFiniteMagnitude
+                for (i, pts) in choiceRoutes.enumerated() where i != selectedRouteIdx && pts.count > 1 {
+                    let d = Self.pointDistance(pts, to: pt, in: map)
+                    if d < bestD { bestD = d; bestIdx = i }
+                }
+                if bestIdx >= 0, bestD <= 28 {
+                    onRouteChoiceTap?(bestIdx)
+                    return
+                }
+            }
+            let coord = map.convert(pt, toCoordinateFrom: map)
+            // v1.98 规划态：点地图任何位置（含地名标签）都退出规划回首页
+            if planning {
+                onMapTap?(coord)
+                return
+            }
             if let a = hit {
                 // 地点名文字 → 地点介绍卡；类别结果 → 直接规划路线
                 if let pla = a as? PlaceAnnotation {
@@ -600,8 +652,32 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // 其它标注（拍照点位/起终点/加油站）维持原样：吞掉点击，不当作空白
                 return
             }
-            let coord = map.convert(pt, toCoordinateFrom: map)
             onMapTap?(coord)
+        }
+
+        /// 点到折线的最短屏幕距离（每 2 个点抽样，兼顾精度与开销）
+        static func pointDistance(_ pts: [CLLocationCoordinate2D], to p: CGPoint, in map: MKMapView) -> CGFloat {
+            guard pts.count > 1 else { return .greatestFiniteMagnitude }
+            var best = CGFloat.greatestFiniteMagnitude
+            var prev = map.convert(pts[0], toPointTo: map)
+            var i = 1
+            while i < pts.count {
+                let cur = map.convert(pts[i], toPointTo: map)
+                let d = segmentDistance(p, prev, cur)
+                if d < best { best = d }
+                prev = cur
+                i += 2
+            }
+            return best
+        }
+
+        static func segmentDistance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+            let dx = b.x - a.x, dy = b.y - a.y
+            let len2 = dx * dx + dy * dy
+            if len2 < 0.0001 { return hypot(p.x - a.x, p.y - a.y) }
+            var t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2
+            t = max(0, min(1, t))
+            return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
         }
 
         func gestureRecognizer(
@@ -907,6 +983,8 @@ final class AmapTileRenderer: MKOverlayRenderer {
     private static let zMin = 3, zMax = 19
     private let lock = NSLock()
     private var cache: [String: UIImage] = [:]
+    /// v1.98 屏幕瓦片 → 高德瓦片索引与像素偏移缓存（每块瓦片恒定，避免每帧重算三角函数）
+    private var offsetCache: [String: (gx: Int, gy: Int, dx: Double, dy: Double)] = [:]
     private var pending: Set<String> = []
     private var inflight = 0
     /// 夜间瓦片（导航中 style=8）
@@ -930,27 +1008,21 @@ final class AmapTileRenderer: MKOverlayRenderer {
         let y0 = max(0, Int(floor(mapRect.minY / per)))
         let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
         guard x1 >= x0, y1 >= y0 else { return }
-        // v1.67：未加载瓦片不绘制（透明）→ 露出下层苹果底图兜底，杜绝灰罩
-        // GCJ 偏移逐行近似（每行中心点算一次，瓦片内误差可忽略，省 20× 三角函数）
-        let lonMid = ((Double(x0) + Double(x1)) / 2.0 + 0.5) / Double(n) * 360.0 - 180.0
-        var rowGCJ: [Int: (gy: Int, lonDelta: Double)] = [:]
-        for y in y0...y1 {
-            let lat = tileLat(y, z)
-            let g = CoordConv.wgs2gcj(lat, lonMid)
-            rowGCJ[y] = (
-                min(n - 1, max(0, tileY(g.0, z))),
-                g.1 - lonMid
-            )
-        }
+        // v1.98 瓦片重投影修正：
+        // 屏幕按 WGS-84 网格切瓦片，高德瓦片内容却是 GCJ-02，两者相差约 500 米。
+        // 旧版只把"取瓦片的索引"做了偏移，却把图像对齐到原矩形，没算"瓦片内偏移"，
+        // 结果底图整体错位（最多一个瓦片宽），叠加的路线/标注因此永远压不到路上。
+        // 这里按每块瓦片中心的 GCJ 坐标算出它在 GCJ 瓦片内的像素偏移量，反向平移绘制。
         for x in x0...x1 {
-            let lon = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
+            let lonC = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
             for y in y0...y1 {
-                guard let r = rowGCJ[y] else { continue }
-                let gx = min(n - 1, max(0, Int(floor((lon + r.lonDelta + 180.0) / 360.0 * Double(n)))))
-                let gy = r.gy
+                let off = tileOffset(x: x, y: y, z: z, lonC: lonC)
+                let gx = off.gx, gy = off.gy
                 let key = "\(dark ? "n" : "d")-\(z)-\(gx)-\(gy)" // 深浅样式分开缓存，切换即时生效
-                let rect = self.rect(for: MKMapRect(x: Double(x) * per, y: Double(y) * per,
-                                                    width: per, height: per))
+                let rect = self.rect(for: MKMapRect(
+                    x: Double(x) * per - off.dx,
+                    y: Double(y) * per - off.dy,
+                    width: per, height: per))
                 lock.lock()
                 let hit = cache[key]
                 let needFetch = hit == nil && !pending.contains(key)
@@ -963,6 +1035,34 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 }
             }
         }
+    }
+
+    /// 单块屏幕瓦片 → 对应的高德 GCJ 瓦片索引 + 瓦片内像素偏移（世界坐标单位）
+    private func tileOffset(x: Int, y: Int, z: Int, lonC: Double) -> (gx: Int, gy: Int, dx: Double, dy: Double) {
+        let key = "\(z)-\(x)-\(y)"
+        lock.lock()
+        if let c = offsetCache[key] { lock.unlock(); return c }
+        lock.unlock()
+        let n = Double(1 << z)
+        let latC = tileLat(y, z)
+        let (gLat, gLon) = CoordConv.wgs2gcj(latC, lonC)
+        let gx = min(Int(n) - 1, max(0, Int(floor((gLon + 180.0) / 360.0 * n))))
+        let gy = min(Int(n) - 1, max(0, tileY(gLat, z)))
+        let wx = (gLon + 180.0) / 360.0 * MKMapRect.world.size.width
+        let wy = worldY(gLat) * MKMapRect.world.size.height
+        let res = (gx, gy, wx - Double(gx) * MKMapRect.world.size.width / n,
+                   wy - Double(gy) * MKMapRect.world.size.height / n)
+        lock.lock()
+        if offsetCache.count > 4000 { offsetCache.removeAll(keepingCapacity: true) }
+        offsetCache[key] = res
+        lock.unlock()
+        return res
+    }
+
+    /// 纬度 → 墨卡托归一化 y（0 顶部）
+    private func worldY(_ lat: Double) -> Double {
+        let r = lat / 180.0 * .pi
+        return (1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0
     }
 
     private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {

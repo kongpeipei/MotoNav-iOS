@@ -36,10 +36,18 @@ enum CoordConv {
         return (lat + dLat2, lon + dLon2)
     }
     /// GCJ-02 → WGS-84（高德接口返回后转换，用于苹果地图显示）
+    /// v1.98 改为迭代逼近：旧版一次性反解（lat*2-glat）误差 1~5 米，
+    /// 长路线累积后会出现"路线压不到路中心"的观感
     static func gcj2wgs(_ lat: Double, _ lon: Double) -> (Double, Double) {
         if outOfChina(lat, lon) { return (lat, lon) }
-        let (glat, glon) = wgs2gcj(lat, lon)
-        return (lat * 2 - glat, lon * 2 - glon)
+        var wlat = lat
+        var wlon = lon
+        for _ in 0..<3 {
+            let (glat, glon) = wgs2gcj(wlat, wlon)
+            wlat += lat - glat
+            wlon += lon - glon
+        }
+        return (wlat, wlon)
     }
 }
 
@@ -141,37 +149,44 @@ enum RouteFetcher {
     /// 获取多条路线方案，分配优点标签
     /// v1.26：增加请求超时与一次重试，公共实例不稳定时降低"直线降级"概率
     /// v1.57：优先使用高德路线规划API，失败回退OSRM
-    /// v1.82：高德多策略合并出多条不同路线；仍不足 2 条时用 OSRM alternatives 补充，保证"合理推荐多条并列出优势"
+    /// v1.98：全面改为高德多策略并发（0/1/2/3/4/5/6/8），按几何形状去重，
+    ///        不再混入 OSRM（OSM 路网与高德底图不同源，会画出"不在路上"的备选线）
     static func fetchAll(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
         amapKey: String = ""
     ) async -> [RouteChoice] {
         var result: [RouteChoice] = []
-        // 优先使用高德路线规划（多策略合并）
         if !amapKey.isEmpty {
             result = await fetchAmapDriving(from: start, to: end, key: amapKey)
         }
-        // v1.82 高德方案不足 4 条 → OSRM alternatives 补充（按距离差异去重，车道数据优先：
-        // 高德 v3 无车道字段，OSRM 方案的 lanes 更真实，切换备选方案可获得真实车道卡）
-        if result.count < 4 {
-            let osrm = await fetchOsrmChoices(from: start, to: end)
-            // 含真实车道的方案排在前面
-            let laneFirst = osrm.filter { $0.turns.contains { !$0.lanes.isEmpty } } + osrm
-            for o in laneFirst {
-                if result.count >= 4 { break }
-                let dup = result.contains { abs($0.distanceM - o.distanceM) < max(80, $0.distanceM / 40) }
-                if !dup { result.append(o) }
-            }
+        // 高德不可用（无 Key / 配额用尽 / 网络异常）时兜底 OSRM
+        if result.isEmpty {
+            result = await fetchOsrmChoices(from: start, to: end)
         }
-        // v1.84 路线质量过滤：剔除异常/绕路/折返乱窜的不可用方案（哪怕只剩 1 条推荐）
+        // 路线质量过滤：剔除异常/绕路/折返乱窜的不可用方案
         result = filterUsableChoices(result, from: start, to: end)
-        // 首条固定"推荐"（综合最优的第一方案）
+        // v1.98 标签重排：第一条固定"推荐"（用时最短），距离最短的一条标"距离最短"，
+        // 其余保留策略优势标签（少收费/躲避拥堵/不走高速），重复的退化为"备选"
         if !result.isEmpty {
-            let f = result[0]
-            result[0] = RouteChoice(points: f.points, distanceM: f.distanceM,
-                                    durationS: f.durationS, turns: f.turns,
-                                    label: "推荐", poiCount: 0)
+            let minDist = result.map(\.distanceM).min() ?? 0
+            var used = Set<String>()
+            var out: [RouteChoice] = []
+            for (i, c) in result.enumerated() {
+                var label = i == 0 ? "推荐" : c.label
+                if i > 0 {
+                    if c.distanceM == minDist && !used.contains("距离最短") {
+                        label = "距离最短"
+                    } else if used.contains(label) || label == "推荐" {
+                        label = "备选"
+                    }
+                }
+                used.insert(label)
+                out.append(RouteChoice(points: c.points, distanceM: c.distanceM,
+                                       durationS: c.durationS, turns: c.turns,
+                                       label: label, poiCount: c.poiCount))
+            }
+            result = out
         }
         return result
     }
@@ -245,51 +260,74 @@ enum RouteFetcher {
         return []
     }
 
-    /// 高德驾车路线规划API（v1.82 多策略合并：速度最快/距离最短 → 多条不同路线 + 真实优势标签；
-    /// 不足 2 条时再补少收费/躲避拥堵，控制请求数省配额——每次规划默认 2 次高德调用）
+    /// 高德驾车路线规划（v1.98 多策略并发）
+    /// 高德 v3 单次只回主方案，不同 strategy 会给出真正不同的备选（少收费/躲拥堵/不走高速…），
+    /// 并发取回后按几何形状去重，避免"策略不同但路线一样"的假备选。
     private static func fetchAmapDriving(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
         key: String
     ) async -> [RouteChoice] {
-        // v1.90 高德接口坐标是 GCJ-02：请求前把 WGS84（系统定位）起终点转成 GCJ，避免起终点位置偏移
+        // v1.98 坐标系：app 内地图/标注/OSM 数据都是 WGS-84（屏幕网格为 WGS 墨卡托），
+        // 高德接口收发都需要 GCJ-02 → 请求前 WGS→GCJ，返回后再 GCJ→WGS 绘制
         let (glat1, glon1) = CoordConv.wgs2gcj(start.latitude, start.longitude)
         let (glat2, glon2) = CoordConv.wgs2gcj(end.latitude, end.longitude)
-        let origin = "\(glon1),\(glat1)"
-        let destination = "\(glon2),\(glat2)"
-        // v3 strategy：0=速度最快, 1=距离最短, 2=少收费, 4=躲避拥堵
-        let primary: [(String, String)] = [("0", "推荐"), ("1", "最短")]
-        let extra: [(String, String)] = [("2", "少收费"), ("4", "少拥堵")]
-        var out: [RouteChoice] = []
-        for (st, label) in primary {
-            await fetchStrategy(origin: origin, destination: destination, key: key,
-                                st: st, label: label, out: &out)
-        }
-        // 主策略仍不足 2 条 → 补后两个策略
-        if out.count < 2 {
-            for (st, label) in extra {
-                await fetchStrategy(origin: origin, destination: destination, key: key,
-                                    st: st, label: label, out: &out)
+        let origin = String(format: "%.6f,%.6f", glon1, glat1)
+        let destination = String(format: "%.6f,%.6f", glon2, glat2)
+        // 策略：0 速度优先 / 1 费用优先 / 2 距离优先 / 4 躲避拥堵 / 6 不走高速
+        let strategies: [(String, String)] = [
+            ("0", "推荐"), ("1", "少收费"), ("2", "距离优先"),
+            ("4", "躲避拥堵"), ("6", "不走高速"),
+        ]
+        var all: [RouteChoice] = []
+        await withTaskGroup(of: [RouteChoice].self) { group in
+            for (st, label) in strategies {
+                group.addTask {
+                    await requestStrategy(origin: origin, destination: destination,
+                                          key: key, st: st, label: label)
+                }
             }
+            for await list in group { all.append(contentsOf: list) }
         }
-        return out
+        // 用时升序 → 几何去重（形状几乎一致视为同一条，保留用时更短者）
+        all.sort { $0.durationS < $1.durationS }
+        var unique: [RouteChoice] = []
+        for c in all {
+            if unique.contains(where: { sameShape($0.points, c.points) }) { continue }
+            unique.append(c)
+        }
+        return Array(unique.prefix(4))
     }
 
-    /// 单个 strategy 请求并去重合并（距离差异 >2% 视为不同路线）
-    private static func fetchStrategy(
+    /// 两条折线形状是否几乎一致（采样点平均偏差 < 70 米）
+    private static func sameShape(_ a: [CLLocationCoordinate2D],
+                                  _ b: [CLLocationCoordinate2D]) -> Bool {
+        guard a.count > 1, b.count > 1 else { return false }
+        let n = 16
+        var sum = 0.0
+        for i in 0..<n {
+            let p = a[min(a.count - 1, i * a.count / n)]
+            let q = b[min(b.count - 1, i * b.count / n)]
+            sum += CLLocation(latitude: p.latitude, longitude: p.longitude)
+                .distance(from: CLLocation(latitude: q.latitude, longitude: q.longitude))
+        }
+        return sum / Double(n) < 70
+    }
+
+    /// 单个 strategy 请求（返回该策略下所有候选 path）
+    private static func requestStrategy(
         origin: String, destination: String, key: String,
-        st: String, label: String, out: inout [RouteChoice]
-    ) async {
+        st: String, label: String
+    ) async -> [RouteChoice] {
         let urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=\(st)"
-        guard let url = URL(string: urlStr),
-              let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let url = URL(string: urlStr) else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let route = obj["route"] as? [String: Any],
-              let paths = route["paths"] as? [[String: Any]],
-              let first = paths.first,
-              let rc = parseAmapPath(first, label: label) else { return }
-        let dup = out.contains { abs($0.distanceM - rc.distanceM) < max(50, rc.distanceM / 50) }
-        if !dup { out.append(rc) }
+              let paths = route["paths"] as? [[String: Any]] else { return [] }
+        return paths.compactMap { parseAmapPath($0, label: label) }
     }
 
     /// 解析高德 v3 单条 path 为 RouteChoice（折线点 + 转向步骤）
@@ -304,14 +342,18 @@ enum RouteFetcher {
         var acc = 0
         for step in steps {
             guard let polyline = step["polyline"] as? String else { continue }
-            // v1.90 高德返回 GCJ-02 → 转 WGS84 再绘制（苹果地图坐标系），
-            // 修复"当前定位点与路线不连接"（此前路线整体偏移 50~500 米）
-            let coords = polyline.split(separator: ";").map { seg -> CLLocationCoordinate2D in
+            // v1.98 高德返回 GCJ-02 → 转 WGS-84 再绘制（屏幕网格为 WGS 墨卡托）
+            for seg in polyline.split(separator: ";") {
                 let parts = seg.split(separator: ",").compactMap { Double($0) }
+                guard parts.count >= 2 else { continue }
                 let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
-                return CLLocationCoordinate2D(latitude: wlat, longitude: wlon)
+                let c = CLLocationCoordinate2D(latitude: wlat, longitude: wlon)
+                // 连续重复点去掉，减少绘制抖动
+                if let last = points.last,
+                   abs(last.latitude - c.latitude) < 1e-7,
+                   abs(last.longitude - c.longitude) < 1e-7 { continue }
+                points.append(c)
             }
-            points.append(contentsOf: coords)
             if let roadName = step["road"] as? String,
                let action = step["action"] as? String,
                let originStr = step["origin"] as? String {

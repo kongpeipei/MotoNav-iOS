@@ -453,6 +453,14 @@ struct ContentView: View {
                     withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
                     return
                 }
+                // v1.98 规划态轻点地图：退出规划回首页（清路线、恢复底部主卡），
+                // 不再弹地点卡——旧版在这里会叠一张地点介绍卡，挡住"回首页"的预期
+                if !model.routeChoices.isEmpty {
+                    haptic()
+                    closeRoutePlan()
+                    model.status = "已退出路线规划"
+                    return
+                }
                 // 地点标签数据缺失（Overpass 拉取失败/离线）时退回 v1.95 行为：
                 // 轻点即出地点卡，否则"点哪里都只是隐藏界面"，地点卡功能等于不可用
                 if model.placeLabels.isEmpty {
@@ -460,6 +468,12 @@ struct ContentView: View {
                     return
                 }
                 hideAllOnBlankTap()
+            },
+            onRouteChoiceTap: { idx in
+                guard idx >= 0, idx < model.routeChoices.count else { return }
+                haptic()
+                model.selectedRouteIdx = idx
+                model.applyRouteChoice(model.routeChoices[idx])
             },
             minimal: minimalMap,
             reloadTick: reloadTick,
@@ -820,7 +834,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v1.97")
+                Text("v1.98")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -1178,7 +1192,7 @@ struct ContentView: View {
         let lat = coord.latitude
         let lon = coord.longitude
         let seed = (known?.isEmpty == false ? known! : placeNameNear(coord))
-        tapPlace = TapPlaceInfo(lat: lat, lon: lon, name: seed, loading: true)
+        tapPlace = TapPlaceInfo(lat: lat, lon: lon, name: seed.isEmpty ? "地图选点" : seed, loading: true)
         Task {
             let info = await model.amapTapPlace(lat: lat, lon: lon)
             guard var cur = tapPlace, cur.lat == lat, cur.lon == lon else { return }
@@ -1659,20 +1673,24 @@ struct ContentView: View {
         .padding(.horizontal, 4)
     }
 
-    /// 横排方案卡（高德式并列）
+    /// 横排方案卡（高德式并列，超过 3 条可横向滑动）
     private var routeChoiceCards: some View {
-        HStack(spacing: 8) {
-            ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
-                Button {
-                    haptic()
-                    model.selectedRouteIdx = idx
-                    model.applyRouteChoice(c)
-                } label: {
-                    routeChoiceCard(c, selected: model.selectedRouteIdx == idx)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
+                    Button {
+                        haptic()
+                        model.selectedRouteIdx = idx
+                        model.applyRouteChoice(c)
+                    } label: {
+                        routeChoiceCard(c, selected: model.selectedRouteIdx == idx)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
+            .padding(.vertical, 1)
         }
+        .frame(height: 86)
     }
 
     /// v1.87 用时格式化：<60秒"1分钟内"，<60分钟"x 分钟"，≥60分钟"x 小时y 分钟"（不出现"100分钟"）
@@ -1695,9 +1713,13 @@ struct ContentView: View {
             Text(durationTxt(c.durationS))
                 .font(.system(size: 17, weight: .heavy))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text("\(distTxt) · 抓拍\(c.poiCount)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Text(c.label)
                 .font(.caption2.bold())
                 .foregroundStyle(.white)
@@ -1705,7 +1727,7 @@ struct ContentView: View {
                 .padding(.vertical, 2)
                 .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(width: 104, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
         .background(sel ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0).opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial), in: RoundedRectangle(cornerRadius: 10))
@@ -1743,6 +1765,8 @@ struct ContentView: View {
                     }
                     Button {
                         haptic()
+                        // v1.98 巡航跟随中先退出，否则地图会被定位点立刻拉回，看着像"按钮没反应"
+                        if model.cruiseMode { model.exitCruise() }
                         model.zoomInTick += 1
                     } label: {
                         Image(systemName: "plus")
@@ -1755,6 +1779,7 @@ struct ContentView: View {
                     }
                     Button {
                         haptic()
+                        if model.cruiseMode { model.exitCruise() }
                         model.zoomOutTick += 1
                     } label: {
                         Image(systemName: "minus")
@@ -3004,12 +3029,12 @@ struct ContentView: View {
     private func placeNameNear(_ coord: CLLocationCoordinate2D) -> String {
         let c = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
         var best: PlaceLabel?
-        var bestD = 800.0
+        var bestD = 250.0 // v1.98 收紧到 250 米：旧版 800 米会把远处小区名安到点击点上
         for pl in model.placeLabels {
             let d = c.distance(from: CLLocation(latitude: pl.lat, longitude: pl.lon))
             if d < bestD { bestD = d; best = pl }
         }
-        return best?.name ?? "地图选点"
+        return best?.name ?? ""
     }
 
     /// 从「🔍 在线搜索「XX」」提取 XX

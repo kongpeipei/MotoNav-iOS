@@ -114,18 +114,18 @@ enum WeatherFX {
         let gust = 0.14 + sin(t * 0.31) * 0.09 + sin(t * 1.7 + 1.3) * 0.02
 
         // 远层：细、淡、慢，模糊最多（空气透视）
-        // v1.97 雨点改短、加密（贴近苹果天气的短雨丝、密集雨幕）
-        rainLayer(ctx, size: size, t: t, count: Int(110 * s), salt: 100,
-                  speed: 300...430, length: 6...10, width: 0.7,
-                  opacity: 0.26, blur: 1.1, gust: gust, base: base)
+        // v1.98 雨丝再短一半、密度提到 3 倍（苹果天气的细密雨幕观感）
+        rainLayer(ctx, size: size, t: t, count: Int(330 * s), salt: 100,
+                  speed: 300...430, length: 3...5, width: 0.7,
+                  opacity: 0.26, blur: 0.9, gust: gust, base: base)
         // 中层
-        rainLayer(ctx, size: size, t: t, count: Int(80 * s), salt: 400,
-                  speed: 470...640, length: 10...16, width: 1.15,
-                  opacity: 0.36, blur: 0.45, gust: gust, base: base)
-        // 近层：长、粗、快，最实
-        rainLayer(ctx, size: size, t: t, count: Int(42 * s), salt: 700,
-                  speed: 700...960, length: 16...24, width: 1.75,
-                  opacity: 0.46, blur: 0.15, gust: gust, base: base)
+        rainLayer(ctx, size: size, t: t, count: Int(240 * s), salt: 400,
+                  speed: 470...640, length: 5...8, width: 1.15,
+                  opacity: 0.36, blur: 0.35, gust: gust, base: base)
+        // 近层：稍长、粗、快，最实
+        rainLayer(ctx, size: size, t: t, count: Int(126 * s), salt: 700,
+                  speed: 700...960, length: 8...12, width: 1.75,
+                  opacity: 0.46, blur: 0.1, gust: gust, base: base)
 
         // 大地湿气：底部渐隐的冷色薄雾（雨越大越明显）
         if intensity >= .medium {
@@ -165,6 +165,9 @@ enum WeatherFX {
         ctx.drawLayer { layer in
             if blur > 0.01 { layer.addFilter(.blur(radius: blur)) }
             let span = size.height + 240
+            // v1.98 批量化：把整层雨丝按 3 档透明度合并成 3 条 Path，
+            // 一次 stroke 画完（700 根线段也只有 3 次绘制调用），密度提 3 倍也不掉帧
+            var batches = [Path](repeating: Path(), count: 3)
             for i in 0..<count {
                 let r1 = hash(i, salt)
                 let r2 = hash(i, salt + 1)
@@ -181,11 +184,13 @@ enum WeatherFX {
                 let rawX = r2 * (size.width + 220) - 110 + sway + (y + 120) * slope
                 let x = wrap(rawX, size.width + 220) - 110
 
-                var p = Path()
-                p.move(to: CGPoint(x: x, y: y))
-                p.addLine(to: CGPoint(x: x + len * slope, y: y + len))
-                layer.stroke(p,
-                             with: .color(base.opacity(opacity * (0.72 + r4 * 0.55))),
+                let bucket = min(2, Int(r4 * 3))
+                batches[bucket].move(to: CGPoint(x: x, y: y))
+                batches[bucket].addLine(to: CGPoint(x: x + len * slope, y: y + len))
+            }
+            for (k, path) in batches.enumerated() where !path.isEmpty {
+                layer.stroke(path,
+                             with: .color(base.opacity(opacity * (0.72 + Double(k) * 0.22))),
                              style: StrokeStyle(lineWidth: width, lineCap: .round))
             }
         }
