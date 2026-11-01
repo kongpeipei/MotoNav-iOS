@@ -1507,6 +1507,12 @@ struct ContentView: View {
                     .padding(.horizontal, 14)
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                 } else if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
+                    // v1.88 深色模式退出卡纯黑底白字（提前算好颜色常量，降低编译器推断复杂度）
+                    let dimFg: Color = colorScheme == .light ? Color.black.opacity(0.45) : Color.white.opacity(0.7)
+                    let mainFg: Color = colorScheme == .light ? Color.black.opacity(0.7) : Color.white.opacity(0.85)
+                    let arriveFg: Color = colorScheme == .light ? Color.secondary : Color.white.opacity(0.7)
+                    let cardBG: Color = colorScheme == .light ? Color(.systemBackground).opacity(0.97) : Color.black.opacity(0.94)
+                    let cardStroke: Color = colorScheme == .light ? Color.black.opacity(0.08) : Color.white.opacity(0.16)
                     let minTxt = "\(max(ns.remainS, 0) / 60)"
                     let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
                     let lights = model.routeTurns.count
@@ -1523,7 +1529,7 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title3)
-                                .foregroundStyle(colorScheme == .light ? .black.opacity(0.45) : .white.opacity(0.7))
+                                .foregroundStyle(dimFg)
                                 .padding(.horizontal, 10)
                         }
                         .buttonStyle(.plain)
@@ -1543,7 +1549,7 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(colorScheme == .light ? .black.opacity(0.7) : .white.opacity(0.85))
+                                .foregroundStyle(mainFg)
                                 .padding(.horizontal, 12)
                         }
                         .buttonStyle(.plain)
@@ -1552,16 +1558,15 @@ struct ContentView: View {
                     HStack {
                         Text("预计 \(arriveTxt) 到达")
                             .font(.caption)
-                            .foregroundStyle(colorScheme == .light ? .secondary : .white.opacity(0.7))
+                            .foregroundStyle(arriveFg)
                         Spacer()
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
                     .padding(.vertical, 12)
                     // v1.87 深色模式退出卡纯黑底（浅色模式保持白底）
-                    .background(colorScheme == .light ? Color(.systemBackground).opacity(0.97) : Color.black.opacity(0.94), in: RoundedRectangle(cornerRadius: 18))
-                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
-                        colorScheme == .light ? Color.black.opacity(0.08) : Color.white.opacity(0.16), lineWidth: 1))
+                    .background(cardBG, in: RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(cardStroke, lineWidth: 1))
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                     .padding(.horizontal, 14)
                 }
