@@ -39,11 +39,6 @@
 	<string>骑行导航时需要在后台持续定位，以便及时提醒前方点位</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>骑行时定位您的位置，用于接近抓拍/限行点位时提醒</string>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

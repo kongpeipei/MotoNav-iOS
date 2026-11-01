@@ -60,13 +60,29 @@ private func motonavSignalHandler(_ sig: Int32) {
 enum CrashGuard {
     private static var installed = false
 
+    /// 崩溃单独一个文件。
+    ///
+    /// 不能和 startup.log 共用：StartupLog 采用"整文件读取 → 追加 → 原子重写"，
+    /// 崩溃瞬间正好有日志在排队时，原子重写会把信号处理函数刚写进去的崩溃行覆盖掉，
+    /// 表现就是"真崩了却一条都没留下"。分开写才不会有这个竞态。
+    static var crashFileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("crash.log")
+    }
+
     /// 在 didFinishLaunching 的第一行调用
     static func install() {
         guard !installed else { return }
         installed = true
 
         // 路径只取一次，转成 C 字符串常驻（handler 里要用，不能临时算）
-        gCrashPath = strdup(StartupLog.fileURL.path)
+        gCrashPath = strdup(crashFileURL.path)
+        // 预建文件：FileHandle(forWritingTo:) 要求文件已存在，否则 NSException 那条路径会静默失败
+        if !FileManager.default.fileExists(atPath: crashFileURL.path) {
+            FileManager.default.createFile(
+                atPath: crashFileURL.path,
+                contents: Data("=== 骑士地图崩溃日志（出现 [崩溃] 行说明进程非正常退出）===\n".utf8))
+        }
 
         // 1) Objective-C 异常：不在信号上下文，可以正常用 Foundation
         NSSetUncaughtExceptionHandler { ex in
@@ -75,7 +91,7 @@ enum CrashGuard {
             let text = head + "调用栈:\n" + stack + "\n"
             // 此刻进程将死，用追加方式直接写，不用原子写
             if let d = text.data(using: .utf8),
-               let fh = try? FileHandle(forWritingTo: StartupLog.fileURL) {
+               let fh = try? FileHandle(forWritingTo: crashFileURL) {
                 fh.seekToEndOfFile()
                 fh.write(d)
                 try? fh.close()
