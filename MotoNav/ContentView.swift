@@ -17,6 +17,11 @@ struct ContentView: View {
     @State private var tipCard: AppModel.AmapTip?
     /// v1.81.2 退出导航确认态：点状态卡左侧×后切换为"退出导航/取消"两按钮
     @State private var showExitConfirm = false
+    // v1.81.4 导航全览：导航退出卡"全览"→ 缩放显示全程路线 + 固定全览/取消全览(13s倒计时) 操作条
+    @State private var showRouteOverview = false
+    @State private var overviewCountdown = 13
+    @State private var overviewPinned = false
+    @State private var overviewTask: Task<Void, Never>?
     @State private var tipRoad: String?
     /// v1.81 地点所属区域（AOI）：名称 + 多边形（地图蓝虚线框住）
     @State private var tipAoiName: String?
@@ -98,6 +103,10 @@ struct ContentView: View {
                                    deleteLabel: "左拉删除",
                                    onSwipeLeft: { haptic(); model.toggleNavigation() }) { exitNavOverlay }
                 }
+                // v1.81.4 导航全览操作条（高德同款：固定全览 / 取消全览(13s)）
+                if model.navigating && showRouteOverview {
+                    DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { routeOverviewBar }
+                }
                 // v1.63 导航态左侧竖排：刷新 / 极简（可拖动）
                 if model.navigating {
                     DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { navSideOverlay }
@@ -126,9 +135,9 @@ struct ContentView: View {
                 bottomTabBar
             }
         }
-        // v1.81.3 新一次导航开始时重置退出确认态
+        // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
         .onChange(of: model.navigating) { _, nv in
-            if nv { showExitConfirm = false }
+            if nv { showExitConfirm = false } else { endRouteOverview() }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
@@ -282,6 +291,7 @@ struct ContentView: View {
             categoryTick: model.categoryTick,
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
+            overviewTick: model.overviewTick,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
             onLongPress: { coord in
@@ -1338,6 +1348,18 @@ struct ContentView: View {
                         exitStatusCell("\(snaps)", "抓拍")
                         exitCellDivider
                         exitStatusCell(arriveTxt, "到达")
+                        exitCellDivider
+                        // v1.81.4 右侧全览图标（高德同款）：点击缩放显示全程路线
+                        Button {
+                            haptic()
+                            startRouteOverview()
+                        } label: {
+                            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.black.opacity(0.7))
+                                .padding(.horizontal, 12)
+                        }
+                        .buttonStyle(.plain)
                     }
                     .padding(.vertical, 12)
                     .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
@@ -1347,6 +1369,70 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// v1.81.4 全览操作条（高德同款）：固定全览 / 取消全览(倒计时)
+    private var routeOverviewBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                haptic()
+                overviewPinned = true
+            } label: {
+                Text("固定全览")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(Color.green.opacity(overviewPinned ? 0.9 : 0.0), lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+            Button {
+                haptic()
+                endRouteOverview()
+            } label: {
+                Text("取消全览 (\(max(overviewCountdown, 0))s)")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+    }
+
+    /// v1.81.4 启动全览：缩放全程路线 + 13 秒倒计时自动恢复跟随
+    private func startRouteOverview() {
+        showRouteOverview = true
+        overviewPinned = false
+        overviewCountdown = 13
+        model.overviewTick += 1
+        overviewTask?.cancel()
+        overviewTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if overviewPinned { continue } // 固定全览：倒计时暂停
+                await MainActor.run { overviewCountdown -= 1 }
+                if overviewCountdown <= 0 {
+                    await MainActor.run { endRouteOverview() }
+                    break
+                }
+            }
+        }
+    }
+
+    /// v1.81.4 结束全览：恢复导航跟随
+    private func endRouteOverview() {
+        guard showRouteOverview else { return }
+        showRouteOverview = false
+        overviewCountdown = 13
+        overviewTask?.cancel()
+        overviewTask = nil
+        model.navigateFollowTick += 1
     }
 
     /// 退出导航状态卡分格（v1.81.4 放大，对齐高德底部卡）

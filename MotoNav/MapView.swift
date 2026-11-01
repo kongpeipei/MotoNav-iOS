@@ -33,6 +33,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 导航中（3D 俯仰视角）
     let navigateFollowTick: Int
     let navigating: Bool
+    /// 导航中路线全览请求计数（v1.81.4 导航退出卡"全览"）
+    let overviewTick: Int
     /// 地图缩放按钮计数
     let zoomInTick: Int
     let zoomOutTick: Int
@@ -321,6 +323,21 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
+        // v1.81.4 导航中全览：缩放显示当前路线全程，暂停跟随（取消/固定恢复由 navigateFollowTick 接管）
+        if overviewTick != context.coordinator.lastOverviewTick {
+            context.coordinator.lastOverviewTick = overviewTick
+            if overviewTick > 0, route.count > 1 {
+                context.coordinator.userMoved = true
+                var rect = MKMapRect.null
+                for c in route {
+                    let p = MKMapPoint(c)
+                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                }
+                context.coordinator.setRegionProgrammatically {
+                    map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 90, left: 50, bottom: 120, right: 50), animated: true)
+                }
+            }
+        }
         // 导航中拖动/旋转地图后，车开远（>100米）自动拉回跟随（高德导航行为）
         if navigating && context.coordinator.userMoved {
             if let loc = userLocation, let last = context.coordinator.navLastFollow,
@@ -428,6 +445,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var userMoved = false
         /// 导航跟随触发记忆
         var lastNavFollowTick = 0
+        var lastOverviewTick = 0
         /// 导航中最后跟随位置（开远自动拉回）
         var navLastFollow: CLLocationCoordinate2D?
         /// 程序主动设置区域（避免被标记为用户移动）

@@ -36,8 +36,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 定位按钮点击计数（驱动地图回中）
     @Published var locateTick = 0
     /// 路线全览请求计数（规划完成后 +1，驱动地图缩放全览）
-    @Published var fitTick = 0
-    /// 地图缩放按钮计数（+1 放大 / 缩小，MapView 响应）
+    /// 导航中路线全览请求计数（导航退出卡"全览"点击 +1，触发地图缩放显示全程路线；v1.81.4）
+    @Published var overviewTick = 0
+    @Published var fitTick = 0    /// 地图缩放按钮计数（+1 放大 / 缩小，MapView 响应）
     @Published var zoomInTick = 0
     @Published var zoomOutTick = 0
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
@@ -1191,6 +1192,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func speak(_ text: String, priority: Int = 0) {
         guard !voiceMuted else { return }
+        // v1.81.4 后台语音播报：playback 会话（Info.plist 已含 audio 后台模式），导航切后台语音继续
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
         let now = Date()
         // 播报去重：2.5 秒内不连续播报（转向近提示/到达/超速高优先级可打断）
         if now.timeIntervalSince(lastSpeakAt) < 2.5 && priority <= lastSpeakPriority {

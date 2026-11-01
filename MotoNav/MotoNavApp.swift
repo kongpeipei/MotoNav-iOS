@@ -24,4 +24,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ = AppModel.shared
         return true
     }
+
+    // v1.81.4 导航中切到后台：播报"骑士地图继续为您导航"，导航与语音提醒继续后台运行
+    //（Info.plist UIBackgroundModes 含 location+audio）；用户从后台清除 App 后停止
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        let m = AppModel.shared
+        if m.navigating {
+            m.speak("骑士地图继续为您导航")
+        }
+    }
 }
