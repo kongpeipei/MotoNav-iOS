@@ -1853,8 +1853,8 @@ final class CameraAnnotation: NSObject, MKAnnotation {
     @objc dynamic var coordinate: CLLocationCoordinate2D
     /// v2.20 拖动前的坐标（取消拖动时回滚）
     private var originCoordinate: CLLocationCoordinate2D
-    /// v2.20 拖动前的 WGS 坐标（判断是否真的移动过）
-    private var originWGS: CLLocationCoordinate2D
+    /// v2.20 拖动前的 WGS 坐标（判断是否真的移动过）；Coordinator 里要用，故 fileprivate
+    fileprivate var originWGS: CLLocationCoordinate2D
 
     init(camera: PoliceCamera, hot: Int) {
         self.cameraId = camera.id
