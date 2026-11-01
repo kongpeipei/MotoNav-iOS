@@ -1708,6 +1708,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             navigating = true
             UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
             navigateFollowTick += 1
+            tripSummary = nil // v1.81.4 新导航开始时清除上次行程卡
             navStart = Date()
             alertStage = [:]
             offRouteCount = 0

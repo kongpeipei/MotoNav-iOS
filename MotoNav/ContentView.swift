@@ -94,9 +94,9 @@ struct ContentView: View {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
                 }
-                // 导航中悬浮退出按钮（可拖动）
+                // 导航中悬浮退出按钮（可上下移动）
                 if model.navigating {
-                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84)) { exitNavOverlay }
+                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true) { exitNavOverlay }
                 }
                 // v1.63 导航态左侧竖排：刷新 / 极简（可拖动）
                 if model.navigating {
@@ -107,6 +107,11 @@ struct ContentView: View {
                 // v1.66：沉浸模式下底部内容（搜索框/规划卡/导航卡）隐藏；导航中导航卡不受影响
                 if !uiHidden || model.navigating {
                     bottomOverlay
+                }
+                // v1.81.4 本次行程卡：结束导航后显示（白底卡，字号同退出导航卡，可上下移动/左滑关闭）
+                if let s = model.tripSummary {
+                    DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
+                                   onSwipeLeft: { model.tripSummary = nil }) { tripSummaryCard(s) }
                 }
                 // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
                 if mapLoadFailed {
@@ -244,21 +249,7 @@ struct ContentView: View {
             UIApplication.shared.isIdleTimerDisabled = nav
             if nav { uiHidden = false } // v1.66：进入导航自动退出沉浸模式，恢复导航 UI
         }
-        // 行程总结（到达/退出导航时弹出，高德式行程卡）
-        .alert("本次行程", isPresented: Binding(
-            get: { model.tripSummary != nil },
-            set: { if !$0 { model.tripSummary = nil } }
-        )) {
-            Button("好", role: .cancel) { model.tripSummary = nil }
-        } message: {
-            if let s = model.tripSummary {
-                Text("目的地：\(s.destName)\n"
-                    + "里程：\(String(format: "%.1f", Double(s.distanceM) / 1000.0)) 公里\n"
-                    + "用时：\(s.durationS / 60) 分钟 \(s.durationS % 60) 秒\n"
-                    + "平均速度：\(String(format: "%.1f", s.avgSpeedKmh)) 公里/小时\n"
-                    + "沿途抓拍点位：\(s.snapCount) 处")
-            }
-        }
+        // v1.81.4：行程总结改为底部行程卡（结束导航后显示，非弹窗）
         // 预览点变化（含在线搜索兜底）→ 同步"导航去此处"按钮
         .onChange(of: model.searchPreview) { p in
             if let p = p {
@@ -795,7 +786,7 @@ struct ContentView: View {
         ZStack {
             if !model.navigating {
                 if let t = tipCard {
-                    DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66),
+                    DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                                    onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
                 } else if !model.routeChoices.isEmpty {
                     // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡）
@@ -808,9 +799,9 @@ struct ContentView: View {
                         DraggableFloat(key: "historybar", defaultPos: CGPoint(x: 0.5, y: 0.30)) { historyBar }
                     }
                 }
-                // 搜索主卡：地点卡或路线规划卡出现时隐藏
+                // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
                 if tipCard == nil && model.routeChoices.isEmpty {
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88)) { bottomMainCard }
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { bottomMainCard }
                 }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
@@ -1312,9 +1303,9 @@ struct ContentView: View {
                         exitCellDivider
                         exitStatusCell(arriveTxt, "到达")
                     }
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                    .padding(.vertical, 12)
+                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                     .padding(.horizontal, 14)
                 }
@@ -1322,19 +1313,50 @@ struct ContentView: View {
         }
     }
 
-    /// 退出导航状态卡分格
+    /// 退出导航状态卡分格（v1.81.4 放大，对齐高德底部卡）
     private var exitCellDivider: some View {
-        Divider().frame(height: 34)
+        Divider().frame(height: 46)
     }
 
-    /// 退出导航状态卡单格（大字+小标签，白底黑字）
+    /// v1.81.4 本次行程卡（结束导航后显示）：目的地 + 里程/用时/平均速度，字号同退出导航卡
+    private func tripSummaryCard(_ s: AppModel.TripSummary) -> some View {
+        VStack(spacing: 8) {
+            HStack {
+                Image(systemName: "flag.checkered.circle.fill")
+                    .foregroundStyle(.green)
+                Text("本次行程")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text(s.destName)
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            HStack(spacing: 0) {
+                exitStatusCell(String(format: "%.1f", Double(s.distanceM) / 1000.0), "公里")
+                exitCellDivider
+                exitStatusCell("\(s.durationS / 60)", "分钟")
+                exitCellDivider
+                exitStatusCell(String(format: "%.1f", s.avgSpeedKmh), "公里/小时")
+            }
+            .padding(.top, 2)
+        }
+        .padding(14)
+        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+        .padding(.horizontal, 14)
+    }
+
+    /// 退出导航状态卡单格（大字+小标签，白底黑字；v1.81.4 字号放大）
     private func exitStatusCell(_ big: String, _ small: String) -> some View {
-        VStack(spacing: 1) {
+        VStack(spacing: 2) {
             Text(big)
-                .font(.system(size: 19, weight: .heavy))
+                .font(.system(size: 24, weight: .heavy))
                 .foregroundStyle(.black)
             Text(small)
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(.black.opacity(0.55))
         }
         .frame(minWidth: 0, maxWidth: .infinity)
@@ -2512,21 +2534,29 @@ struct VoiceSettingsSheet: View {
 
 /// v1.80 可拖动悬浮控件：位置以 0-1 归一化持久化到 UserDefaults，下次打开还原
 /// v1.81.2 支持 onSwipeLeft：向左大幅滑动（>80pt 且横向为主）触发回调关闭，否则正常拖动记忆
+/// v1.81.4 支持 lockX：仅上下移动（横向锁定在初始 x）
 private struct DraggableFloat<Content: View>: View {
     let key: String
+    var lockX: Bool = false
     var onSwipeLeft: (() -> Void)? = nil
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
+    @State private var initialX: CGFloat
     @State private var dragging = false
 
-    init(key: String, defaultPos: CGPoint, onSwipeLeft: (() -> Void)? = nil,
+    init(key: String, defaultPos: CGPoint, lockX: Bool = false,
+         onSwipeLeft: (() -> Void)? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
+        self.lockX = lockX
         self.onSwipeLeft = onSwipeLeft
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
-        _pos = State(initialValue: CGPoint(x: x ?? defaultPos.x, y: y ?? defaultPos.y))
+        let px = x ?? defaultPos.x
+        let py = y ?? defaultPos.y
+        _pos = State(initialValue: CGPoint(x: px, y: py))
+        _initialX = State(initialValue: px)
     }
 
     var body: some View {
@@ -2541,7 +2571,7 @@ private struct DraggableFloat<Content: View>: View {
                         .onChanged { v in
                             dragging = true
                             pos = CGPoint(
-                                x: min(0.96, max(0.04, v.location.x / geo.size.width)),
+                                x: lockX ? initialX : min(0.96, max(0.04, v.location.x / geo.size.width)),
                                 y: min(0.96, max(0.04, v.location.y / geo.size.height)))
                         }
                         .onEnded { v in
