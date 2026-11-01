@@ -238,6 +238,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.21 地图聚焦到指定坐标（途经点定位用）
     @Published var focusCoord: CLLocationCoordinate2D?
     @Published var focusTick = 0
+    /// v2.22 导航中用户手动拖动了地图（提示卡切换为"继续导航"）
+    @Published var navUserMoved = false
+    /// v2.22 导航视野档位目标（比例尺 1 厘米对应的米数：50 / 500）
+    @Published var navScaleTarget = 50
+    @Published var navScaleTick = 0
+    /// v2.22 已行驶折线点索引（用于"走过的路变灰"）
+    @Published var traveledIdx = 0
+    /// v2.22 导航进度 0~1（右侧竖直进度条）
+    @Published var navProgress = 0.0
+    /// v2.22 顶部路线提示（高德式："请先去往出口" / "前方xx米路口直行"）
+    @Published var navTopHint = ""
+    @Published var navTopHintIcon = "straight.up"
     /// v2.19 起点（默认跟随当前定位；点交换按钮后固定为原终点）
     @Published var originName = "我的位置"
     @Published var originLat = 0.0
@@ -2348,6 +2360,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             UIApplication.shared.isIdleTimerDisabled = false // 恢复自动锁屏
             pitchDeg = 0          // v2.01 退出导航回 2D 平视
             navigateFollowTick += 1
+            navUserMoved = false
             routeChoices = [] // v1.85 结束导航隐藏路线推荐卡，只保留行程卡（轻点卡片外任意处回首页）
             selectedRouteIdx = 0
             finishTrip()
@@ -2360,7 +2373,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v2.13：平时 heading 不更新，进入导航先把当前朝向补上，避免地图一开就转到正北
             heading = compass.angle
             UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
-            pitchDeg = 45         // v2.01 开始导航：3D 45° 俯视 + 约 200 米视野（见 MapView）
+            pitchDeg = 45         // v2.01 开始导航：3D 45° 俯视（视野见 MapView）
+            // v2.22 导航开启即切到"比例尺 1 厘米 = 50 米"的视野档位
+            navScaleTarget = 50
+            navScaleTick += 1
+            navUserMoved = false
             navigateFollowTick += 1
             tripSummary = nil // v1.81.4 新导航开始时清除上次行程卡
             navStart = Date()
@@ -2811,8 +2828,151 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             : 0
         let speed = (currentSpeed > 0) ? currentSpeed * 3.6 : 0
         let nt = routeTurns.first { $0.fromStartM > traveled }
+        // v2.22 已行驶折线索引（走过的部分画灰）
+        let idx = nearestRouteIndex(route, loc)
+        if idx != traveledIdx { traveledIdx = idx }
+        // v2.22 导航进度（右侧竖直进度条）
+        if total > 0 { navProgress = min(1, max(0, Double(traveled) / Double(total))) }
         return NavStatus(remainM: remainM, remainS: remainS, speedKph: speed,
                          nextTurn: nt, distToTurnM: nt.map { $0.fromStartM - traveled } ?? 0)
+    }
+
+    /// v2.22 最近折线点索引（走过的路变灰用；带缓存，增量搜索）
+    private var idxCache = 0
+    private var idxCacheKey = ""
+    private func nearestRouteIndex(_ pts: [CLLocationCoordinate2D], _ loc: CLLocationCoordinate2D) -> Int {
+        guard pts.count > 1 else { return 0 }
+        let key = "\(pts.count)-\(pts[0].latitude)-\(pts[pts.count - 1].longitude)"
+        if key != idxCacheKey { idxCacheKey = key; idxCache = 0 }
+        let lo = max(0, idxCache - 80), hi = min(pts.count - 1, idxCache + 80)
+        var bestI = lo, bestD = Double.greatestFiniteMagnitude
+        for i in lo...hi {
+            let d = distanceM(loc, pts[i])
+            if d < bestD { bestD = d; bestI = i }
+        }
+        if (bestI == lo && lo > 0) || (bestI == hi && hi < pts.count - 1) {
+            for i in pts.indices {
+                let d = distanceM(loc, pts[i])
+                if d < bestD { bestD = d; bestI = i }
+            }
+        }
+        idxCache = bestI
+        return bestI
+    }
+
+    /// v2.22 转向图标（全局唯一实现，ContentView 也复用）
+    func navTurnIcon(_ t: RouteTurn) -> String {
+        if !t.modifier.isEmpty {
+            switch t.modifier {
+            case "left": return "arrow.turn.up.left"
+            case "right": return "arrow.turn.up.right"
+            case "slight left": return "arrow.up.left"
+            case "slight right": return "arrow.up.right"
+            case "sharp left": return "arrow.turn.up.left"
+            case "sharp right": return "arrow.turn.up.right"
+            case "uturn": return "arrow.uturn.up.left"
+            default: break
+            }
+        }
+        let a = t.action
+        if a.contains("掉头") { return "arrow.uturn.up.left" }
+        if a.contains("左") { return "arrow.turn.up.left" }
+        if a.contains("右") { return "arrow.turn.up.right" }
+        return "arrow.up"
+    }
+
+    /// v2.22 顶部路线提示卡文案（高德式）
+    ///
+    /// 规则（自定义刷新）：
+    /// · 起步阶段（已走 < 30 米且当前位置离路线折线 > 25 米）→ "请先去往出口"
+    /// · 正常行驶 → 取前方最近的转向点，"前方xx米路口直行/右转/左转"
+    ///   其中 xx = 当前位置到该路口的距离（沿路线里程差）
+    /// · 前方 60 米内才显示具体路口动作，避免频繁跳动
+    func navTopHintText() -> (text: String, icon: String) {
+        guard navigating, let loc = currentLocation, !route.isEmpty else { return ("", "straight.up") }
+        let traveled = traveledM(route, loc)
+        // 起步：还没进入主线（离折线较远）→ 提示先往出口走
+        if traveled < 30 {
+            var minD = Double.greatestFiniteMagnitude
+            for p in route { minD = min(minD, distanceM(loc, p)) }
+            if minD > 25 {
+                return ("请先去往出口", "arrow.turn.up.right")
+            }
+        }
+        guard let t = routeTurns.first(where: { $0.fromStartM > traveled }) else {
+            return ("前方直行到达终点", "straight.up")
+        }
+        let d = t.fromStartM - traveled
+        guard d > 0 else { return ("前方直行到达终点", "straight.up") }
+        let act = turnText(t)
+        if d <= 60 {
+            return ("前方\(d)米\(act)", navTurnIcon(t))
+        }
+        // 远距离时只报动作，不报具体米数（米数变化太频繁，读起来跳）
+        return ("前方\(act)", navTurnIcon(t))
+    }
+
+    /// v2.22 起点内部道路连接：定位点 → 路线起点（道路入口）
+    /// 高德规划时起点会被吸附到最近的道路出入口，两者之间有一段小区/园区内部道路。
+    /// 这里算出这段连接，配合蓝色虚线 + 入口处的白色转向箭头（高德式）。
+    var routeStartLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)? {
+        guard navigating, let loc = currentLocation, route.count > 1 else { return nil }
+        let entry = route[0]
+        let d = distanceM(loc, entry)
+        guard d > 20 else { return nil }   // 已在路上，不需要连接线
+        return (from: loc, to: entry)
+    }
+
+    /// v2.22 终点内部道路连接：路线终点（道路出口）→ 目的地
+    var routeEndLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)? {
+        guard navigating, route.count > 1, destLat != 0 || destLon != 0 else { return nil }
+        let exit = route[route.count - 1]
+        let target = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
+        let d = distanceM(exit, target)
+        guard d > 20 else { return nil }
+        return (from: exit, to: target)
+    }
+
+    /// v2.22 起点入口转向箭头（按路线第一段相对定位点的方位判断左/直/右）
+    var routeStartArrow: String {
+        guard let link = routeStartLink, route.count > 1 else { return "straight" }
+        return turnKind(from: link.from, via: link.to, to: route[min(2, route.count - 1)])
+    }
+
+    /// v2.22 终点入口转向箭头（按从路线倒数第二段→出口→目标点的转向判断）
+    var routeEndArrow: String {
+        guard let link = routeEndLink, route.count > 2 else { return "straight" }
+        return turnKind(from: route[route.count - 2], via: link.from, to: link.to)
+    }
+
+    /// 依据三点走向判断转向（left / right / straight）
+    private func turnKind(from a: CLLocationCoordinate2D, via b: CLLocationCoordinate2D,
+                          to c: CLLocationCoordinate2D) -> String {
+        let brg1 = bearing(from: a, to: b)
+        let brg2 = bearing(from: b, to: c)
+        var d = brg2 - brg1
+        while d > 180 { d -= 360 }
+        while d < -180 { d += 360 }
+        if d > 25 { return "right" }
+        if d < -25 { return "left" }
+        return "straight"
+    }
+
+    /// 两点间方位角（度，正北为 0，顺时针）
+    private func bearing(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {
+        let lat1 = a.latitude * .pi / 180, lat2 = b.latitude * .pi / 180
+        let dLon = (b.longitude - a.longitude) * .pi / 180
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        let deg = atan2(y, x) * 180 / .pi
+        return deg < 0 ? deg + 360 : deg
+    }
+
+    /// 导航视野切换：1 厘米对应多少米（50 = 近，500 = 远）
+    func setNavScale(_ metersPerCm: Int) {
+        guard navScaleTarget != metersPerCm else { return }
+        navScaleTarget = metersPerCm
+        navScaleTick += 1
     }
 
     /// v2.01 下一个信号灯（导航中做红绿灯倒计时）：260 米内的第一个灯

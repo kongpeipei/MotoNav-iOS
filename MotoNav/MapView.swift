@@ -113,6 +113,21 @@ struct MapViewRepresentable: UIViewRepresentable {
     var focusCoord: CLLocationCoordinate2D? = nil
     /// v2.21 聚焦触发计数（内容不变不重复移动地图）
     var focusTick: Int = 0
+    /// v2.22 导航中已行驶折线点索引（之前的部分画灰）
+    var traveledIdx: Int = 0
+    /// v2.22 导航视野档位：1 厘米对应多少米（50 近 / 500 远）
+    var navScaleTarget: Int = 50
+    var navScaleTick: Int = 0
+    /// v2.22 用户手动移动了地图（通知业务层）
+    var onUserMovedChanged: ((Bool) -> Void)?
+    /// v2.22 起点内部道路：定位点 → 道路入口（WGS）
+    var routeStartLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)?
+    /// v2.22 终点内部道路：道路出口 → 终点（WGS）
+    var routeEndLink: (from: CLLocationCoordinate2D, to: CLLocationCoordinate2D)?
+    /// v2.22 入口箭头：起点入口朝向（"left"/"straight"/"right"）
+    var routeStartArrow: String = "straight"
+    /// v2.22 出口箭头：终点入口朝向
+    var routeEndArrow: String = "straight"
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -186,6 +201,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPoiLongPress = onPoiLongPress
         context.coordinator.onPoiMoved = onPoiMoved
         context.coordinator.onCameraMoved = onCameraMoved
+        context.coordinator.traveledIdx = traveledIdx
+        context.coordinator.onUserMovedChanged = onUserMovedChanged
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onPlaceLongPress = onPlaceLongPress
@@ -509,6 +526,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             map.removeOverlays(map.overlays.filter { !($0 is AmapTileOverlay) })
             context.coordinator.underPolyline = nil
             context.coordinator.mainPolyline = nil
+            context.coordinator.traveledPolyline = nil
             context.coordinator.alternatePolylines = []
             context.coordinator.trafficPolylines = []
             context.coordinator.trafficColors = []
@@ -532,10 +550,23 @@ struct MapViewRepresentable: UIViewRepresentable {
             if route.count > 1 {
                 let gRoute = MapGeo.toGCJ(route)
                 if navigating {
-                    // 导航中只画当前路线（草绿双层，高德导航推荐色）
-                    let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
+                    // v2.22 导航中：未走的部分画草绿双层；已走过的部分单独画灰
+                    let ti = min(max(traveledIdx, 0), gRoute.count - 1)
+                    if ti > 0 {
+                        // 已走过：灰色实线（叠在绿色下层之上）
+                        let done = Array(gRoute[0...ti])
+                        let dp = MKPolyline(coordinates: done, count: done.count)
+                        context.coordinator.traveledPolyline = dp
+                        map.addOverlay(dp)
+                    } else {
+                        context.coordinator.traveledPolyline = nil
+                    }
+                    // 未走过部分
+                    let rest = Array(gRoute[ti...])
+                    let rRoute = rest.count >= 2 ? rest : gRoute
+                    let under = MKPolyline(coordinates: rRoute, count: rRoute.count)
                     context.coordinator.underPolyline = under
-                    let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
+                    let main = MKPolyline(coordinates: rRoute, count: rRoute.count)
                     context.coordinator.mainPolyline = main
                     map.addOverlay(under)
                     map.addOverlay(main)
@@ -583,6 +614,33 @@ struct MapViewRepresentable: UIViewRepresentable {
                                                  coordinate: m.coordinate))
             }
         }
+        // v2.22 起终点内部道路：蓝色虚线连接定位点↔道路入口，并标入口转向箭头
+        let connKey = "\(routeStartLink?.from.latitude ?? 0)-\(routeStartLink?.to.longitude ?? 0)-\(routeEndLink?.from.latitude ?? 0)-\(routeEndLink?.to.longitude ?? 0)-\(routeStartArrow)-\(routeEndArrow)"
+        if connKey != context.coordinator.lastConnKey {
+            context.coordinator.lastConnKey = connKey
+            for p in context.coordinator.connectorPolylines { map.removeOverlay(p) }
+            context.coordinator.connectorPolylines = []
+            for a in context.coordinator.entryArrowAnnotations { map.removeAnnotation(a) }
+            context.coordinator.entryArrowAnnotations = []
+            if let sl = routeStartLink {
+                let pts = [MapGeo.toGCJ(sl.from), MapGeo.toGCJ(sl.to)]
+                let poly = MKPolyline(coordinates: pts, count: pts.count)
+                context.coordinator.connectorPolylines.append(poly)
+                map.addOverlay(poly)
+                let ann = RouteEndAnnotation(kind: "arrow_\(routeStartArrow)", coordinate: sl.to)
+                context.coordinator.entryArrowAnnotations.append(ann)
+                map.addAnnotation(ann)
+            }
+            if let el = routeEndLink {
+                let pts = [MapGeo.toGCJ(el.from), MapGeo.toGCJ(el.to)]
+                let poly = MKPolyline(coordinates: pts, count: pts.count)
+                context.coordinator.connectorPolylines.append(poly)
+                map.addOverlay(poly)
+                let ann = RouteEndAnnotation(kind: "arrow_\(routeEndArrow)", coordinate: el.from)
+                context.coordinator.entryArrowAnnotations.append(ann)
+                map.addAnnotation(ann)
+            }
+        }
         // v2.21 途经点定位：地图移到该点并暂停朝向跟随
         if focusTick != context.coordinator.lastFocusTick {
             context.coordinator.lastFocusTick = focusTick
@@ -611,6 +669,32 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera.heading = 0
             }
         }
+        // v2.22 导航视野档位：按"比例尺 1 厘米 = N 米"设定相机高度
+        //
+        // 屏幕上 1 厘米 ≈ 38 pt（@3x 屏 1cm≈113px，除以 scale≈3）
+        // 目标比例 N 米/厘米 → 每 pt 代表 N/38 米
+        // 地图高度对应的米数 = 每 pt 米数 × 屏幕高度(pt)
+        // 用 altitude（相机到地面的距离）反推：正交俯视时 altitude ≈ 视野米数
+        if navScaleTick != context.coordinator.lastNavScaleTick {
+            context.coordinator.lastNavScaleTick = navScaleTick
+            if navScaleTick > 0, let loc = userLocation {
+                context.coordinator.userMoved = false
+                let ptPerCm: Double = 38.0
+                let metersPerPoint = Double(navScaleTarget) / ptPerCm
+                let screenH = Double(map.bounds.height)
+                let spanMeters = metersPerPoint * max(screenH, 1)
+                // altitude ≈ 视野高度 / (2*tan(fov/2))，俯角 45° 时取经验系数 1.15
+                let altitude = max(spanMeters * 0.62, 120)
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .followWithHeading
+                    var cam = map.camera
+                    cam.centerCoordinate = MapGeo.toGCJ(loc)
+                    cam.altitude = altitude
+                    cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+                    map.camera = cam
+                }
+            }
+        }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
         if navigateFollowTick != context.coordinator.lastNavFollowTick {
             context.coordinator.lastNavFollowTick = navigateFollowTick
@@ -621,11 +705,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.setRegionProgrammatically {
                 map.userTrackingMode = .followWithHeading
                 if navigating {
-                    // v2.01 高德式导航视野：3D 45° 俯视，纵向约 200 米（≈三四栋楼）
+                    // v2.22 导航视野改为按"比例尺 1 厘米 = N 米"反推（默认 50 米/厘米）
                     var cam = map.camera
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-                    // centerCoordinateDistance 380m + 45° 俯角 ≈ 屏幕纵向 200 米
-                    cam.centerCoordinateDistance = 380
+                    let ptPerCm: Double = 38.0
+                    let metersPerPoint = Double(navScaleTarget) / ptPerCm
+                    let screenH = Double(map.bounds.height)
+                    let spanMeters = metersPerPoint * max(screenH, 1)
+                    cam.centerCoordinateDistance = max(spanMeters * 0.62, 120)
                     map.camera = cam
                 }
             }
@@ -644,6 +731,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                     map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 90, left: 50, bottom: 120, right: 50), animated: true)
                 }
             }
+        }
+        // v2.22 用户手动移动地图 → 通知业务层（提示卡收起，只留"继续导航"）
+        if navigating, context.coordinator.userMoved != context.coordinator.lastUserMovedFlag {
+            context.coordinator.lastUserMovedFlag = context.coordinator.userMoved
+            onUserMovedChanged?(context.coordinator.userMoved)
         }
         // 导航中拖动/旋转地图后，车开远（>100米）自动拉回跟随（高德导航行为）
         if navigating && context.coordinator.userMoved {
@@ -812,6 +904,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastViaKey: Int?
         /// v2.21 已处理过的聚焦计数
         var lastFocusTick = -1
+        /// v2.22 已处理过的视野档位
+        var lastNavScaleTick = -1
+        /// v2.22 已走过的折线索引（灰色部分）
+        var traveledIdx = 0
+        /// v2.22 已走过的折线（灰色层）
+        var traveledPolyline: MKPolyline?
+        /// v2.22 起点/终点内部道路的蓝色虚线连接段
+        var connectorPolylines: [MKPolyline] = []
+        /// v2.22 起点/终点入口箭头标注
+        var entryArrowAnnotations: [RouteEndAnnotation] = []
+        /// v2.22 内部道路虚线的内容键
+        var lastConnKey = ""
+        /// v2.22 上次上报给业务层的"用户移动了地图"状态
+        var lastUserMovedFlag = false
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
@@ -1178,6 +1284,18 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
+                // v2.22 起终点入口箭头：白色圆形 + 左转/直行/右转箭头（高德式）
+                if re.kind.hasPrefix("arrow_") {
+                    let id = "routeArrow"
+                    let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                        ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
+                    v.annotation = re
+                    v.canShowCallout = false
+                    v.markerTintColor = .white
+                    v.glyphImage = UIImage(systemName: arrowGlyph(for: re.kind))
+                    v.displayPriority = .required
+                    return v
+                }
                 let id = "routeEnd"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
                     ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
@@ -1287,6 +1405,19 @@ struct MapViewRepresentable: UIViewRepresentable {
                     r.lineWidth = 7
                     return r
                 }
+                if poly === self.traveledPolyline {
+                    // v2.22 已走过的路段：灰色实线（未走的保持草绿）
+                    r.strokeColor = UIColor(white: 0.55, alpha: 0.95)
+                    r.lineWidth = 6
+                    return r
+                }
+                if self.connectorPolylines.contains(where: { $0 === poly }) {
+                    // v2.22 起点/终点内部道路：蓝色虚线（连接定位点与道路入口）
+                    r.strokeColor = UIColor(red: 0.20, green: 0.55, blue: 1.0, alpha: 0.95)
+                    r.lineWidth = 4
+                    r.lineDashPattern = [4, 5]
+                    return r
+                }
                 if poly === self.footprintPolyline {
                     r.strokeColor = UIColor(red: 0.16, green: 0.45, blue: 0.98, alpha: 0.9)
                     r.lineWidth = 5
@@ -1351,6 +1482,15 @@ final class TeamAnnotation: NSObject, MKAnnotation {
 }
 
 /// 路线起点/终点标记
+/// v2.22 入口箭头图标名（kind 形如 "arrow_left" / "arrow_straight" / "arrow_right"）
+func arrowGlyph(for kind: String) -> String {
+    switch kind {
+    case "arrow_left": return "arrow.turn.up.left"
+    case "arrow_right": return "arrow.turn.up.right"
+    default: return "arrow.up"
+    }
+}
+
 /// 路线起点/终点/途经点标注
 ///
 /// v2.21 关键修复：coordinate 之前是**只读计算属性**（`MapGeo.toGCJ(wgs)`）。

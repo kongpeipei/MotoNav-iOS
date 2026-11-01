@@ -192,6 +192,20 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                         .zIndex(20)
                 }
+                // v2.22 导航中：顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
+                if model.navigating && !showRouteOverview {
+                    AnyView(navTopHintBar)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                // v2.22 导航中：右侧竖直绿色路程进度条
+                if model.navigating && !showRouteOverview {
+                    AnyView(navProgressBar)
+                        .frame(maxHeight: .infinity, alignment: .trailing)
+                        .padding(.trailing, 6)
+                        .padding(.vertical, 130)
+                }
                 // 导航中悬浮退出按钮（仅上下移动；v1.85 取消左滑删除，全览时隐藏，取消全览恢复）
                 if model.navigating && !showRouteOverview {
                     // v2.02 贴底摆放（高德导航卡片位置）；key 变更以清掉旧版记住的偏高位置
@@ -610,7 +624,18 @@ struct ContentView: View {
                 }
             },
             focusCoord: model.focusCoord,
-            focusTick: model.focusTick
+            focusTick: model.focusTick,
+            traveledIdx: model.traveledIdx,
+            navScaleTarget: model.navScaleTarget,
+            navScaleTick: model.navScaleTick,
+            routeStartLink: model.routeStartLink,
+            routeEndLink: model.routeEndLink,
+            routeStartArrow: model.routeStartArrow,
+            routeEndArrow: model.routeEndArrow,
+            onUserMovedChanged: { moved in
+                // v2.22 导航中移动地图 → 收起提示卡，只留"继续导航"
+                model.navUserMoved = moved
+            }
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -2299,13 +2324,9 @@ struct ContentView: View {
     }
 
     /// v2.01 转向图标（优先 modifier，高德中文 action 兜底）
+    /// v2.22 实现上移到 AppModel（顶部提示卡也要用），这里直接复用
     private func navTurnIcon(_ t: RouteTurn) -> String {
-        if !t.modifier.isEmpty { return navTurnIcon(t.modifier) }
-        let a = t.action
-        if a.contains("掉头") { return "arrow.uturn.up.left" }
-        if a.contains("左") { return "arrow.turn.up.left" }
-        if a.contains("右") { return "arrow.turn.up.right" }
-        return "arrow.up"
+        model.navTurnIcon(t)
     }
 
     private func navTurnText(_ t: RouteTurn) -> String {
@@ -2739,6 +2760,66 @@ struct ContentView: View {
         }
     }
 
+    /// v2.22 导航顶部路线提示卡（高德式）
+    ///
+    /// 文案规则（自定义刷新）：
+    /// · 起步阶段（还没驶入主线）→ "请先去往出口"
+    /// · 行驶中 → "前方xx米路口直行/右转/左转"，xx = 当前位置到该路口的距离
+    ///   距离 > 60 米时只报动作不报米数（米数每秒都在变，读起来跳）
+    private var navTopHintBar: some View {
+        let hint = model.navTopHintText()
+        return Group {
+            if !hint.text.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: hint.icon)
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text(hint.text)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.72), in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+                .padding(.horizontal, 16)
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// v2.22 导航右侧竖直绿色路程进度条（已走比例）
+    private var navProgressBar: some View {
+        let p = max(0, min(1, model.navProgress))
+        return VStack(spacing: 0) {
+            // 剩余部分（灰）
+            GeometryReader { geo in
+                ZStack(alignment: .bottom) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 5)
+                    // 已走部分（绿）：从下往上生长
+                    Capsule()
+                        .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
+                        .frame(width: 5, height: max(4, geo.size.height * p))
+                }
+                .frame(width: 5)
+                .frame(maxHeight: .infinity)
+            }
+            // 当前位置圆点
+            Circle()
+                .fill(Color.white)
+                .frame(width: 7, height: 7)
+                .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+                .offset(y: -4)
+        }
+        .frame(width: 7)
+        .allowsHitTesting(false)
+    }
+
     /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
     private var exitNavOverlay: some View {
         // v2.02 按高德导航底部卡片重做：
@@ -2779,6 +2860,24 @@ struct ContentView: View {
                     .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18))
                     .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                     .padding(.horizontal, 12)
+                } else if model.navUserMoved {
+                    // v2.22 用户在导航中移动了地图：整张提示卡收起，
+                    // 只在底部正中留一个"继续导航"按钮（点它回到定位点并恢复视野）
+                    Button {
+                        haptic()
+                        model.navUserMoved = false
+                        model.setNavScale(500)
+                        model.navigateFollowTick += 1
+                    } label: {
+                        Text("继续导航")
+                            .font(.headline.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 26)
+                            .padding(.vertical, 12)
+                            .background(Color.black.opacity(0.72), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
                 } else if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
                     navBottomCard(ns)
                 }
@@ -2862,7 +2961,7 @@ struct ContentView: View {
                 .padding(.trailing, 12)
                 .padding(.leading, 10)
             }
-            .frame(height: 52)
+            .frame(height: 46)
 
             Divider().padding(.horizontal, 12)
 
@@ -2886,9 +2985,8 @@ struct ContentView: View {
                         }
                     }
                 } else {
-                    Text("继续直行")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(mainFg)
+                    // v2.22 去掉"继续直行"提示（无转向时这一层留空即可）
+                    EmptyView()
                 }
                 Spacer(minLength: 4)
                 Text("\(Int(ns.speedKph))")
@@ -2900,7 +2998,7 @@ struct ContentView: View {
                     .foregroundStyle(dimFg)
             }
             .padding(.horizontal, 14)
-            .frame(height: 36)
+            .frame(height: 30)
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
             // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
@@ -2911,7 +3009,7 @@ struct ContentView: View {
                     laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
                 }
             }
-            .frame(height: 38)
+            .frame(height: 32)
             .frame(maxWidth: .infinity)
             .background(Color.black.opacity(0.02))
         }
