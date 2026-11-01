@@ -194,7 +194,7 @@ jobs:
 
           # ---- 结构校验（缺 Widget 直接失败，避免交出"看着能用"的包）----
           echo "== IPA 结构 =="
-          APPIN="Payload/$(basename "$APP")"
+          APPIN="Payload/$(basename "$APP")/"   # 末尾斜杠：下面所有拼接都靠它
           unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/MotoNavWidget.appex/Info.plist" || {
             echo "!! PlugIns 中缺少 MotoNavWidget.appex"; unzip -Z1 "$OUT" | grep PlugIns || true; exit 1; }
           EXT="$RUNNER_TEMP/ext"; rm -rf "$EXT"; mkdir -p "$EXT"
