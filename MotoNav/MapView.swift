@@ -1463,7 +1463,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
     private func markNeedsRedraw(_ rect: MKMapRect?) {
         lock.lock()
         if let r = rect {
-            pendingRedraw = pendingRedraw.map { MKMapRectUnion($0, r) } ?? r
+            pendingRedraw = pendingRedraw.map { $0.union(r) } ?? r
         } else {
             pendingRedraw = .world
         }
