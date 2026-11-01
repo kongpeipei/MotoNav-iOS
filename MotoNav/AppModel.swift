@@ -2135,7 +2135,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     routeChoices = choices.map { c -> RouteChoice in
                         RouteChoice(points: c.points, distanceM: c.distanceM, durationS: c.durationS,
                                     turns: c.turns, label: c.label,
-                                    poiCount: nearbyPoisOnRoute(c.points).count, traffic: c.traffic)
+                                    poiCount: nearbyPoisOnRoute(c.points).count, traffic: c.traffic,
+                                    trafficLights: c.trafficLights)
                     }
                     selectedRouteIdx = 0
                 }
@@ -2181,7 +2182,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let n = nearbyPoisOnRoute(c.points).count
                 return RouteChoice(points: c.points, distanceM: c.distanceM,
                                    durationS: c.durationS, turns: c.turns,
-                                   label: c.label, poiCount: n, traffic: c.traffic)
+                                   label: c.label, poiCount: n, traffic: c.traffic,
+                                   trafficLights: c.trafficLights)
             }
             routeChoices = list
             selectedRouteIdx = 0
@@ -2240,7 +2242,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     let n = nearbyPoisOnRoute(c.points).count
                     return RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
-                                       label: c.label, poiCount: n, traffic: c.traffic)
+                                       label: c.label, poiCount: n, traffic: c.traffic,
+                                   trafficLights: c.trafficLights)
                 }
                 routeChoices = list
                 selectedRouteIdx = 0
@@ -2475,7 +2478,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         let f = ordered[0]
         ordered[0] = RouteChoice(points: f.points, distanceM: f.distanceM, durationS: f.durationS,
-                                 turns: f.turns, label: "推荐", poiCount: f.poiCount, traffic: f.traffic)
+                                 turns: f.turns, label: "推荐", poiCount: f.poiCount, traffic: f.traffic,
+                                 trafficLights: f.trafficLights)
         return ordered
     }
 

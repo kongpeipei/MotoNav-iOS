@@ -79,6 +79,8 @@ struct RouteChoice {
     let poiCount: Int
     /// v1.99 路况分段（高德 tmc），只在拥堵/缓行段有值
     var traffic: [TrafficSpan] = []
+    /// v2.18 红绿灯个数（高德 path.traffic_lights；拿不到为 -1）
+    var trafficLights: Int = -1
 }
 
 /// 免费骑行/驾车路径规划（OSRM 公共服务，无需 API Key），
@@ -173,6 +175,9 @@ enum RouteFetcher {
         // 其余保留策略优势标签（少收费/躲避拥堵/不走高速），重复的退化为"备选"
         if !result.isEmpty {
             let minDist = result.map(\.distanceM).min() ?? 0
+            // v2.18 高德式第三条标签：红绿灯最少的一条标「等灯少」（数据来自 path.traffic_lights）
+            let headLights = result[0].trafficLights
+            let minLights = result.filter { $0.trafficLights >= 0 }.map(\.trafficLights).min()
             var used = Set<String>()
             var out: [RouteChoice] = []
             for (i, c) in result.enumerated() {
@@ -180,6 +185,9 @@ enum RouteFetcher {
                 if i > 0 {
                     if c.distanceM == minDist && !used.contains("距离最短") {
                         label = "距离最短"
+                    } else if let ml = minLights, c.trafficLights == ml,
+                              (headLights < 0 || ml < headLights), !used.contains("等灯少") {
+                        label = "等灯少"
                     } else if used.contains(label) || label == "推荐" {
                         label = "备选"
                     }
@@ -187,7 +195,8 @@ enum RouteFetcher {
                 used.insert(label)
                 out.append(RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
-                                       label: label, poiCount: c.poiCount, traffic: c.traffic))
+                                       label: label, poiCount: c.poiCount,
+                                       traffic: c.traffic, trafficLights: c.trafficLights))
             }
             result = out
         }
@@ -278,18 +287,29 @@ enum RouteFetcher {
         let (glat2, glon2) = CoordConv.wgs2gcj(end.latitude, end.longitude)
         let origin = String(format: "%.6f,%.6f", glon1, glat1)
         let destination = String(format: "%.6f,%.6f", glon2, glat2)
-        // 策略：0 速度优先 / 1 费用优先 / 2 距离优先 / 4 躲避拥堵 / 6 不走高速
-        let strategies: [(String, String)] = [
-            ("0", "推荐"), ("1", "少收费"), ("2", "距离优先"),
-            ("4", "躲避拥堵"), ("6", "不走高速"),
-        ]
         // v1.99 途经点（"顺路加一站"）：高德 waypoints 参数，多个用 ; 分隔
         var waypoints: String? = nil
         if let v = via {
             let (vlat, vlon) = CoordConv.wgs2gcj(v.latitude, v.longitude)
             waypoints = String(format: "%.6f,%.6f", vlon, vlat)
         }
-        var all: [RouteChoice] = []
+
+        // v2.18 方案池 = 高德 v5「默认策略 + alternative_route=3」的多备选
+        //              + v3 多策略（互补：v3 每个 strategy 只回一条主方案，只能多打几次）
+        //
+        // 旧版只打 v3 的 5 个 strategy，每个只回 1 条，形状去重后往往只剩 2 条，
+        // 而高德 App 同一 OD 能给 3 条 —— 差别就在"候选池"本身大小。
+        // 与 v3 多策略并发跑，总耗时取两者较慢的一边（串行会白白多等一次往返）
+        async let v5Future = requestV5(origin: origin, destination: destination, key: key,
+                                       alternatives: 3, label: "推荐", waypoints: waypoints)
+
+        // 策略：0 速度优先 / 2 距离优先 / 4 躲避拥堵 / 5 多策略 / 6 不走高速
+        // （"1 费用优先"在城市短途几乎与 0 完全同一条，去掉省一次请求，避免撞 QPS 限额）
+        let strategies: [(String, String)] = [
+            ("0", "推荐"), ("2", "距离最短"),
+            ("4", "躲避拥堵"), ("5", "多策略"), ("6", "不走高速"),
+        ]
+        var v3: [RouteChoice] = []
         await withTaskGroup(of: [RouteChoice].self) { group in
             for (st, label) in strategies {
                 group.addTask {
@@ -297,16 +317,58 @@ enum RouteFetcher {
                                           key: key, st: st, label: label, waypoints: waypoints)
                 }
             }
-            for await list in group { all.append(contentsOf: list) }
+            for await list in group { v3.append(contentsOf: list) }
         }
+        let v5 = await v5Future
+        let primary = v5.first?.points
+
+        var pool = v5 + v3
         // 用时升序 → 几何去重（形状几乎一致视为同一条，保留用时更短者）
-        all.sort { $0.durationS < $1.durationS }
+        pool.sort { $0.durationS < $1.durationS }
         var unique: [RouteChoice] = []
-        for c in all {
+        for c in pool {
             if unique.contains(where: { sameShape($0.points, c.points) }) { continue }
             unique.append(c)
         }
+        // v2.18 高德 v5 的第一条就是高德 App 的「推荐」：把它顶到最前，其余按用时排。
+        // 旧版一律按用时排序，等于用"纯时间最优"覆盖了高德的"综合推荐"——
+        // 同一 OD 高德推荐走快速路 6.0km/13 分，我们却把 5.6km/13 分的小路排到了第一位。
+        if let p = primary, let idx = unique.firstIndex(where: { sameShape($0.points, p) }), idx > 0 {
+            let head = unique.remove(at: idx)
+            unique.insert(head, at: 0)
+        }
         return Array(unique.prefix(4))
+    }
+
+    /// v2.18 高德 v5 驾车规划：`alternative_route` 一次返回 1~4 条备选，
+    /// 这才是高德 App 里并列三张卡片的来源（v3 的每个 strategy 只给一条主方案）。
+    ///
+    /// 兜底策略：先用 show_fields 取全量字段，若被拒（部分 Key 未开通 v5 / 字段名变更）
+    /// 再不传 show_fields 重试一次；两次都失败就返回空数组，自动退回 v3 多策略。
+    /// 另外只接受"能解析出转向步骤"的方案 —— v5 的 steps 字段比 v3 少，
+    /// 没有 action/road 就没有转向播报，宁可不要这条候选。
+    private static func requestV5(
+        origin: String, destination: String, key: String,
+        alternatives: Int, label: String, waypoints: String? = nil
+    ) async -> [RouteChoice] {
+        for useFields in [true, false] {
+            var urlStr = "https://restapi.amap.com/v5/direction/driving?key=\(key)"
+                + "&origin=\(origin)&destination=\(destination)"
+                + "&alternative_route=\(alternatives)"
+            if useFields { urlStr += "&show_fields=cost,navi,polyline" }
+            if let w = waypoints, !w.isEmpty { urlStr += "&waypoints=\(w)" }
+            guard let url = URL(string: urlStr) else { continue }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 12
+            guard let (data, _) = try? await URLSession.shared.data(for: req),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let route = obj["route"] as? [String: Any],
+                  let paths = route["paths"] as? [[String: Any]] else { continue }
+            let parsed = paths.compactMap { parseAmapPath($0, label: label) }
+                .filter { $0.points.count >= 2 && ($0.turns.count >= 2 || $0.distanceM < 200) }
+            if !parsed.isEmpty { return parsed }
+        }
+        return []
     }
 
     /// 两条折线形状是否几乎一致（采样点平均偏差 < 70 米）
@@ -401,8 +463,10 @@ enum RouteFetcher {
                 }
             }
         }
+        let lights = Int(p["traffic_lights"] as? String ?? "") ?? -1
         return RouteChoice(points: points, distanceM: distanceM, durationS: durationS,
-                           turns: turns, label: label, poiCount: 0, traffic: traffic)
+                           turns: turns, label: label, poiCount: 0, traffic: traffic,
+                           trafficLights: lights)
     }
 
     /// 高德折线字符串 → 坐标数组（GCJ → WGS）
