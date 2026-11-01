@@ -1909,8 +1909,21 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let city = await currentCityName()
 
         var tips = await amapInputTipsRaw(query, anchor: anchor, city: city, cityLimit: true)
-        if tips.isEmpty {
-            tips = await amapInputTipsRaw(query, anchor: anchor, city: city, cityLimit: false)
+
+        // v2.25 关键修正：citylimit=true 命中"非空"不代表用户想要的结果。
+        // 典型case（实测）：搜"吴圩镇" —— 真正的吴圩镇在**滁州市定远县**，
+        // 但 citylimit=true 时高德只返回合肥市内的三个同名村/路
+        // （肥西"吴圩"、长丰"吴圩"、蜀山"吴圩"），名称都不是用户搜的"吴圩镇"。
+        // 旧逻辑只看"是否为空"，于是到此为止，用户永远看不到真正的吴圩镇。
+        //
+        // 现在：如果城市内结果里**没有一条名称包含关键词**（例如搜"吴圩镇"，
+        // 结果全是"吴圩"），就认为"本市没这个点"，继续去全国范围找，
+        // 两边合并后再排序（精确命中的排前面，同名的按距离排后面）。
+        if !tips.contains(where: { $0.name.contains(query) }) {
+            let wider = await amapInputTipsRaw(query, anchor: anchor, city: city, cityLimit: false)
+            for t in wider where !tips.contains(where: { $0.id == t.id }) {
+                tips.append(t)
+            }
         }
         if tips.isEmpty, !city.isEmpty {
             tips = await amapTextSearch(query, city: city, anchor: anchor)
@@ -1919,7 +1932,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             tips = await amapKeywordSearch(query, lat: a.latitude, lon: a.longitude,
                                            radius: 30000, distanceNote: false)
         }
-        return rankTips(tips, anchor: anchor)
+        return rankTips(tips, anchor: anchor, keyword: query)
     }
 
     /// inputtips 请求本体（city/location 都按高德要求传 GCJ 坐标与城市名）
@@ -1952,17 +1965,42 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                   let loc = t["location"] as? String, !loc.isEmpty else { continue }
             let parts = loc.split(separator: ",").compactMap { Double($0) }
             guard parts.count == 2 else { continue }
-            let district = t["district"] as? String ?? ""
-            let addr = t["address"] as? String ?? ""
+            // v2.25 inputtips 字段解析修正：
+            // 高德这个接口的字段类型很坑 ——
+            //   address 常常是**空数组 []**（不是字符串），有值时才是字符串；
+            //   district 在部分条目里也是数组；
+            //   type 字段**根本不存在**（只有数字型的 typecode）。
+            // 旧代码一律 `as? String`，于是 address/type 恒为 nil，
+            // 副标题全部退化成"地点" —— 这就是"搜出来一些奇怪的地址"的直接原因。
+            let addr = Self.tipString(t["address"])
+            let district = Self.tipString(t["district"])
             var sub = ""
             if !addr.isEmpty { sub += addr }
             if !district.isEmpty { sub += (sub.isEmpty ? "" : " · ") + district }
-            if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
+            if sub.isEmpty { sub = "地点" }
             // v1.98 高德给的是 GCJ-02，转 WGS 后与地图/路线同一口径（否则点搜索结果会偏 500 米）
             let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
             out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
         }
         return Array(out.prefix(20))
+    }
+
+    /// v2.25 inputtips 字段取值：字段可能是字符串、也可能是空数组（甚至数字）
+    /// 统一转成可读字符串，取不到返回空串
+    private static func tipString(_ any: Any?) -> String {
+        guard let any else { return "" }
+        if let s = any as? String { return s }
+        if let arr = any as? [String] {
+            // 空数组 → 空串；有值时取第一个非空项（高德多给一个 ["合肥市"] 之类的数组）
+            for x in arr where !x.isEmpty { return x }
+            return ""
+        }
+        if let arr = any as? [Any] {
+            let parts = arr.compactMap { $0 as? String }.filter { !$0.isEmpty }
+            return parts.joined(separator: "")
+        }
+        if let n = any as? Int { return String(n) }
+        return ""
     }
 
     /// 城市内关键词检索（place/text）：inputtips 偏"输入联想"，覆盖不全时用它兜底
@@ -2005,19 +2043,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 结果收敛：去重 → 按距离升序 → 把明显在外地的条目剔掉（只剩外地时就保留最近的几条）
-    private func rankTips(_ tips: [AmapTip], anchor: CLLocationCoordinate2D?) -> [AmapTip] {
+    private func rankTips(_ tips: [AmapTip], anchor: CLLocationCoordinate2D?,
+                          keyword: String = "") -> [AmapTip] {
         var seen = Set<String>()
-        var rows: [(AmapTip, Double)] = []
+        var rows: [(AmapTip, Double, Bool)] = []
+        let kw = keyword.trimmingCharacters(in: .whitespaces)
         for t in tips {
             guard seen.insert(t.id).inserted else { continue }
             let d = anchor.map {
                 distanceM($0, CLLocationCoordinate2D(latitude: t.lat, longitude: t.lon))
             } ?? 0
-            rows.append((t, d))
+            // v2.25 精确命中优先：名称里包含关键词的排在前面。
+            // 搜"吴圩镇"时，高德会先返回合肥的"吴圩"（同名村），
+            // 不做这一步的话用户看到的第一条就是错的那个。
+            let exact = !kw.isEmpty && t.name.contains(kw)
+            rows.append((t, d, exact))
         }
         guard anchor != nil else { return rows.map { $0.0 } }
-        rows.sort { $0.1 < $1.1 }
-        // 100 公里以外基本已经跨市：只要本市有结果，就不让外地条目挤进列表
+        // 排序：精确命中优先 → 距离近优先
+        rows.sort { a, b in
+            if a.2 != b.2 { return a.2 }
+            return a.1 < b.1
+        }
+        // 100 公里以外基本已经跨市：只要有 100km 内的结果，就不让外地条目挤进列表
         let near = rows.filter { $0.1 <= 100_000 }
         let kept = near.isEmpty ? Array(rows.prefix(10)) : near
         return kept.map { $0.0 }

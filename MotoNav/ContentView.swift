@@ -112,6 +112,9 @@ struct ContentView: View {
     @State private var searchLinkFrom: CLLocationCoordinate2D?
     /// v2.23 搜索选点黑线终点（搜索选点，WGS-84）
     @State private var searchLinkTo: CLLocationCoordinate2D?
+    /// v2.25 搜索选点高亮（坐标 + 名称），地图上显示橙色定位环
+    @State private var searchHitCoord: CLLocationCoordinate2D?
+    @State private var searchHitTitle: String = ""
     /// v2.23 边缘滑动返回：手指起点 x（用于判断是否从屏幕边缘起手）
     @State private var edgeDragStartX: CGFloat = 0
     /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
@@ -271,6 +274,12 @@ struct ContentView: View {
             // v1.80 底部选项卡：仅"我的"页保留（导航主页已合并进底部主卡片，导航/我的按钮在卡片内）
             if !model.navigating && !uiHidden && selectedTab == 1 {
                 AnyView(bottomTabBar)
+            }
+        }
+        // v2.25 我的位置移动时，黑线起点跟着更新（线始终连着当前定位点）
+        .onChange(of: model.currentLocation?.latitude ?? 0) { _, _ in
+            if searchHitCoord != nil {
+                searchLinkFrom = model.currentLocation
             }
         }
         // v2.23 全局边缘滑动返回：手指从屏幕左/右边缘往中间滑 → 返回上一级
@@ -656,6 +665,8 @@ struct ContentView: View {
             },
             searchLinkFrom: searchLinkFrom,
             searchLinkTo: searchLinkTo,
+            searchHit: searchHitCoord.map { SearchHit(coord: $0, title: searchHitTitle) },
+            keepHeadingFollow: true,
             focusCoord: model.focusCoord,
             focusTick: model.focusTick,
             traveledIdx: model.traveledIdx,
@@ -1523,6 +1534,8 @@ struct ContentView: View {
     private func clearSearchLink() {
         searchLinkFrom = nil
         searchLinkTo = nil
+        searchHitCoord = nil
+        searchHitTitle = ""
     }
 
     private func closeTapPlace() {
@@ -3589,14 +3602,15 @@ struct ContentView: View {
         model.routePois = []
         model.routeTurns = []
         model.routeChoices = []
-        // v2.23 地图跳转到该搜索点并保持居中（不再用 tipFit 的 3000m 视野 + 强制北向上），
-        // 同时用黑线把"我的位置"和"搜索点"连起来，一眼看出直线距离与方位。
-        // 地图保持 followWithHeading —— 转动手机时地图继续跟随朝向变化。
+        // v2.25 地图跳转到该搜索点并保持居中，同时：
+        //   · 高亮显示该点（橙色定位环 + 名称）
+        //   · 用黑线把"我的位置"和"搜索点"连起来，一眼看出直线距离与方位
+        //   · 保持 followWithHeading —— 转动手机时地图继续跟随朝向变化
         let target = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         searchLinkTo = target
         searchLinkFrom = model.currentLocation
-        model.focusCoord = target
-        model.focusTick += 1
+        searchHitCoord = target
+        searchHitTitle = name
         model.status = "已定位到「\(name)」"
         Task {
             let info = await model.amapRegeoInfo(lat: lat, lon: lon)

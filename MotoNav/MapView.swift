@@ -114,6 +114,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     var searchLinkFrom: CLLocationCoordinate2D? = nil
     /// v2.23 搜索选点连线终点（搜索选点，WGS-84）
     var searchLinkTo: CLLocationCoordinate2D? = nil
+    /// v2.25 搜索选点高亮：坐标（WGS-84）+ 名称。nil = 不显示高亮。
+    var searchHit: SearchHit? = nil
+    /// v2.25 搜索选点后地图是否跟随朝向（保持 followWithHeading，不被关掉）
+    var keepHeadingFollow: Bool = false
     /// v2.21 地图聚焦到指定坐标（点击途经点时用；WGS-84）
     var focusCoord: CLLocationCoordinate2D? = nil
     /// v2.21 聚焦触发计数（内容不变不重复移动地图）
@@ -646,6 +650,47 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(ann)
             }
         }
+        // v2.25 搜索选点高亮：橙色定位环 + 名称气泡
+        let hitKey = searchHit.map { "\($0.coord.latitude)-\($0.coord.longitude)-\($0.title)" } ?? ""
+        if hitKey != context.coordinator.lastSearchHitKey {
+            context.coordinator.lastSearchHitKey = hitKey
+            if let old = context.coordinator.searchHitAnnotation {
+                map.removeAnnotation(old)
+                context.coordinator.searchHitAnnotation = nil
+            }
+            if let h = searchHit {
+                let ann = SearchHitAnnotation(coordinate: h.coord, title: h.title)
+                context.coordinator.searchHitAnnotation = ann
+                map.addAnnotation(ann)
+            }
+        }
+        // v2.25 搜索选点后：地图跳到该点并**保持朝向跟随**
+        // （旧版用 userTrackingMode = .none 把跟随关掉，转动手机地图就不跟了）
+        if let h = searchHit, let loc = userLocation {
+            let linkKey2 = "\(h.coord.latitude)-\(h.coord.longitude)-\(loc.latitude)-\(loc.longitude)"
+            if linkKey2 != context.coordinator.lastSearchHitViewKey {
+                context.coordinator.lastSearchHitViewKey = linkKey2
+                context.coordinator.setRegionProgrammatically {
+                    if keepHeadingFollow {
+                        map.userTrackingMode = .followWithHeading
+                    } else {
+                        map.userTrackingMode = .none
+                    }
+                    // 视野同时装下"我的位置"和"搜索点"，黑线两端都在屏内
+                    let a = MapGeo.toGCJ(loc)
+                    let b = MapGeo.toGCJ(h.coord)
+                    let midLat = (a.latitude + b.latitude) / 2
+                    let midLon = (a.longitude + b.longitude) / 2
+                    let spanLat = max(abs(a.latitude - b.latitude) * 1.6, 0.004)
+                    let spanLon = max(abs(a.longitude - b.longitude) * 1.6, 0.004)
+                    map.setRegion(
+                        MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: midLat, longitude: midLon),
+                                           latitudinalMeters: spanLat * 111_320,
+                                           longitudinalMeters: spanLon * 111_320 * cos(midLat * .pi / 180)),
+                        animated: true)
+                }
+            }
+        }
         // v2.23 搜索选点黑线：我的位置 ↔ 搜索选点
         let linkKey = "\(searchLinkFrom?.latitude ?? 0)-\(searchLinkFrom?.longitude ?? 0)-\(searchLinkTo?.latitude ?? 0)-\(searchLinkTo?.longitude ?? 0)"
         if linkKey != context.coordinator.lastSearchLinkKey {
@@ -934,6 +979,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         var connectorPolylines: [MKPolyline] = []
         /// v2.23 搜索选点到我的位置的黑色连线
         var searchLinkPolyline: MKPolyline?
+        /// v2.25 搜索选点高亮标注
+        var searchHitAnnotation: SearchHitAnnotation?
+        /// v2.25 高亮内容键（标注增删）
+        var lastSearchHitKey = ""
+        /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）
+        var lastSearchHitViewKey = ""
         /// v2.23 黑线内容键（坐标变化才重建）
         var lastSearchLinkKey = ""
         /// v2.22 起点/终点入口箭头标注
@@ -1352,6 +1403,19 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.titleVisibility = .adaptive
                 return v
             }
+            if let sh = annotation as? SearchHitAnnotation {
+                // v2.25 搜索选点高亮：橙色定位环 + 名称气泡
+                let id = "searchHit"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: sh, reuseIdentifier: id)
+                v.annotation = sh
+                v.markerTintColor = UIColor(red: 1.0, green: 0.45, blue: 0.0, alpha: 1.0)
+                v.glyphText = "📍"
+                v.displayPriority = .required
+                v.titleVisibility = .adaptive
+                v.canShowCallout = false
+                return v
+            }
             if let ga = annotation as? GasAnnotation {
                 let id = "gas"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
@@ -1593,6 +1657,38 @@ final class PreviewAnnotation: NSObject, MKAnnotation {
         didChangeValue(forKey: "coordinate")
     }
     var title: String? { "搜索目标" }
+}
+
+/// v2.25 搜索选点高亮（坐标 + 名称）
+/// 用结构体而不是元组 —— Swift 的 memberwise init 对元组标签的处理容易出坑
+struct SearchHit {
+    let coord: CLLocationCoordinate2D
+    let title: String
+}
+
+/// v2.25 搜索选点高亮标注
+///
+/// 需求：搜索框搜到地点后，除了弹地点卡，地图还要跳到该点并**高亮显示**，
+/// 同时用黑线把"我的位置"和该点连起来。
+/// 用 MKMarkerAnnotationView + 自定义光圈视图实现"定位环 + 名称气泡"。
+final class SearchHitAnnotation: NSObject, MKAnnotation {
+    private var wgs: CLLocationCoordinate2D
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+    let titleText: String
+
+    init(coordinate: CLLocationCoordinate2D, title: String) {
+        self.wgs = coordinate
+        self.coordinate = MapGeo.toGCJ(coordinate)
+        self.titleText = title
+        super.init()
+    }
+
+    var title: String? { titleText }
+
+    func update(_ c: CLLocationCoordinate2D) {
+        wgs = c
+        coordinate = MapGeo.toGCJ(c)
+    }
 }
 
 /// 加油站标注（橙色"油"）
