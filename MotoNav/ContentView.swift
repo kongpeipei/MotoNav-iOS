@@ -108,6 +108,12 @@ struct ContentView: View {
     @State private var slotTarget: CommonPlaceSlot?
     /// v2.19 途经点选择模式（点规划卡"+"后搜索选点，卡片收藏键"设为途经点"确认）
     @State private var waypointSelecting = false
+    /// v2.23 搜索选点黑线：我的位置 → 搜索选点（WGS-84）；非 nil 时地图画黑线
+    @State private var searchLinkFrom: CLLocationCoordinate2D?
+    /// v2.23 搜索选点黑线终点（搜索选点，WGS-84）
+    @State private var searchLinkTo: CLLocationCoordinate2D?
+    /// v2.23 边缘滑动返回：手指起点 x（用于判断是否从屏幕边缘起手）
+    @State private var edgeDragStartX: CGFloat = 0
     /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
     @State private var tripAutoDismissTask: Task<Void, Never>?
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
@@ -226,6 +232,14 @@ struct ContentView: View {
                     AnyView(cruiseCard)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
+                // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
+                if !model.navigating && model.waypointCandidate != nil {
+                    AnyView(waypointCandidateCard)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 96)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(15)
+                }
                 // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
                 if !uiHidden {
                     AnyView(bottomOverlay)
@@ -259,6 +273,23 @@ struct ContentView: View {
                 AnyView(bottomTabBar)
             }
         }
+        // v2.23 全局边缘滑动返回：手指从屏幕左/右边缘往中间滑 → 返回上一级
+        // 放在最外层 ZStack 上（覆盖地图），用 simultaneousGesture 避免抢地图自身手势；
+        // 地图区域内的横向拖动（平移）依然可用 —— 只有起手点在边缘 40pt 内才触发。
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onChanged { v in
+                    if edgeDragStartX == 0 { edgeDragStartX = v.startLocation.x }
+                }
+                .onEnded { v in
+                    let startX = edgeDragStartX
+                    edgeDragStartX = 0
+                    let screenW = UIScreen.main.bounds.width
+                    if handleEdgeSwipe(startX: startX, translation: v.translation.width, screenW: screenW) {
+                        haptic()
+                    }
+                }
+        )
         // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
         .onChange(of: model.navigating) { _, nv in
             if nv {
@@ -623,6 +654,8 @@ struct ContentView: View {
                     model.status = "已校准「\(c.name)」位置"
                 }
             },
+            searchLinkFrom: searchLinkFrom,
+            searchLinkTo: searchLinkTo,
             focusCoord: model.focusCoord,
             focusTick: model.focusTick,
             traveledIdx: model.traveledIdx,
@@ -699,11 +732,7 @@ struct ContentView: View {
                 Spacer()
                 Button {
                     haptic()
-                    goHereName = nil
-                    goHereLat = 0
-                    goHereLon = 0
-                    model.clearPreview()
-                    model.clearRoute()
+                    // v2.23 只回中地图，不清路线（见 zoomOverlay 里的同名按钮）
                     model.centerOnUser()
                 } label: {
                     ZStack {
@@ -1271,16 +1300,9 @@ struct ContentView: View {
 
     /// 地点卡收藏键（编辑态）：把当前地点写入所点选项；再点一次则取消并删除该选项
     private func toggleSlotAssignment(name: String, lat: Double, lon: Double) {
-        // v2.19 途经点选择模式：同一地点再点一次 = 取消；加完自动退出选择态
+        // v2.23 途经点选择模式：选中的点先成为"候选"（可对比时长、右侧确认后才加入）
         if waypointSelecting {
-            if let existing = model.waypoints.first(where: { nearSamePlace($0, lat, lon) }) {
-                model.removeWaypoint(existing)
-            } else {
-                model.addWaypoint(name: name, lat: lat, lon: lon)
-            }
-            waypointSelecting = false
-            searchFocused = false
-            dismissKeyboard()
+            selectWaypointCandidate(name: name, lat: lat, lon: lon)
             return
         }
         guard let slot = slotTarget else { return }
@@ -1427,10 +1449,16 @@ struct ContentView: View {
                     //   上卡 = 出发点/途经点/终点 + 服务小卡 + 沿途设施结果
                     //   下卡 = 方案卡 + 骑行风险 + 开始导航
                     // 两张卡都可独立上下拖动；下卡左滑关闭整条路线。
-                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.36), lockX: true) {
+                    // v2.23 上卡固定在屏幕顶部：只能下拉，不能上拉顶出屏幕；
+                    // 下次启动位置不记忆，永远回到顶部。
+                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.06),
+                                   lockX: true, topLocked: true) {
                         AnyView(routePlanTopCard)
                     }
-                    DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true,
+                    // v2.23 底部锚定：pos.y 是卡片底边位置，卡片向上生长。
+                    // 之前按中心定位（0.88），"开始导航"绿色按钮被屏幕下缘裁掉 → 点不动。
+                    DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.97),
+                                   lockX: true, bottomAnchor: true,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanBottomCard) }
                 } else {
@@ -1440,7 +1468,8 @@ struct ContentView: View {
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
                 if tapPlace == nil && tipCard == nil && cameraPoiCard == nil && model.routeChoices.isEmpty {
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { AnyView(bottomMainCard) }
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
+                                   lockX: true, bottomAnchor: true) { AnyView(bottomMainCard) }
                 }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
@@ -1489,6 +1518,12 @@ struct ContentView: View {
     // MARK: - v1.95 轻点地图 → 地点介绍卡
 
     /// 关闭地点介绍卡
+    /// v2.23 收起搜索选点黑线（回到首页/清路线时）
+    private func clearSearchLink() {
+        searchLinkFrom = nil
+        searchLinkTo = nil
+    }
+
     private func closeTapPlace() {
         tapPlace = nil
     }
@@ -1516,6 +1551,79 @@ struct ContentView: View {
             cur.loading = false
             tapPlace = cur
         }
+    }
+
+    /// v2.23 全局「返回上一级」（屏幕左右边缘往中间滑动触发）
+    ///
+    /// 按层级从最上往下退：
+    ///   途经点选择态 → 退出选择；搜索联想/键盘 → 收起；
+    ///   地点卡 → 关闭；路线规划 → 清除；"我的"页 → 回地图；
+    ///   规划态顶部搜索框 → 回到地图首页；沉浸态 → 先恢复 UI。
+    /// 导航中不响应（避免手势和导航操作打架）。
+    @discardableResult
+    private func goBackOneLevel() -> Bool {
+        guard !model.navigating else { return false }
+        if waypointSelecting {
+            waypointSelecting = false
+            searchFocused = false
+            dismissKeyboard()
+            model.status = "已退出途经点选择"
+            return true
+        }
+        if slotTarget != nil {
+            slotTarget = nil
+            model.status = "已退出常用地点设置"
+            return true
+        }
+        if searchFocused || showSuggestions {
+            searchFocused = false
+            showSuggestions = false
+            searchExpanded = false
+            dismissKeyboard()
+            return true
+        }
+        if cameraPoiCard != nil {
+            cameraPoiCard = nil
+            return true
+        }
+        if tapPlace != nil {
+            closeTapPlace()
+            return true
+        }
+        if tipCard != nil {
+            tipCard = nil
+            tipRoad = nil
+            tipAoiName = nil
+            tipPolygon = nil
+            return true
+        }
+        if !model.routeChoices.isEmpty {
+            closeRoutePlan()
+            clearSearchLink()
+            model.status = "已退出路线规划"
+            return true
+        }
+        if selectedTab == 1 {
+            selectedTab = 0
+            return true
+        }
+        if uiHidden {
+            withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
+            return true
+        }
+        return false
+    }
+
+    /// v2.23 边缘滑动返回：手指从屏幕左/右边缘（40pt 内）起手并向中间滑过 60pt 触发返回
+    private func handleEdgeSwipe(startX: CGFloat, translation: CGFloat, screenW: CGFloat) -> Bool {
+        let edge: CGFloat = 40
+        let threshold: CGFloat = 60
+        let fromLeft = startX <= edge
+        let fromRight = startX >= screenW - edge
+        guard fromLeft || fromRight else { return false }
+        let inward = fromLeft ? translation : -translation
+        guard inward > threshold else { return false }
+        return goBackOneLevel()
     }
 
     /// v1.96 轻点非地点区域：收起全部卡片 + 隐藏所有浮层（只留右下角定位按钮），再轻点恢复
@@ -1851,7 +1959,8 @@ struct ContentView: View {
                     let lon = p.lon
                     closeTapPlace()
                     model.clearPreview()
-                    model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: true)
+                    // v2.23 直接进导航，不经过路线规划界面
+                    model.navigateDirect(to: name, lat: lat, lon: lon)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
@@ -2086,11 +2195,12 @@ struct ContentView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
-                // v2.19 服务小卡移到终点下方（同高德"驾车/公交/打车"一排的选择条）
-                serviceChipsRow
+                // v2.23 服务小卡只在 routePlanTopCard 里渲染一次（这里曾重复渲染一次，
+                // 导致"加油/充电"小卡和设施列表出现两遍）
             }
-            // 右侧：v2.21 按用户要求把「＋」上移到原交换箭头的位置，交换按钮下移
-            VStack(spacing: 14) {
+            // 右侧按钮组（v2.23）：
+            //   「＋」与起点/终点文字区**垂直居中对齐**（正后方），「⇅」放在其下方
+            VStack(spacing: 12) {
                 Button {
                     haptic()
                     beginWaypointSelect()
@@ -2098,7 +2208,7 @@ struct ContentView: View {
                     Image(systemName: "plus")
                         .font(.body.bold())
                         .foregroundStyle(.blue)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 32, height: 32)
                         .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
                 }
                 .buttonStyle(.plain)
@@ -2109,11 +2219,12 @@ struct ContentView: View {
                     Image(systemName: "arrow.up.arrow.down")
                         .font(.body.bold())
                         .foregroundStyle(.primary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 32, height: 32)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
                 }
                 .buttonStyle(.plain)
             }
+            .frame(maxHeight: .infinity, alignment: .center)
         }
         .padding(.horizontal, 4)
     }
@@ -2124,17 +2235,129 @@ struct ContentView: View {
         uiHidden = false
         tapPlace = nil
         tipCard = nil
+        cameraPoiCard = nil
         onlineTips = []
         searchText = ""
         showSuggestions = false
         searchExpanded = false
         waypointSelecting = true
         showSearchField = true
-        model.status = "选择途经点：搜索或点地图地点，再点卡片「设为途经点」"
+        model.cancelWaypointCandidate()
+        model.status = "添加途经点：搜索地点或点地图选点，选完可对比时长再确认"
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard waypointSelecting else { return }
             searchFocused = true
         }
+    }
+
+    /// v2.23 选中的搜索点 → 变成"候选途经点"（地图跳转 + 黑线 + 时长对比），不直接加入
+    private func selectWaypointCandidate(name: String, lat: Double, lon: Double) {
+        waypointSelecting = false
+        searchFocused = false
+        showSuggestions = false
+        searchExpanded = false
+        dismissKeyboard()
+        let wp = RouteWaypoint(name: name, lat: lat, lon: lon)
+        model.previewWaypointCandidate(wp)
+        // 地图跳到该搜索点并居中 + 黑线连回我的位置
+        let target = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        searchLinkTo = target
+        searchLinkFrom = model.currentLocation
+        model.focusCoord = target
+        model.focusTick += 1
+        model.status = "已选「\(name)」，对比时长后点右侧「添加」"
+    }
+
+    /// v2.23 候选途经点对比卡（点 ➕ 选点后出现）
+    /// 左侧：候选点名称 + 「添加前 → 添加后」时长变化；右侧：「添加」确认按钮 + ✕ 取消
+    private var waypointCandidateCard: some View {
+        Group {
+            if let cand = model.waypointCandidate {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 5) {
+                            Circle().fill(Color.orange).frame(width: 8, height: 8)
+                            Text("途经点：\(cand.name)")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                        }
+                        if model.viaCompareLoading {
+                            HStack(spacing: 5) {
+                                ProgressView().controlSize(.mini)
+                                Text("正在计算时长…")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            // 添加前 → 添加后 时长变化（绿色=更快，橙色=更慢）
+                            HStack(spacing: 5) {
+                                Text("添加前 \(durationTxt(model.durationBeforeVia))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                Text("添加后 \(durationTxt(model.durationAfterVia))")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(viaDeltaColor)
+                                if model.durationBeforeVia > 0 && model.durationAfterVia > 0 {
+                                    Text(viaDeltaText)
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(viaDeltaColor)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        haptic()
+                        model.confirmWaypointCandidate()
+                        // 确认后：地图全览 起点→途经点→终点 的整条路线
+                        model.overviewTick += 1
+                        model.status = "已添加途经点，正在全览规划路线"
+                    } label: {
+                        Text("添加")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .frame(width: 62, height: 38)
+                            .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        haptic()
+                        model.cancelWaypointCandidate()
+                        clearSearchLink()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(12)
+                .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                .padding(.horizontal, 14)
+            }
+        }
+    }
+
+    /// v2.23 时长变化颜色：更快=绿，更慢=橙
+    private var viaDeltaColor: Color {
+        guard model.durationBeforeVia > 0, model.durationAfterVia > 0 else { return .secondary }
+        return model.durationAfterVia <= model.durationBeforeVia ? .green : .orange
+    }
+
+    /// v2.23 时长变化文案
+    private var viaDeltaText: String {
+        guard model.durationBeforeVia > 0, model.durationAfterVia > 0 else { return "" }
+        let d = model.durationAfterVia - model.durationBeforeVia
+        if d == 0 { return "持平" }
+        let m = abs(d) / 60
+        let s = abs(d) % 60
+        let txt = m > 0 ? "\(m)分\(s)秒" : "\(s)秒"
+        return d < 0 ? "快\(txt)" : "慢\(txt)"
     }
 
     /// 拥堵段 / 缓行段数量（规划卡摘要）
@@ -2509,11 +2732,9 @@ struct ContentView: View {
                     if !model.navigating {
                         Button {
                             haptic()
-                            goHereName = nil
-                            goHereLat = 0
-                            goHereLon = 0
-                            model.clearPreview()
-                            model.clearRoute()
+                            // v2.23 只做"地图回到我的位置"，不再清路线/退出规划界面。
+                            // 旧版这里调 clearRoute()，一点定位就把用户踢回首页，
+                            // 规划中的路线和卡片全没了。
                             model.centerOnUser()
                         } label: {
                             ZStack {
@@ -3360,8 +3581,14 @@ struct ContentView: View {
         model.routePois = []
         model.routeTurns = []
         model.routeChoices = []
-        model.fitTick += 1
-        northUpTick += 1
+        // v2.23 地图跳转到该搜索点并保持居中（不再用 tipFit 的 3000m 视野 + 强制北向上），
+        // 同时用黑线把"我的位置"和"搜索点"连起来，一眼看出直线距离与方位。
+        // 地图保持 followWithHeading —— 转动手机时地图继续跟随朝向变化。
+        let target = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        searchLinkTo = target
+        searchLinkFrom = model.currentLocation
+        model.focusCoord = target
+        model.focusTick += 1
         model.status = "已定位到「\(name)」"
         Task {
             let info = await model.amapRegeoInfo(lat: lat, lon: lon)
@@ -3500,7 +3727,8 @@ struct ContentView: View {
                     tipAoiName = nil
                     tipPolygon = nil
                     model.clearPreview()
-                    model.fetchRouteChoices(to: t.name, lat: t.lat, lon: t.lon, autoStart: true)
+                    // v2.23 直接进导航，不经过路线规划界面
+                    model.navigateDirect(to: t.name, lat: t.lat, lon: t.lon)
                 } label: {
                     Text("导航")
                         .font(.subheadline.bold())
@@ -3671,20 +3899,26 @@ struct ContentView: View {
                             dismissKeyboard()
                             doSearch(name)
                         } label: {
+                            // v2.23 历史记录项加大：字号 caption→subheadline，
+                            // 加水平内边距与最小点击高度，手指在车上也点得准
                             Text(name)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
                                 .lineLimit(1)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color(.secondarySystemBackground), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
                 }
+                .padding(.vertical, 2)
             }
-            Spacer()
+            Spacer(minLength: 6)
             Button("清空") {
                 model.clearHistory()
             }
-            .font(.caption2)
+            .font(.caption)
             .foregroundStyle(.blue)
         }
         .padding(.horizontal, 4)
@@ -3768,20 +4002,21 @@ struct ContentView: View {
         icon: String, color: Color, title: String, sub: String,
         action: @escaping () -> Void
     ) -> some View {
-        VStack(spacing: 3) {
+        // v2.23 缩小：78×58 → 64×48（输入时"家/公司/+"卡不再抢地方，留给历史记录）
+        VStack(spacing: 1) {
             Image(systemName: icon)
-                .font(.title3)
+                .font(.system(size: 15))
                 .foregroundStyle(color)
             Text(title)
-                .font(.caption.bold())
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Text(sub)
-                .font(.caption2)
+                .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(width: 78, height: 58)
+        .frame(width: 64, height: 48)
         .background(.bar, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.25), lineWidth: 1))
         .contentShape(Rectangle())
@@ -3832,16 +4067,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             }
-            // 麦克风图标
-            Button {
-                // 语音搜索（暂未实现）
-                model.status = "语音搜索功能开发中"
-            } label: {
-                Image(systemName: "mic.fill")
-                    .font(.subheadline)
-                    .foregroundStyle(.gray)
-            }
-            .buttonStyle(.plain)
+            // v2.23 去掉麦克风图标（语音搜索未实现，占位按钮只会让人误以为可用）
             // 搜索按钮（与输入框同一胶囊内，右侧）
             Button {
                 // v1.81：点搜索 → 收起键盘，展开联想地点列表（搜索框与按钮拉开，中间铺满）
@@ -3955,7 +4181,12 @@ struct ContentView: View {
                                 searchExpanded = false
                                 dismissKeyboard()
                                 model.addHistory(tip.name)
-                                model.fetchRouteChoices(to: tip.name, lat: tip.lat, lon: tip.lon)
+                                // v2.23 途经点选择模式：箭头也走候选流程（不直接规划）
+                                if waypointSelecting {
+                                    selectWaypointCandidate(name: tip.name, lat: tip.lat, lon: tip.lon)
+                                } else {
+                                    model.fetchRouteChoices(to: tip.name, lat: tip.lat, lon: tip.lon)
+                                }
                             } label: {
                                 Image(systemName: "arrow.up.right.circle")
                                     .foregroundStyle(Color(red: 0.0, green: 0.75, blue: 0.95))
@@ -3968,13 +4199,19 @@ struct ContentView: View {
                         .padding(.vertical, 7)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            // v1.81 主体点击：地图高亮+北向上+地点信息卡
                             searchFocused = false
                             showSuggestions = false
                             searchExpanded = false
                             dismissKeyboard()
                             model.addHistory(tip.name)
-                            showTipCard(name: tip.name, lat: tip.lat, lon: tip.lon, sub: tip.sub)
+                            // v2.23 途经点选择模式：选中的点变成"候选途经点"
+                            // （地图跳转 + 黑线 + 时长对比），不直接弹地点卡
+                            if waypointSelecting {
+                                selectWaypointCandidate(name: tip.name, lat: tip.lat, lon: tip.lon)
+                            } else {
+                                // v1.81 主体点击：地图高亮+北向上+地点信息卡
+                                showTipCard(name: tip.name, lat: tip.lat, lon: tip.lon, sub: tip.sub)
+                            }
                         }
                         Divider()
                     }
@@ -4501,6 +4738,13 @@ private struct CompassDial: View {
 private struct DraggableFloat<Content: View>: View {
     let key: String
     var lockX: Bool = false
+    /// v2.23 顶部锁定：卡片顶部始终贴屏幕顶，只能往下拉，不能往上拉出屏幕；
+    /// 且下次启动默认回到顶部（defaultPosY 即顶部位置）。
+    var topLocked: Bool = false
+    /// v2.23 底部锚定：pos.y 表示卡片**底边**所在位置（卡片向上生长）。
+    /// 底部大卡片（路线规划下卡）用这个，否则 .position() 按中心定位会把
+    /// 卡片下半截（"开始导航"按钮）推到屏幕外，点不到。
+    var bottomAnchor: Bool = false
     var deleteLabel: String? = nil
     var onSwipeLeft: (() -> Void)? = nil
     @ViewBuilder let content: Content
@@ -4512,12 +4756,20 @@ private struct DraggableFloat<Content: View>: View {
     /// v1.99 拖动起点（手指按下时的中心点）：旧版直接把中心设为手指位置，
     /// 一按下去整块就"跳"到手指下，滑动时始终慢半拍、像甩不动的橡皮筋
     @State private var dragStartPos: CGPoint? = nil
+    /// v2.23 顶部锁定时卡片的顶部位置（相对屏高），下拉可更低、上拉不可更高
+    @State private var defaultTopY: CGFloat = 0.1
+    /// v2.23 卡片内容实测尺寸：用于把卡片完整钳制在屏幕内（防止底部按钮被裁掉）
+    @State private var contentSize: CGSize = .zero
 
-    init(key: String, defaultPos: CGPoint, lockX: Bool = false, deleteLabel: String? = nil,
+    init(key: String, defaultPos: CGPoint, lockX: Bool = false, topLocked: Bool = false,
+         bottomAnchor: Bool = false,
+         deleteLabel: String? = nil,
          onSwipeLeft: (() -> Void)? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
+        self.topLocked = topLocked
+        self.bottomAnchor = bottomAnchor
         self.deleteLabel = deleteLabel
         self.onSwipeLeft = onSwipeLeft
         self.content = content()
@@ -4531,10 +4783,42 @@ private struct DraggableFloat<Content: View>: View {
         let savedX = stale ? nil : x
         let savedY = stale ? nil : y
         // v1.97 兜底钳制：历史拖动位置可能落在屏幕外（如旧版缩放键 6%），这里拉回可视区
+        // v2.23 顶部锁定：y 一律取 defaultPos.y（顶部），历史位置不再生效，
+        // 保证"下次打开软件卡片顶部仍在屏幕顶部"。
         let px = min(0.96, max(0.04, savedX ?? defaultPos.x))
-        let py = min(0.93, max(0.10, savedY ?? defaultPos.y))
+        let py: CGFloat
+        if topLocked {
+            py = defaultPos.y
+        } else {
+            py = min(0.93, max(0.10, savedY ?? defaultPos.y))
+        }
         _pos = State(initialValue: CGPoint(x: px, y: py))
+        _defaultTopY = State(initialValue: defaultPos.y)
         _initialX = State(initialValue: px)
+    }
+
+    /// v2.23 计算卡片中心的最终 y 坐标
+    /// - 底部锚定：pos.y 是底边位置 → 中心 = 底边 - 半个高度
+    /// - 顶部锁定：pos.y 是顶部位置 → 中心 = 顶部 + 半个高度
+    /// - 其余：pos.y 直接是中心，但会被钳制到"卡片完整可见"的范围内
+    private func clampedY(_ geo: CGSize) -> CGFloat {
+        let margin: CGFloat = 8
+        let h = contentSize.height
+        let screenH = geo.size.height
+        guard h > 0, screenH > 0 else { return pos.y * screenH }
+
+        var center: CGFloat
+        if bottomAnchor {
+            center = pos.y * screenH - h / 2
+        } else if topLocked {
+            center = pos.y * screenH + h / 2
+        } else {
+            center = pos.y * screenH
+        }
+        // 钳制：卡片完整可见（上边不越界，下边不越界）
+        let minCenter = margin + h / 2
+        let maxCenter = max(minCenter, screenH - margin - h / 2)
+        return min(max(center, minCenter), maxCenter)
     }
 
     var body: some View {
@@ -4556,8 +4840,20 @@ private struct DraggableFloat<Content: View>: View {
                 }
                 content
                     .offset(x: dragOffset)
+                    // v2.23 实测内容尺寸：底部锚定/钳制都要用
+                    .background(
+                        GeometryReader { cg in
+                            Color.clear
+                                .onAppear { contentSize = cg.size }
+                                .onChange(of: cg.size) { _, s in contentSize = s }
+                        }
+                    )
             }
-            .position(x: pos.x * geo.size.width, y: pos.y * geo.size.height)
+            // v2.23 定位修正：
+            //  ① bottomAnchor：pos.y 表示卡片**底边**，卡片向上生长
+            //     （否则 .position() 按中心定位，高卡片下半截会掉出屏幕 → "开始导航"点不到）
+            //  ② 通用钳制：保证卡片完整落在屏幕内（上下各留 8pt 安全边）
+            .position(x: pos.x * geo.size.width, y: clampedY(geo.size))
             .shadow(color: .black.opacity(dragging ? 0.3 : 0.12), radius: 8, y: 3)
             .scaleEffect(dragging ? 1.08 : 1.0)
             .animation(.easeOut(duration: 0.12), value: dragging)
@@ -4578,9 +4874,19 @@ private struct DraggableFloat<Content: View>: View {
                             if dragStartPos == nil { dragStartPos = base }
                             let w = max(1, geo.size.width)
                             let h = max(1, geo.size.height)
+                            var newY = min(0.99, max(0.02, base.y + v.translation.height / h))
+                            if topLocked {
+                                // v2.23 顶部锁定：pos.y 是卡片**顶部**位置，
+                                // 只能往下拉，不能往上拉把顶部顶出屏幕
+                                newY = max(defaultTopY, newY)
+                            } else if bottomAnchor {
+                                // v2.23 底部锚定：pos.y 是卡片**底边**位置，
+                                // 往上拖不能把卡片整体推出屏幕顶（留半个身位）
+                                newY = min(0.99, max(0.12, newY))
+                            }
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
-                                y: min(0.96, max(0.04, base.y + v.translation.height / h)))
+                                y: newY)
                         }
                     }
                     .onEnded { v in
@@ -4598,7 +4904,7 @@ private struct DraggableFloat<Content: View>: View {
                                   v.translation.width < -80,
                                   abs(v.translation.width) > abs(v.translation.height) {
                             onSwipeLeft()
-                        } else {
+                        } else if !topLocked {
                             UserDefaults.standard.set(pos.x, forKey: "\(key).x")
                             UserDefaults.standard.set(pos.y, forKey: "\(key).y")
                         }

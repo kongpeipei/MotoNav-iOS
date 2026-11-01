@@ -256,6 +256,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.22 顶部路线提示（高德式："请先去往出口" / "前方xx米路口直行"）
     @Published var navTopHint = ""
     @Published var navTopHintIcon = "straight.up"
+    /// v2.23 途经点候选（点 ➕ 搜索后选中的点，尚未确认加入）
+    @Published var waypointCandidate: RouteWaypoint?
+    /// v2.23 加入候选前的时长（秒）——用于对比"添加前 vs 添加后"
+    @Published var durationBeforeVia: Int = 0
+    /// v2.23 加入候选后的时长（秒）
+    @Published var durationAfterVia: Int = 0
+    /// v2.23 正在计算途经点时长对比
+    @Published var viaCompareLoading = false
     /// v2.19 起点（默认跟随当前定位；点交换按钮后固定为原终点）
     @Published var originName = "我的位置"
     @Published var originLat = 0.0
@@ -2249,6 +2257,61 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "已清除路线"
     }
 
+    /// v2.23 地点卡「导航」直达：直接进入导航，**不经过路线规划界面**
+    ///
+    /// 旧实现走 fetchRouteChoices(autoStart: true)：那个方法会先把方案列表写进
+    /// `routeChoices`，而 bottomOverlay 用 `!model.routeChoices.isEmpty` 判断是否渲染
+    /// 路线规划卡（上下两张）→ 于是规划卡先闪出来，0.4 秒后才切进导航，
+    /// 用户体感就是"点导航先进入路线规划界面"。
+    ///
+    /// 现在改成：
+    ///   1) 只取方案列表的第一条（推荐）填入 route / routeTurns 等导航必需字段；
+    ///   2) **不写 routeChoices**（规划卡因此完全不渲染），choiceRoutes 为空也不画备选线；
+    ///   3) 直接 toggleNavigation() 进导航，地图由导航跟随接管（不做全览 fit）。
+    ///   4) 万一高德没算出路线（choices 为空），退回规划模式让用户看到提示并可重试。
+    func navigateDirect(to name: String, lat: Double, lon: Double) {
+        guard let start = resolvedOrigin else {
+            status = "请先定位后再导航"
+            return
+        }
+        destName = name; destLat = lat; destLon = lon
+        addHistory(name)
+        status = "正在规划到「\(name)」…"
+        let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        Task {
+            let choices = await RouteFetcher.fetchAll(from: start, to: rawEnd, amapKey: amapKey,
+                                                      via: self.waypointCoords)
+            if choices.isEmpty {
+                // 没算出路线：退回规划模式（显示兜底直线 + 3 秒自动重试），不进入导航
+                fallbackStraightLine(from: start, to: rawEnd, name: name, lat: lat, lon: lon)
+                status = "路线服务暂时不可用，已切回规划模式，可稍后重试"
+                return
+            }
+            let list = self.preferMotoRoutes(choices)
+            guard let best = list.first else {
+                fallbackStraightLine(from: start, to: rawEnd, name: name, lat: lat, lon: lon)
+                return
+            }
+            // 只填导航必需字段（routeChoices 保持为空 → 规划卡不渲染）
+            self.route = best.points
+            self.routeTurns = best.turns
+            self.routeDistanceM = best.distanceM
+            self.routeDurationS = best.durationS
+            self.lastTurnSpoken = -1
+            self.farAnnounced.removeAll()
+            self.lastRiskSpoken.removeAll()
+            let near = self.nearbyPoisOnRoute(best.points)
+            self.routePois = near
+            self.riderRisks = RiderAnalyzer.risks(best.turns, totalM: best.distanceM)
+            self.trafficSpans = best.traffic
+            self.trafficLights = TrafficLightBuilder.lights(turns: best.turns)
+            self.status = self.routeSummary(name, distanceM: best.distanceM,
+                                            durationS: best.durationS, poiCount: near.count)
+            // 直接进导航（导航跟随会接管相机，不做路线全览）
+            self.toggleNavigation()
+        }
+    }
+
     /// "去这里/导航到这里"触发：获取多路线方案（起点=当前定位点，终点吸附到最近道路出入口）
     /// autoStart=true 时路线就绪后自动进入导航（地点信息卡"导航"按钮）
     func fetchRouteChoices(to name: String, lat: Double, lon: Double, autoStart: Bool = false) {
@@ -2660,6 +2723,47 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         waypoints.removeAll()
     }
 
+    /// v2.23 选定候选途经点：算出"添加前 / 添加后"的行程时长，供 UI 对比
+    /// - 不改当前 route（还没确认），只算数字
+    /// - 添加前 = 起点 → 终点；添加后 = 起点 → 途经点 → 终点
+    func previewWaypointCandidate(_ wp: RouteWaypoint) {
+        waypointCandidate = wp
+        viaCompareLoading = true
+        guard let start = resolvedOrigin, destLat != 0 || destLon != 0 else {
+            viaCompareLoading = false
+            return
+        }
+        let end = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
+        let existing = waypointCoords
+        Task {
+            async let beforeTask = RouteFetcher.fetchAll(from: start, to: end, amapKey: amapKey,
+                                                        via: existing)
+            async let afterTask = RouteFetcher.fetchAll(from: start, to: end, amapKey: amapKey,
+                                                       via: existing + [CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon)])
+            let (before, after) = await (beforeTask, afterTask)
+            durationBeforeVia = preferMotoRoutes(before).first?.durationS ?? 0
+            durationAfterVia = preferMotoRoutes(after).first?.durationS ?? 0
+            viaCompareLoading = false
+        }
+    }
+
+    /// v2.23 确认添加候选途经点 → 正式加入并重规划
+    func confirmWaypointCandidate() {
+        guard let wp = waypointCandidate else { return }
+        waypointCandidate = nil
+        durationBeforeVia = 0
+        durationAfterVia = 0
+        addWaypoint(name: wp.name, lat: wp.lat, lon: wp.lon)
+    }
+
+    /// v2.23 取消候选途经点
+    func cancelWaypointCandidate() {
+        waypointCandidate = nil
+        durationBeforeVia = 0
+        durationAfterVia = 0
+        viaCompareLoading = false
+    }
+
     /// v2.21 点击途经点 → 地图定位到该点（并短暂高亮）
     func focusWaypoint(_ wp: RouteWaypoint) {
         focusCoord = CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon)
@@ -2741,7 +2845,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let addr = p["address"] as? String ?? ""
                 let dist = p["distance"] as? String ?? ""
                 var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
-                if distanceNote, !dist.isEmpty { sub += " · 距路线\(Int(Double(dist) ?? 0))米" }
+                if distanceNote, !dist.isEmpty {
+                    // v2.23 距离统一用 km 显示（<1km 保留米，超过 1km 用一位小数的 km）
+                    let dm = Double(dist) ?? 0
+                    if dm < 1000 {
+                        sub += " · 距路线\(Int(dm))米"
+                    } else {
+                        sub += String(format: " · 距路线%.1f公里", dm / 1000.0)
+                    }
+                }
                 out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
             }
             return out

@@ -109,6 +109,11 @@ struct MapViewRepresentable: UIViewRepresentable {
     var waypointMarks: [CLLocationCoordinate2D] = []
     /// v2.20 电警点被手动拖动后的新坐标（WGS-84，id + lat + lon）
     var onCameraMoved: ((Int, Double, Double) -> Void)?
+    /// v2.23 搜索选点连线：当前定位点 → 搜索选点（WGS-84）。nil = 不画。
+    /// 用于"点联想地点后地图跳到该点，并用黑线连回我的位置"，一眼看出直线距离。
+    var searchLinkFrom: CLLocationCoordinate2D? = nil
+    /// v2.23 搜索选点连线终点（搜索选点，WGS-84）
+    var searchLinkTo: CLLocationCoordinate2D? = nil
     /// v2.21 地图聚焦到指定坐标（点击途经点时用；WGS-84）
     var focusCoord: CLLocationCoordinate2D? = nil
     /// v2.21 聚焦触发计数（内容不变不重复移动地图）
@@ -641,6 +646,21 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(ann)
             }
         }
+        // v2.23 搜索选点黑线：我的位置 ↔ 搜索选点
+        let linkKey = "\(searchLinkFrom?.latitude ?? 0)-\(searchLinkFrom?.longitude ?? 0)-\(searchLinkTo?.latitude ?? 0)-\(searchLinkTo?.longitude ?? 0)"
+        if linkKey != context.coordinator.lastSearchLinkKey {
+            context.coordinator.lastSearchLinkKey = linkKey
+            if let old = context.coordinator.searchLinkPolyline {
+                map.removeOverlay(old)
+                context.coordinator.searchLinkPolyline = nil
+            }
+            if let a = searchLinkFrom, let b = searchLinkTo {
+                let pts = [MapGeo.toGCJ(a), MapGeo.toGCJ(b)]
+                let poly = MKPolyline(coordinates: pts, count: pts.count)
+                context.coordinator.searchLinkPolyline = poly
+                map.addOverlay(poly)
+            }
+        }
         // v2.21 途经点定位：地图移到该点并暂停朝向跟随
         if focusTick != context.coordinator.lastFocusTick {
             context.coordinator.lastFocusTick = focusTick
@@ -912,6 +932,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var traveledPolyline: MKPolyline?
         /// v2.22 起点/终点内部道路的蓝色虚线连接段
         var connectorPolylines: [MKPolyline] = []
+        /// v2.23 搜索选点到我的位置的黑色连线
+        var searchLinkPolyline: MKPolyline?
+        /// v2.23 黑线内容键（坐标变化才重建）
+        var lastSearchLinkKey = ""
         /// v2.22 起点/终点入口箭头标注
         var entryArrowAnnotations: [RouteEndAnnotation] = []
         /// v2.22 内部道路虚线的内容键
@@ -1418,6 +1442,12 @@ struct MapViewRepresentable: UIViewRepresentable {
                     r.strokeColor = UIColor(red: 0.20, green: 0.55, blue: 1.0, alpha: 0.95)
                     r.lineWidth = 4
                     r.lineDashPattern = [4, 5]
+                    return r
+                }
+                if poly === self.searchLinkPolyline {
+                    // v2.23 搜索选点连线：黑色实线（我的位置 → 搜索选点）
+                    r.strokeColor = UIColor(white: 0.05, alpha: 0.85)
+                    r.lineWidth = 3
                     return r
                 }
                 if poly === self.footprintPolyline {
