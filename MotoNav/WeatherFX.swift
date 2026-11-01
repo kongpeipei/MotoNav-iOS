@@ -328,17 +328,25 @@ struct WeatherOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if let cfg = WeatherFX.config(for: code) {
-            TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 : 1.0 / 50.0,
-                                    paused: reduceMotion)) { tl in
-                Canvas(rendersAsynchronously: true) { ctx, size in
-                    // 减弱动态时冻结在一个稳定帧上（仍有静态雪/雨幕，但不晃）
-                    let t = reduceMotion ? 6.0 : tl.date.timeIntervalSinceReferenceDate
-                    WeatherFX.draw(in: &ctx, size: size, t: t, config: cfg, lightMode: lightMode)
-                }
+        Group {
+            if let cfg = WeatherFX.config(for: code) {
+                animatedCanvas(cfg)
             }
-            .allowsHitTesting(false)
-            .transition(.opacity)
         }
+    }
+
+    @ViewBuilder
+    private func animatedCanvas(_ cfg: WeatherFXConfig) -> some View {
+        let interval: Double = reduceMotion ? 1.0 : 1.0 / 50.0
+        TimelineView(.animation(minimumInterval: interval, paused: reduceMotion)) { tl in
+            // 显式指定 Canvas<EmptyView>：避免泛型 Symbols 在 ViewBuilder 里推断失败
+            Canvas<EmptyView>(rendersAsynchronously: true) { ctx, size in
+                // 减弱动态时冻结在一个稳定帧上（仍有静态雨雪幕，但不晃）
+                let t = reduceMotion ? 6.0 : tl.date.timeIntervalSinceReferenceDate
+                WeatherFX.draw(in: &ctx, size: size, t: t, config: cfg, lightMode: lightMode)
+            }
+        }
+        .allowsHitTesting(false)
+        .transition(.opacity)
     }
 }
