@@ -1122,7 +1122,8 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.09")
+                // v2.24 取 Info.plist 的真实版本号（原来硬编码 "v2.09"，早就过期了）
+                Text(appVersionText)
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -3335,6 +3336,13 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+    }
+
+    /// v2.24 App 版本号（读 Info.plist，构建时注入 MARKETING_VERSION）
+    private var appVersionText: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+        return b.isEmpty ? "v\(v)" : "v\(v) (\(b))"
     }
 
     /// v1.81.4 启动全览：缩放全程路线 + 13 秒倒计时自动恢复跟随
