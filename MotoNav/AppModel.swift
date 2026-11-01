@@ -1239,6 +1239,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.92 后台/前台都靠定位回调复查电量（通知在挂起时收不到）
             throttledPowerSavingCheck()
             fetchWeather()
+            // v2.17 在线搜索按「当前城市」收敛：定位一到位就把城市名预热好，
+            // 免得第一次输入关键词时才临时多发一次逆地理（首字联想会慢半拍）
+            if cityCache == nil { Task { _ = await self.currentCityName() } }
             checkAlerts(at: coord)
             // v2.04 官方电警接近提醒：不看是否在导航，只要在移动就判
             checkPoliceCameras(at: coord)
@@ -1801,36 +1804,182 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 保存/清除高德 Key（didSet 自动持久化）
     func setAmapKey(_ k: String) { amapKey = k }
 
-    /// 高德「输入提示」联想：输入关键字实时返回 POI 候选（名称+副标题+精确坐标），需用户填写高德 Web 服务 Key
-    func amapInputTips(_ q: String) async -> [AmapTip] {
-        guard !amapKey.isEmpty, !q.isEmpty else { return [] }
-        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        // 不限制城市，全国范围搜索，优先返回当前位置附近结果
-        guard let url = URL(string: "https://restapi.amap.com/v3/assistant/inputtips?key=\(amapKey)&keywords=\(enc)&datatype=all") else { return [] }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tips = obj["tips"] as? [[String: Any]] else { return [] }
-            var out: [AmapTip] = []
-            for t in tips {
-                guard let name = t["name"] as? String, !name.isEmpty,
-                      let loc = t["location"] as? String, !loc.isEmpty else { continue }
-                let parts = loc.split(separator: ",").compactMap { Double($0) }
-                guard parts.count == 2 else { continue }
-                let district = t["district"] as? String ?? ""
-                let addr = t["address"] as? String ?? ""
-                var sub = ""
-                if !addr.isEmpty { sub += addr }
-                if !district.isEmpty { sub += (sub.isEmpty ? "" : " · ") + district }
-                if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
-                // v1.98 高德给的是 GCJ-02，转 WGS 后与地图/路线同一口径（否则点搜索结果会偏 500 米）
-                let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
-                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
-            }
-            return Array(out.prefix(20))
-        } catch {
-            return []
+    // MARK: - v2.17 在线搜索的地域约束
+
+    /// 当前城市名缓存（高德 regeo；30 分钟或移动超 20 公里后失效）
+    private var cityCache: (name: String, lat: Double, lon: Double, at: Date)?
+    /// 取城市失败的时间（网络/限额）：120 秒内不再重试，避免每个定位回调都发一次请求
+    private var cityFailAt: Date?
+
+    /// 当前所在城市名（"合肥市"）。取不到就返回空串，调用方按"不限城市"处理。
+    func currentCityName() async -> String {
+        guard let loc = currentLocation else { return "" }
+        if let c = cityCache,
+           Date().timeIntervalSince(c.at) < 1800,
+           distanceM(CLLocationCoordinate2D(latitude: c.lat, longitude: c.lon), loc) < 20_000 {
+            return c.name
         }
+        let name = await amapRegeoCity(lat: loc.latitude, lon: loc.longitude)
+        if !name.isEmpty {
+            cityCache = (name, loc.latitude, loc.longitude, Date())
+            cityFailAt = nil
+        } else {
+            cityFailAt = Date()
+        }
+        return name
+    }
+
+    /// 逆地理只取行政区（extensions=base，比 all 轻很多）
+    private func amapRegeoCity(lat: Double, lon: Double) async -> String {
+        guard !amapKey.isEmpty else { return "" }
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
+        var comps = URLComponents(string: "https://restapi.amap.com/v3/geocode/regeo")
+        comps?.queryItems = [
+            .init(name: "key", value: amapKey),
+            .init(name: "location", value: String(format: "%.6f,%.6f", glon, glat)),
+            .init(name: "extensions", value: "base"),
+        ]
+        guard let url = comps?.url else { return "" }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let re = obj["regeocode"] as? [String: Any],
+              let ac = re["addressComponent"] as? [String: Any] else { return "" }
+        // 直辖市（北京/上海…）的 city 字段是空数组，用 province 顶
+        let city = (ac["city"] as? String) ?? ""
+        let prov = (ac["province"] as? String) ?? ""
+        return city.isEmpty ? prov : city
+    }
+
+    /// 高德「输入提示」联想：输入关键字实时返回 POI 候选（名称+副标题+精确坐标）
+    ///
+    /// v2.17 修复「搜到外地去了」：旧版请求只带 `datatype=all`，既没有 `city` 也没有 `location`，
+    /// 高德就按全国库返回（且顺序与距离无关）；本地再按距离排序，最近的一条也有 500 多公里。
+    /// 现在分四步收敛，绝大多数关键词在第 1 步就命中本市结果：
+    ///   1) 本市内联想（city + citylimit=true）
+    ///   2) 本市没有 → 放开城市但带上 location（高德按距离给结果），本地再剔掉外地条目
+    ///   3) 还没有 → 本市关键词检索 place/text（覆盖比 inputtips 全）
+    ///   4) 仍没有 → 当前位置周边 30 公里搜索
+    func amapInputTips(_ q: String) async -> [AmapTip] {
+        let query = q.trimmingCharacters(in: .whitespaces)
+        guard !amapKey.isEmpty, !query.isEmpty else { return [] }
+        let anchor = currentLocation
+        let city = await currentCityName()
+
+        var tips = await amapInputTipsRaw(query, anchor: anchor, city: city, cityLimit: true)
+        if tips.isEmpty {
+            tips = await amapInputTipsRaw(query, anchor: anchor, city: city, cityLimit: false)
+        }
+        if tips.isEmpty, !city.isEmpty {
+            tips = await amapTextSearch(query, city: city, anchor: anchor)
+        }
+        if tips.isEmpty, let a = anchor {
+            tips = await amapKeywordSearch(query, lat: a.latitude, lon: a.longitude,
+                                           radius: 30000, distanceNote: false)
+        }
+        return rankTips(tips, anchor: anchor)
+    }
+
+    /// inputtips 请求本体（city/location 都按高德要求传 GCJ 坐标与城市名）
+    private func amapInputTipsRaw(_ q: String, anchor: CLLocationCoordinate2D?,
+                                  city: String, cityLimit: Bool) async -> [AmapTip] {
+        var items: [URLQueryItem] = [
+            .init(name: "key", value: amapKey),
+            .init(name: "keywords", value: q),
+            .init(name: "datatype", value: "all"),
+        ]
+        if let a = anchor {
+            let (glat, glon) = CoordConv.wgs2gcj(a.latitude, a.longitude)
+            items.append(.init(name: "location", value: String(format: "%.6f,%.6f", glon, glat)))
+        }
+        if !city.isEmpty {
+            items.append(.init(name: "city", value: city))
+            if cityLimit { items.append(.init(name: "citylimit", value: "true")) }
+        }
+        var comps = URLComponents(string: "https://restapi.amap.com/v3/assistant/inputtips")
+        comps?.queryItems = items
+        guard let url = comps?.url else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tips = obj["tips"] as? [[String: Any]] else { return [] }
+        var out: [AmapTip] = []
+        for t in tips {
+            guard let name = t["name"] as? String, !name.isEmpty,
+                  let loc = t["location"] as? String, !loc.isEmpty else { continue }
+            let parts = loc.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 2 else { continue }
+            let district = t["district"] as? String ?? ""
+            let addr = t["address"] as? String ?? ""
+            var sub = ""
+            if !addr.isEmpty { sub += addr }
+            if !district.isEmpty { sub += (sub.isEmpty ? "" : " · ") + district }
+            if sub.isEmpty { sub = t["type"] as? String ?? "地点" }
+            // v1.98 高德给的是 GCJ-02，转 WGS 后与地图/路线同一口径（否则点搜索结果会偏 500 米）
+            let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+            out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
+        }
+        return Array(out.prefix(20))
+    }
+
+    /// 城市内关键词检索（place/text）：inputtips 偏"输入联想"，覆盖不全时用它兜底
+    private func amapTextSearch(_ q: String, city: String,
+                                anchor: CLLocationCoordinate2D?) async -> [AmapTip] {
+        var items: [URLQueryItem] = [
+            .init(name: "key", value: amapKey),
+            .init(name: "keywords", value: q),
+            .init(name: "city", value: city),
+            .init(name: "citylimit", value: "true"),
+            .init(name: "offset", value: "25"),
+            .init(name: "page", value: "1"),
+            .init(name: "extensions", value: "base"),
+        ]
+        if let a = anchor {
+            let (glat, glon) = CoordConv.wgs2gcj(a.latitude, a.longitude)
+            items.append(.init(name: "location", value: String(format: "%.6f,%.6f", glon, glat)))
+        }
+        var comps = URLComponents(string: "https://restapi.amap.com/v3/place/text")
+        comps?.queryItems = items
+        guard let url = comps?.url else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pois = obj["pois"] as? [[String: Any]] else { return [] }
+        var out: [AmapTip] = []
+        for p in pois {
+            guard let name = p["name"] as? String, !name.isEmpty,
+                  let loc = p["location"] as? String, !loc.isEmpty else { continue }
+            let parts = loc.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 2 else { continue }
+            let addr = p["address"] as? String ?? ""
+            var sub = addr
+            if sub.isEmpty || sub == "[]" { sub = p["type"] as? String ?? "地点" }
+            let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+            out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
+        }
+        return out
+    }
+
+    /// 结果收敛：去重 → 按距离升序 → 把明显在外地的条目剔掉（只剩外地时就保留最近的几条）
+    private func rankTips(_ tips: [AmapTip], anchor: CLLocationCoordinate2D?) -> [AmapTip] {
+        var seen = Set<String>()
+        var rows: [(AmapTip, Double)] = []
+        for t in tips {
+            guard seen.insert(t.id).inserted else { continue }
+            let d = anchor.map {
+                distanceM($0, CLLocationCoordinate2D(latitude: t.lat, longitude: t.lon))
+            } ?? 0
+            rows.append((t, d))
+        }
+        guard anchor != nil else { return rows.map { $0.0 } }
+        rows.sort { $0.1 < $1.1 }
+        // 100 公里以外基本已经跨市：只要本市有结果，就不让外地条目挤进列表
+        let near = rows.filter { $0.1 <= 100_000 }
+        let kept = near.isEmpty ? Array(rows.prefix(10)) : near
+        return kept.map { $0.0 }
     }
 
     /// 右下角定位按钮：地图回中
@@ -2470,7 +2619,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 高德关键词周边搜索（返回按距离升序）
-    func amapKeywordSearch(_ keyword: String, lat: Double, lon: Double, radius: Int = 8000) async -> [AmapTip] {
+    func amapKeywordSearch(_ keyword: String, lat: Double, lon: Double, radius: Int = 8000,
+                           distanceNote: Bool = true) async -> [AmapTip] {
         guard !amapKey.isEmpty else { return [] }
         let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
         let loc = String(format: "%.6f,%.6f", glon, glat)
@@ -2493,7 +2643,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let addr = p["address"] as? String ?? ""
                 let dist = p["distance"] as? String ?? ""
                 var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
-                if !dist.isEmpty { sub += " · 距路线\(Int(Double(dist) ?? 0))米" }
+                if distanceNote, !dist.isEmpty { sub += " · 距路线\(Int(Double(dist) ?? 0))米" }
                 out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
             }
             return out
