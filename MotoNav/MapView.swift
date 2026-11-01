@@ -117,8 +117,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 路线折线/点位标注都叠在瓦片之上（v1.62 灰罩+盖路线问题已修复：
         // ①层级由 aboveLabels 改 aboveRoads ②未加载瓦片透明露出苹果底图兜底 ③多子域轮询防限流)
         // v1.78：黑屏回归苹果 MapKit 引擎（3D Metal 渲染与设备不兼容），高德瓦片视觉保留
-        let amapOverlay = AmapTileOverlay()
-        map.insertOverlay(amapOverlay, at: 0, level: .aboveRoads)
+        // v2.14 关键：overlay 先不插，等首帧渲染完成后再插。
+        //
+        // 崩溃报告是 0x8BADF00D「scene-update watchdog」：应用启动后 10 秒内没交出首帧，
+        // 系统直接 SIGKILL。而 overlay 一插入，首帧渲染就必须等整屏高德瓦片就位
+        // （旧实现在渲染线程里同步读磁盘），首帧永远交不出来 —— 这就是"卡在这不能动"。
+        // 现在首帧先让苹果底图出图（毫秒级），起来之后再叠高德瓦片，watchdog 无从触发。
+        context.coordinator.amapOverlay = AmapTileOverlay()
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.6
@@ -134,6 +139,24 @@ struct MapViewRepresentable: UIViewRepresentable {
         doubleTap.delegate = context.coordinator
         map.addGestureRecognizer(doubleTap)
         tap.require(toFail: doubleTap)
+
+        let coord = context.coordinator
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak map] in
+            guard let map else { return }
+            coord.insertAmapOverlayIfNeeded(map)
+        }
+        // v2.14 底图兜底：15 秒内一张高德瓦片都没成功（服务被限流/被墙/无网），
+        // 就把 overlay 撤掉，露出苹果底图，至少地图上有内容、能拖动。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak map] in
+            guard let map else { return }
+            let renderer = map.overlays
+                .compactMap { map.renderer(for: $0) as? AmapTileRenderer }
+                .first
+            guard let renderer, renderer.loadedTiles == 0 else { return }
+            for ov in map.overlays where ov is AmapTileOverlay {
+                map.removeOverlay(ov)
+            }
+        }
         return map
     }
 
@@ -172,7 +195,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let ov = map.overlays.first { $0 is AmapTileOverlay }
                 if let ov {
                     map.removeOverlay(ov)
-                    map.insertOverlay(AmapTileOverlay(), at: 0, level: .aboveRoads)
+                    // v2.14 重建时同步给 coordinator，否则延迟插入逻辑会拿着旧的 overlay 对象
+                    let fresh = AmapTileOverlay()
+                    context.coordinator.amapOverlay = fresh
+                    map.insertOverlay(fresh, at: 0, level: .aboveRoads)
                 }
             }
         }
@@ -733,6 +759,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastCatKey: Int?
         var lastHotCameraId: Int?
         var lastEndKey = ""
+        /// v2.14 首屏加载完成只上报一次（详见 mapViewDidFinishRenderingMap）
+        var loadReadyReported = false
         /// v1.84 巡航模式状态记忆（巡航开关切换/跟随 tick/上次相机中心节流）
         var lastCruise: Bool?
         var lastCruiseTick = 0
@@ -741,6 +769,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastDarkState: Bool?
         /// v1.67 高德瓦片 renderer 引用 + 深色（夜间瓦片 style=8）状态
         var amapRenderer: AmapTileRenderer?
+        /// v2.14 高德瓦片 overlay 延迟插入（首帧交给苹果底图，避免启动被 watchdog 杀）
+        var amapOverlay: AmapTileOverlay?
+        private var amapOverlayInserted = false
+        func insertAmapOverlayIfNeeded(_ map: MKMapView) {
+            guard !amapOverlayInserted, let ov = amapOverlay else { return }
+            amapOverlayInserted = true
+            map.insertOverlay(ov, at: 0, level: .aboveRoads)
+        }
         var amapDark = false
         /// 路线白色描边底层引用（renderer 区分双层）
         var underPolyline: MKPolyline?
@@ -968,7 +1004,20 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         // v1.69 地图加载回调（MKMapView：渲染完成 / 加载失败）
         func mapViewDidFinishRenderingMap(_ mapView: MKMapView, fullyRendered: Bool) {
-            onMapLoad?(true, "地图渲染完成")
+            // v2.14 只回调第一次。
+            //
+            // 这个代理在地图**每完成一次渲染**时都会调用，而我们的瓦片 overlay 每批瓦片到达
+            // 都会 setNeedsDisplay → 又一次渲染完成 → 又一次回调。
+            // 回调到 SwiftUI 就是「写 @State → ContentView.body 全量重算 → updateUIView」，
+            // 而 body 是 4000 行的一整棵树 —— 于是「渲染→重算→再渲染」自激放大，
+            // 主线程被占满：画面完整但点不动、拖不动，瓦片下载回调也排不上队（一直灰格子）。
+            // 这个通知对 UI 只有「首屏是否就绪」一个语义，重复发没有意义。
+            // v2.14 首帧已交出 → 现在才叠高德瓦片（此时再慢也不会被打 watchdog）
+            insertAmapOverlayIfNeeded(mapView)
+            if !loadReadyReported {
+                loadReadyReported = true
+                onMapLoad?(true, "地图渲染完成")
+            }
             if lastScaleText.isEmpty { scheduleScale(mapView, delay: 0.1) }  // v2.02 首屏补一次
         }
 
@@ -1317,6 +1366,10 @@ final class AmapTileRenderer: MKOverlayRenderer {
     private let lock = NSLock()
     private var cache: [String: UIImage] = [:]
     private var pending: Set<String> = []
+    /// v2.14 失败瓦片冷却（网络不通时避免每次重绘都重发请求）
+    private var failedCooling: Set<String> = []
+    /// v2.14 成功加载过的瓦片数（用于底图兜底判断）
+    private(set) var loadedTiles = 0
     private var inflight = 0
     /// 夜间瓦片（导航中 style=8）
     var dark = false
@@ -1352,145 +1405,236 @@ final class AmapTileRenderer: MKOverlayRenderer {
         let y0 = max(0, Int(floor(mapRect.minY / per)))
         let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
         guard x1 >= x0, y1 >= y0 else { return }
+
+        // v2.14 上限保护：极端缩放或初始 mapRect 抖动时，可见范围可能大到离谱。
+        // 旧实现在这里会展开成上万次循环（每块拼字符串 + 两次加锁），
+        // 渲染线程和主线程一起被拖死。超过 400 块就这一帧不画，等下次回调。
+        let total = (x1 - x0 + 1) * (y1 - y0 + 1)
+        guard total <= 400 else { return }
+
+        // v2.14 一次加锁收集整帧需求。
+        //
+        // 旧实现每块瓦片都要 lock/unlock 两次，一屏 200 块就是 400 次锁竞争；
+        // 而 draw() 同时在 VectorKit 渲染线程和主线程被调用 —— 崩溃报告里主线程正是停在
+        // `_os_unfair_lock_lock_slow → __ulock_wait2`（等锁），配合 21.7 秒系统态 CPU，
+        // 说明主线程的绝大部分时间耗在锁和同步 IO 上，首帧始终出不来。
+        var drawList: [(CGImage, CGRect)] = []
+        drawList.reserveCapacity(total)
+        var fetchList: [(x: Int, y: Int, key: String, rect: MKMapRect)] = []
+        lock.lock()
+        let night = dark
         for x in x0...x1 {
             for y in y0...y1 {
-                let key = "\(dark ? "n" : "d")-\(z)-\(x)-\(y)" // 深浅样式分开缓存，切换即时生效
-                let rect = self.rect(for: MKMapRect(
-                    x: Double(x) * per, y: Double(y) * per,
-                    width: per, height: per))
-                lock.lock()
-                let hit = cache[key]
-                let needFetch = hit == nil && !pending.contains(key)
-                if needFetch { pending.insert(key) }
-                lock.unlock()
-                if let hit, let cg = hit.cgImage {
-                    ctx.draw(cg, in: rect)
-                } else if needFetch {
-                    // 先请求靠近屏幕中心的瓦片：旧实现按行列顺序，中心往往最后才到，
-                    // 3D 俯视时表现为中间一片空白（"雪花点"）
-                    let cx = Double(x0 + x1) / 2, cy = Double(y0 + y1) / 2
-                    let d = (Double(x) - cx) * (Double(x) - cx) + (Double(y) - cy) * (Double(y) - cy)
-                    if d < 25 { fetchTile(x, y, z, key) }
-                    else { queueTile(x, y, z, key) }
+                let key = "\(night ? "n" : "d")-\(z)-\(x)-\(y)"
+                let mrect = MKMapRect(x: Double(x) * per, y: Double(y) * per,
+                                      width: per, height: per)
+                if let img = cache[key], let cg = img.cgImage {
+                    drawList.append((cg, rect(for: mrect)))
+                } else if !pending.contains(key) && !failedCooling.contains(key) {
+                    pending.insert(key)
+                    fetchList.append((x, y, key, mrect))
                 }
+            }
+        }
+        lock.unlock()
+
+        for (cg, r) in drawList { ctx.draw(cg, in: r) }
+        guard !fetchList.isEmpty else { return }
+
+        // 先请求靠近屏幕中心的瓦片：旧实现按行列顺序，中心往往最后才到，
+        // 3D 俯视时表现为中间一片空白（"雪花点"）
+        let cx = Double(x0 + x1) / 2, cy = Double(y0 + y1) / 2
+        for f in fetchList {
+            let dx = Double(f.x) - cx, dy = Double(f.y) - cy
+            if dx * dx + dy * dy < 25 {
+                fetchTile(f.x, f.y, z, f.key, f.rect)
+            } else {
+                queueTile(f.x, f.y, z, f.key, f.rect)
             }
         }
     }
 
-    /// v2.02 重绘合并：一帧内最多触发一次 setNeedsDisplay（旧实现每张瓦片到达都全图重绘）
+    /// v2.14 重绘合并：一帧内最多触发一次，并且只重绘变化的那一小块。
+    ///
+    /// 旧实现每张瓦片到达都全屏 `setNeedsDisplay()`，一屏 200 张就是 200 次全屏重绘，
+    /// 每次重绘又要走一遍上面的循环 —— 越下载越卡，正是"灰格子 + 卡死"的来源。
     private var redrawScheduled = false
-    private func markNeedsRedraw() {
-        guard !redrawScheduled else { return }
+    private var pendingRedraw: MKMapRect?
+    private func markNeedsRedraw(_ rect: MKMapRect?) {
+        lock.lock()
+        if let r = rect {
+            pendingRedraw = pendingRedraw.map { MKMapRectUnion($0, r) } ?? r
+        } else {
+            pendingRedraw = .world
+        }
+        let already = redrawScheduled
         redrawScheduled = true
+        lock.unlock()
+        guard !already else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.lock.lock()
+            let r = self.pendingRedraw
+            self.pendingRedraw = nil
             self.redrawScheduled = false
-            self.setNeedsDisplay()
+            self.lock.unlock()
+            if let r = r {
+                self.setNeedsDisplay(r)
+            } else {
+                self.setNeedsDisplay()
+            }
         }
     }
 
-    /// v2.02 边缘瓦片延迟加载队列（优先保证屏幕中心先出图）
+    /// v2.14 边缘瓦片延迟加载：改在 ioQueue 上排队，不再往主队列塞块。
+    ///
+    /// 旧实现每块边缘瓦片都 `DispatchQueue.main.asyncAfter(0.06)`：一屏上百块 →
+    /// 主队列瞬间堆上百个定时块，每个醒来还要加锁查缓存、拼 URL。
+    /// 首帧渲染期间主线程被这些块塞满，就是 0x8BADF00D（首帧 10 秒超时）的直接成因。
     private var queuedTiles: Set<String> = []
-    private func queueTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
-        // draw() 跑在 VectorKit 渲染线程，主线程也会插队 → queuedTiles 必须加锁，
-        // 否则 Set 并发写入会 EXC_BAD_ACCESS（本文件历史上就踩过同类闪退）
+    private func queueTile(_ x: Int, _ y: Int, _ z: Int, _ key: String, _ rect: MKMapRect) {
         lock.lock()
         if queuedTiles.contains(key) { lock.unlock(); return }
         queuedTiles.insert(key)
         lock.unlock()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+        ioQueue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             self.queuedTiles.remove(key)
             let cached = self.cache[key] != nil
             self.lock.unlock()
-            if !cached { self.fetchTile(x, y, z, key) }
+            if !cached { self.fetchTile(x, y, z, key, rect) }
         }
     }
 
-    private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
-        // v1.90 磁盘缓存命中直接使用（离线可用）：读盘 → 入内存缓存 → 触发重绘，不再发网络请求
-        let diskURL = Self.diskDir.appendingPathComponent("\(key).png")
-        // v1.99 离线地图包优先（手动下载的区域，无网也能出图）
-        let offlineURL = Self.offlineDir.appendingPathComponent("\(key).png")
-        for url in [offlineURL, diskURL] {
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            lock.lock()
-            if cache[key] == nil, let img = UIImage(contentsOfFile: url.path) {
-                cache[key] = img
-                pending.remove(key)
-                lock.unlock()
-                markNeedsRedraw()
-                return
-            }
-            lock.unlock()
-        }
-        lock.lock()
-        if inflight >= 16 {
-            pending.remove(key)
-            lock.unlock()
-            return
-        }
-        // v1.67 多子域轮询：webrd01-04 按瓦片坐标取模，降低单域限流概率
-        let sd = ((x + y) % 4) + 1
-        let style = dark ? "8" : "7"
-        guard let url = URL(string: AmapTileOverlay.tileURL
-            .replacingOccurrences(of: "{SD}", with: "\(sd)")
-            .replacingOccurrences(of: "{STYLE}", with: style)
-            .replacingOccurrences(of: "{x}", with: "\(x)")
-            .replacingOccurrences(of: "{y}", with: "\(y)")
-            .replacingOccurrences(of: "{z}", with: "\(z)")) else {
-            pending.remove(key)
-            lock.unlock()
-            return
-        }
-        inflight += 1
-        lock.unlock()
-        URLSession.shared.dataTask(with: url) { [weak self] data, resp, err in
+    private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String, _ rect: MKMapRect) {
+        // v2.14 关键修复：draw() 会在渲染线程**和主线程**被调用，这里绝不能做磁盘 IO。
+        //
+        // 旧实现在 draw() 里直接 `fileExists` + `UIImage(contentsOfFile:)`：
+        // 一屏上百张缺失瓦片就是两三百次同步 stat/read 落在主线程上，地图每重绘一次
+        // 就把主线程占满一次 —— 表现正是「停在灰格子、整个 App 点不动」。
+        // 现在磁盘、网络、解码、落盘全部丢到 ioQueue，draw() 只查内存缓存。
+        ioQueue.async { [weak self] in
             guard let self else { return }
-            DispatchQueue.main.async {
+
+            // 别的路径刚下完就不用再走一遍
+            self.lock.lock()
+            let done = self.cache[key] != nil
+            self.lock.unlock()
+            if done { return }
+
+            // 1) 离线包 / 磁盘缓存（后台读，命中即用，不再发网络请求）
+            let diskURL = Self.diskDir.appendingPathComponent("\(key).png")
+            let offlineURL = Self.offlineDir.appendingPathComponent("\(key).png")
+            for url in [offlineURL, diskURL] {
+                guard let img = UIImage(contentsOfFile: url.path) else { continue }
                 self.lock.lock()
-                self.inflight -= 1
-                if let data, let img = UIImage(data: data) {
+                let already = self.cache[key] != nil
+                if !already {
                     self.cache[key] = img
                     self.pending.remove(key)
-                    // v1.90 瓦片落盘（后台队列，不阻塞渲染；离线/无网时命中磁盘直接显示）
-                    let url = Self.diskDir.appendingPathComponent("\(key).png")
-                    self.ioQueue.async {
-                        if !FileManager.default.fileExists(atPath: url.path) {
-                            try? data.write(to: url)
-                        }
-                        // v1.92 节流：原实现每张瓦片落盘都全量枚举目录+排序一次，
-                        // 骑行滚动地图会连续下载数百张 → 数百次目录枚举。改为每 50 张清一次
-                        Self.trimDiskIfNeeded()
-                    }
-                    // v2.02 缓存上限 200 → 1200：3D 45° 俯视时包围盒覆盖的瓦片数是 2D 的 3~5 倍，
-                    // 200 张会被瞬间冲掉 → 同屏瓦片反复"加载-淘汰-再加载"，表现为雪花点与卡顿
-                    if self.cache.count > 1200 {
-                        var drop = 300
-                        while drop > 0, let k = self.cache.keys.first {
-                            self.cache.removeValue(forKey: k)
-                            drop -= 1
-                        }
-                    }
-                    self.markNeedsRedraw()
-                } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
-                    self.pending.remove(key) // 失败瓦片：移出待下载，滚动/重绘后自然重试
                 }
                 self.lock.unlock()
+                if !already { self.markNeedsRedraw(rect) }
+                return
             }
-        }.resume()
+
+            // 2) 网络
+            self.lock.lock()
+            if self.inflight >= 12 {
+                self.pending.remove(key)
+                self.lock.unlock()
+                return
+            }
+            self.inflight += 1
+            let style = self.dark ? "8" : "7"
+            self.lock.unlock()
+
+            // v2.14 多子域轮询：webrd01-04 按瓦片坐标取模，降低单域限流概率
+            let sd = ((x + y) % 4) + 1
+            guard let url = URL(string: AmapTileOverlay.tileURL
+                .replacingOccurrences(of: "{SD}", with: "\(sd)")
+                .replacingOccurrences(of: "{STYLE}", with: style)
+                .replacingOccurrences(of: "{x}", with: "\(x)")
+                .replacingOccurrences(of: "{y}", with: "\(y)")
+                .replacingOccurrences(of: "{z}", with: "\(z)")) else {
+                self.lock.lock()
+                self.inflight -= 1
+                self.pending.remove(key)
+                self.lock.unlock()
+                return
+            }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 8
+            req.cachePolicy = .returnCacheDataElseLoad
+
+            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+                guard let self else { return }
+                // v2.14 解码放后台：UIImage(data:) 是 CPU 密集操作（PNG 解压 + 位图生成），
+                // 旧实现在主线程的锁内做，一屏几十张同时返回就是几百毫秒的主线程占用。
+                let img = data.flatMap { UIImage(data: $0) }
+
+                self.ioQueue.async {
+                    self.lock.lock()
+                    self.inflight -= 1
+                    if let img = img {
+                        self.cache[key] = img
+                        self.pending.remove(key)
+                        self.loadedTiles += 1
+                        self.trimMemoryCacheLocked()
+                    } else {
+                        self.pending.remove(key)
+                        self.failedCooling.insert(key)
+                    }
+                    self.lock.unlock()
+
+                    guard let img = img else {
+                        // v2.14 失败退避：网络不通时旧实现会在下一帧立刻重试，
+                        // 屏幕上百张瓦片 → 每秒几百个失败请求，CPU 与电量全耗在这上面。
+                        // 记下来 30 秒内不再请求同一张（地图重绘不会再触发重试风暴）。
+                        self.ioQueue.asyncAfter(deadline: .now() + 30) { [weak self] in
+                            guard let self else { return }
+                            self.lock.lock()
+                            self.failedCooling.remove(key)
+                            self.lock.unlock()
+                        }
+                        return
+                    }
+                    self.markNeedsRedraw(rect)
+                    // 瓦片落盘（同一队列，不阻塞渲染；离线/无网时命中磁盘直接显示）
+                    let durl = Self.diskDir.appendingPathComponent("\(key).png")
+                    if let data = data, !FileManager.default.fileExists(atPath: durl.path) {
+                        try? data.write(to: durl)
+                    }
+                    Self.trimDiskIfNeeded()
+                }
+            }.resume()
+        }
+    }
+
+    /// 内存缓存淘汰（调用方必须已持锁）
+    private func trimMemoryCacheLocked() {
+        // 缓存上限 1000：3D 俯视覆盖瓦片是 2D 的 3~5 倍，太小会反复加载/淘汰
+        guard cache.count > 1000 else { return }
+        // 先拷一份 key 再删，不能边遍历边改字典
+        let drop = Array(cache.keys.prefix(300))
+        for k in drop { cache.removeValue(forKey: k) }
     }
 
     /// v1.92 磁盘瓦片超量清理：超过上限时删除最旧的，避免缓存无限膨胀
     /// 节流：每落盘 50 张才真正扫描一次目录（App 进后台时也会补清一次）
     private static var tileWritesSinceTrim = 0
+    /// v2.14 计数锁：这个 static 变量会被多个 renderer 的 ioQueue 并发改写
+    private static let trimCountLock = NSLock()
     /// 清理专用串行队列（与落盘队列分离，主线程进后台时也能安全触发）
     private static let trimQueue = DispatchQueue(label: "amap.tile.trim")
     private static func trimDiskIfNeeded() {
+        trimCountLock.lock()
         tileWritesSinceTrim += 1
-        if tileWritesSinceTrim < 50 { return }
-        tileWritesSinceTrim = 0
+        let hit = tileWritesSinceTrim >= 50
+        if hit { tileWritesSinceTrim = 0 }
+        trimCountLock.unlock()
+        guard hit else { return }
         trimDiskNow()
     }
     /// 立即清理一次（App 进后台时调用；内部派发到串行队列，不与瓦片落盘争抢 IO）

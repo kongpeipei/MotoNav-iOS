@@ -1215,9 +1215,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let loc = locations.last else { return }
         let coord = loc.coordinate
         Task { @MainActor in
-            currentLocation = coord
-            locationAccuracy = loc.horizontalAccuracy
-            currentSpeed = loc.speed > 0 ? loc.speed : 0
+            // v2.14 发布降频：位置/精度/速度是「界面重建」的触发器。
+            // 静止时 GPS 会以 1Hz 左右抖动（每次几米），而 ContentView.body 是一整棵树，
+            // 每重算一次都要重建几十个浮层 —— 抖动叠加起来就是「界面完整但点不动」。
+            // 移动超过 5 米或速度明显变化才写 @Published；下面的业务逻辑（电警/导航/巡航）
+            // 仍然每次定位都执行，不受影响。
+            let speed = loc.speed > 0 ? loc.speed : 0
+            let moved: Double = currentLocation.map { distanceM($0, coord) } ?? .greatestFiniteMagnitude
+            if moved > 5 || abs(speed - currentSpeed) > 0.5 {
+                currentLocation = coord
+                locationAccuracy = loc.horizontalAccuracy
+                currentSpeed = speed
+            }
             // v1.99 足迹轨迹 + 最高速（仅导航中记录，避免无意义点位）
             if navigating {
                 trackPoints.append(coord)

@@ -526,7 +526,8 @@ struct ContentView: View {
             teamMembers: team.others,
             onMapLoad: { ok, err in
                 if ok {
-                    mapLoadFailed = false
+                    // v2.14 相同值不再赋值：@State 赋相同值同样会让 body 全量重算
+                    if mapLoadFailed { mapLoadFailed = false }
                 } else {
                     // v1.70：首次失败自动重试一次（弱网/瞬时抖动），二次失败才亮诊断条
                     if !mapRetried {
