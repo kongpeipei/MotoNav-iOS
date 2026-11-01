@@ -918,6 +918,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastConnKey = ""
         /// v2.22 上次上报给业务层的"用户移动了地图"状态
         var lastUserMovedFlag = false
+        /// v2.22 用户手动移动了地图（回调给业务层）
+        var onUserMovedChanged: ((Bool) -> Void)?
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
