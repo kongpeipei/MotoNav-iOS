@@ -73,32 +73,38 @@ enum StartupLog {
     private static func append(_ line: String) {
         syncLock.lock()
         defer { syncLock.unlock() }
-        let url = fileURL
+        let path = fileURL.path
 
         // v2.10：改成"真追加 + fsync"。
         // 旧写法是"整文件读出来 → 拼上这一行 → 原子重写"，一行日志要重写整个文件；
         // 进程在重写瞬间被硬杀，最后一行就没了——之前几版看不出死在哪，很可能就是这个原因。
         // 现在每行都是 O_APPEND 写一次，写完立刻 fsync，硬杀也不丢。
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(atPath: url.path,
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path,
                                            contents: Data("=== 骑士地图启动日志 ===\n".utf8))
         }
         // 日志上限 64KB：超过就砍掉前半段，防止长期使用无限增长
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
            let sz = attrs[.size] as? NSNumber, sz.intValue > 64 * 1024,
-           let data = try? Data(contentsOf: url) {
-            try? Data(data.suffix(32 * 1024)).write(to: url, options: .atomic)
+           let data = try? Data(contentsOf: fileURL) {
+            try? Data(data.suffix(32 * 1024)).write(to: fileURL, options: .atomic)
         }
-        guard let fh = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? fh.close() }
-        fh.seekToEndOfFile()
+
+        let fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
         // 每次启动插一条分隔线，方便分辨"这次"和"上次"
+        var text = line
         if !wroteSeparator {
             wroteSeparator = true
-            fh.write(Data("\n=== 骑士地图启动日志 ===\n".utf8))
+            text = "\n=== 骑士地图启动日志 ===\n" + line
         }
-        fh.write(Data(line.utf8))
-        fsync(fh.fileDescriptor)
+        let bytes = Array(text.utf8)
+        bytes.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            _ = write(fd, base, buf.count)
+        }
+        fsync(fd)
     }
 
     /// 本次进程是否已经写过启动分隔线（只在第一次写日志时插一条）

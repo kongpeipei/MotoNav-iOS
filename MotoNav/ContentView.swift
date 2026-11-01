@@ -8,7 +8,9 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// v2.10 精简模式：只渲染地图 + 一条搜索卡（不建 DraggableFloat、不建选项卡、不建电警按钮）。
     /// 连续启动失败时由启动器自动切到这个模式，保证 App 至少能打开用。
-    var lite: Bool = false
+    /// 走环境变量而不是 init 参数：本结构体有一百多个 @State，自带 memberwise init 是 private，
+    /// 外面根本调不到 `ContentView(lite:)`，只有 Environment 能不改初始化器地传进来。
+    @Environment(\.motoLiteMode) private var lite
     /// v1.99 组队骑行（地图队友点 + 我的页队伍面板）
     @StateObject private var team = TeamRide.shared
     /// v1.99 足迹（我的-足迹）

@@ -54,6 +54,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // 启动次数计数：上一次没走到首屏（ui-ready 会把计数清零），这次就停在自检页手动载入，
         // 保证 App 任何时候都"打得开"，不会又变成一块黑屏。
         let ud = UserDefaults.standard
+        // v2.10：换版本就重新从"第 1 次"开始，否则旧版留下的失败计数会让新版一装上
+        // 就直接掉进精简界面，连完整界面都没机会试
+        if ud.string(forKey: "motonav.lastVersion") != ver {
+            ud.set(ver, forKey: "motonav.lastVersion")
+            ud.set(0, forKey: "motonav.bootAttempts")
+        }
         let attempt = ud.integer(forKey: "motonav.bootAttempts") + 1
         ud.set(attempt, forKey: "motonav.bootAttempts")
         StartupLog.mark("boot-attempt", "第 \(attempt) 次")

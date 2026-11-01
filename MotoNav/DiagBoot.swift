@@ -184,9 +184,15 @@ final class MotoHost: UIHostingController<AnyView> {
 /// 如果它上屏了、切到 ContentView 才死，那就锁定在 ContentView。
 struct BootstrapView: View {
     @EnvironmentObject var model: AppModel
-    /// v2.10 精简模式（透传给 ContentView）
+    /// v2.10 精简模式（通过环境传给 ContentView）
     var lite: Bool = false
     @State private var showContent = false
+
+    /// 显式初始化器：本结构体的 @State 是 private，memberwise init 也是 private，
+    /// 不加这个外面就调不到 `BootstrapView(lite:)`
+    init(lite: Bool = false) {
+        self.lite = lite
+    }
 
     var body: some View {
         ZStack {
@@ -196,8 +202,9 @@ struct BootstrapView: View {
                 .ignoresSafeArea()
 
             if showContent {
-                ContentView(lite: lite)
+                ContentView()
                     .environmentObject(model)
+                    .environment(\.motoLiteMode, lite)
                     .transition(.opacity)
             } else {
                 VStack(spacing: 14) {
@@ -242,5 +249,23 @@ struct BodyProbe: View {
         Color.clear
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
+    }
+}
+
+// MARK: - v2.10 精简模式环境键
+
+/// 是否以"精简界面"启动（只地图 + 一条搜索卡）。
+///
+/// 为什么用 Environment 而不是 ContentView 的 init 参数：
+/// ContentView 里有一百多个 `@State private`，自带的 memberwise 初始化器是 private，
+/// 别的文件根本调不到 `ContentView(lite:)`；环境值是唯一不用改初始化器的传参方式。
+struct MotoLiteModeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var motoLiteMode: Bool {
+        get { self[MotoLiteModeKey.self] }
+        set { self[MotoLiteModeKey.self] = newValue }
     }
 }
