@@ -109,6 +109,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     var waypointMarks: [CLLocationCoordinate2D] = []
     /// v2.20 电警点被手动拖动后的新坐标（WGS-84，id + lat + lon）
     var onCameraMoved: ((Int, Double, Double) -> Void)?
+    /// v2.21 地图聚焦到指定坐标（点击途经点时用；WGS-84）
+    var focusCoord: CLLocationCoordinate2D? = nil
+    /// v2.21 聚焦触发计数（内容不变不重复移动地图）
+    var focusTick: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -367,7 +371,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // 逐一复用/新增/删除：数量通常 1~3 个，直接按索引对齐即可
                 for (i, coord) in want.enumerated() {
                     if i < existing.count {
-                        existing[i].setCoordinate(coord)
+                        existing[i].setCoordinateGCJ(coord)
                     } else {
                         map.addAnnotation(RouteEndAnnotation(kind: "via", coordinate: coord))
                     }
@@ -577,6 +581,21 @@ struct MapViewRepresentable: UIViewRepresentable {
             for m in teamMembers {
                 map.addAnnotation(TeamAnnotation(name: m.name, speedKph: m.speedKph,
                                                  coordinate: m.coordinate))
+            }
+        }
+        // v2.21 途经点定位：地图移到该点并暂停朝向跟随
+        if focusTick != context.coordinator.lastFocusTick {
+            context.coordinator.lastFocusTick = focusTick
+            if focusTick > 0, let fc = focusCoord {
+                context.coordinator.userMoved = true
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .none
+                    map.setRegion(
+                        MKCoordinateRegion(center: MapGeo.toGCJ(fc),
+                                           latitudinalMeters: 600,
+                                           longitudinalMeters: 600),
+                        animated: true)
+                }
             }
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
@@ -791,6 +810,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastZoomOutTick = 0
         var lastPreviewKey = ""
         var lastViaKey: Int?
+        /// v2.21 已处理过的聚焦计数
+        var lastFocusTick = -1
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
@@ -1330,15 +1351,27 @@ final class TeamAnnotation: NSObject, MKAnnotation {
 }
 
 /// 路线起点/终点标记
+/// 路线起点/终点/途经点标注
+///
+/// v2.21 关键修复：coordinate 之前是**只读计算属性**（`MapGeo.toGCJ(wgs)`）。
+/// MKAnnotation 只要求有 getter，但 MapKit 内部会观察并在某些路径下
+/// 用 KVC（setValue:forKey:"coordinate"）回写坐标 —— 对只读计算属性这么写会抛
+/// NSUnknownKeyException，表现为"点一下地图上的途经点就闪退"。
+/// 现在改成 `@objc dynamic var` 存储属性（存 GCJ-02），赋值自带 KVO，MapKit 随便写都不炸。
 final class RouteEndAnnotation: NSObject, MKAnnotation {
     let kind: String
-    fileprivate private(set) var wgs: CLLocationCoordinate2D
-    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
+    /// v2.21 可写坐标（GCJ-02，MapKit 坐标系）；@objc dynamic 保证 KVO + KVC 安全
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+    /// 原始 WGS-84 坐标（业务层用）
+    private var wgs: CLLocationCoordinate2D
+
     init(kind: String, coordinate: CLLocationCoordinate2D) {
         self.kind = kind
         self.wgs = coordinate
+        self.coordinate = MapGeo.toGCJ(coordinate)
         super.init()
     }
+
     var title: String? {
         switch kind {
         case "start": return "起点"
@@ -1346,11 +1379,15 @@ final class RouteEndAnnotation: NSObject, MKAnnotation {
         default: return "终点"
         }
     }
-    /// v2.19 途经点复用标注时更新坐标（手动发 KVO，MapKit 靠它移动大头针）
-    func setCoordinate(_ c: CLLocationCoordinate2D) {
-        willChangeValue(forKey: "coordinate")
-        wgs = MapGeo.toWGS(c)
-        didChangeValue(forKey: "coordinate")
+
+    var subtitle: String? {
+        kind == "via" ? "点击可移除该途经点" : nil
+    }
+
+    /// v2.19/v2.21 途经点复用标注时更新坐标（GCJ 输入）
+    func setCoordinateGCJ(_ gcj: CLLocationCoordinate2D) {
+        coordinate = gcj
+        wgs = MapGeo.toWGS(gcj)
     }
 }
 
@@ -1522,13 +1559,24 @@ final class AmapTileRenderer: MKOverlayRenderer {
     /// v1.98 曾经反过来：把 GCJ 瓦片平移半个瓦片去"对齐"WGS 网格，不仅漏了半瓦片偏移，
     /// 还与已转 GCJ 的折线形成了双重错位——这正是"路线永远压不到路上"的直接原因。
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
-        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
+        // v2.21 层级公式修正（白花根源）
+        //
+        // 旧代码：z = 20 - log2(zoomScale) —— 符号反了。
+        // MKMapView 的 zoomScale 随"放大"而增大，而瓦片层级 z 也随放大而增大，
+        // 所以两者必须同向：z = log2(zoomScale) + K。
+        // 反向计算的后果：地图一缩小，zoomScale 变小 → z 算成 19（顶格），
+        // 一屏要展开 (2^19 级别的网格) 上万块瓦片 → 超过单帧上限后整帧直接不画，
+        // 露出的就是苹果底图，表现为"缩小后白花花一片"。
+        //
+        // K=20 对应 zoomScale=1（MKMapView 默认视野约为 z=20 级别的密度）。
+        let zRaw = log2(Double(zoomScale)) + 20.0
+        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int(zRaw.rounded())))
         let n = 1 << z
         let per = MKMapRect.world.size.width / Double(n)
-        let x0 = max(0, Int(floor(mapRect.minX / per)))
-        let x1 = min(n - 1, Int(floor(mapRect.maxX / per)))
-        let y0 = max(0, Int(floor(mapRect.minY / per)))
-        let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
+        var x0 = max(0, Int(floor(mapRect.minX / per)))
+        var x1 = min(n - 1, Int(floor(mapRect.maxX / per)))
+        var y0 = max(0, Int(floor(mapRect.minY / per)))
+        var y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
         guard x1 >= x0, y1 >= y0 else { return }
 
         // v2.14 上限保护：极端缩放或初始 mapRect 抖动时，可见范围可能大到离谱。
@@ -1536,8 +1584,17 @@ final class AmapTileRenderer: MKOverlayRenderer {
         // 渲染线程和主线程一起被拖死。
         // v2.16 阈值 400 → 600：3D 俯视/全览时 400 很容易被打到，整帧直接不画，
         // 表现出来就是"一放大/一倾斜就白屏好几秒"。
+        // v2.21 单帧上限：修正层级公式后一屏通常是几十块；
+        // 但 3D 俯视 + 大跨度时仍可能上百块，旧版超过 600 就**整帧不画**，
+        // 露出的就是苹果底图，表现为"缩小后白花花一片"。
+        // 现在超限时不再整帧放弃，而是**只画中心区域**（屏幕中央永远有图）。
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 900 {
+            let maxSide = 30
+            let cx = (x0 + x1) / 2, cy = (y0 + y1) / 2
+            x0 = max(0, cx - maxSide / 2); x1 = min(n - 1, x0 + maxSide - 1)
+            y0 = max(0, cy - maxSide / 2); y1 = min(n - 1, y0 + maxSide - 1)
+        }
         let total = (x1 - x0 + 1) * (y1 - y0 + 1)
-        guard total <= 600 else { return }
 
         // v2.14 一次加锁收集整帧需求。
         //

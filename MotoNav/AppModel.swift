@@ -235,6 +235,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var trafficSpans: [TrafficSpan] = []
     /// v2.19 途经点（可多个，路线依次穿过 起点→途经1→途经2→…→终点）
     @Published var waypoints: [RouteWaypoint] = []
+    /// v2.21 地图聚焦到指定坐标（途经点定位用）
+    @Published var focusCoord: CLLocationCoordinate2D?
+    @Published var focusTick = 0
     /// v2.19 起点（默认跟随当前定位；点交换按钮后固定为原终点）
     @Published var originName = "我的位置"
     @Published var originLat = 0.0
@@ -2632,6 +2635,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func clearWaypoints() {
         waypoints.removeAll()
+    }
+
+    /// v2.21 点击途经点 → 地图定位到该点（并短暂高亮）
+    func focusWaypoint(_ wp: RouteWaypoint) {
+        focusCoord = CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon)
+        focusTick += 1
+        status = "已定位到途经「\(wp.name)」"
     }
 
     /// v2.19 起终点互换：起点变为原终点，终点变为原起点，互换后立即重新规划

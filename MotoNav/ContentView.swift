@@ -608,7 +608,9 @@ struct ContentView: View {
                 if let c = camStore.all.first(where: { $0.id == id }) {
                     model.status = "已校准「\(c.name)」位置"
                 }
-            }
+            },
+            focusCoord: model.focusCoord,
+            focusTick: model.focusTick
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -1396,11 +1398,16 @@ struct ContentView: View {
                 if cameraPoiCard != nil || tapPlace != nil || tipCard != nil {
                     AnyView(poiCardStack)
                 } else if !model.routeChoices.isEmpty {
-                    // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
-                    // v1.84 仅上下移动，除非左拉删除（左拉时允许左右移动触发删除）
-                    DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90), lockX: true,
+                    // v2.21 路线规划卡拆成上下两张（高德式）：
+                    //   上卡 = 出发点/途经点/终点 + 服务小卡 + 沿途设施结果
+                    //   下卡 = 方案卡 + 骑行风险 + 开始导航
+                    // 两张卡都可独立上下拖动；下卡左滑关闭整条路线。
+                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.36), lockX: true) {
+                        AnyView(routePlanTopCard)
+                    }
+                    DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true,
                                    deleteLabel: "删除",
-                                   onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanCard) }
+                                   onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanBottomCard) }
                 } else {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
                     // v1.99 移除地图上浮动的"历史搜索"横条：搜索框聚焦时面板内已有历史列表，
@@ -1926,11 +1933,22 @@ struct ContentView: View {
         model.routeChoices = []
     }
 
-    /// v2.19 路线规划卡（高德式）：上半 = 起点上/途经中/终点下 + 右侧(交换/加号) + 服务小卡；
-    /// 下半 = 横排方案卡 + 绿色开始导航。任何改动（交换/加途经/删途经）地图同步重规划。
-    private var routePlanCard: some View {
-        VStack(spacing: 10) {
+    /// v2.21 路线规划卡（上）：起点/终点/途经点 + 右侧(加号/交换) + 服务小卡 + 结果列表
+    private var routePlanTopCard: some View {
+        VStack(spacing: 8) {
             routePlanHeader
+            serviceChipsRow
+        }
+        .padding(12)
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .padding(.horizontal, 14)
+    }
+
+    /// v2.21 路线规划卡（下）：方案卡 + 风险摘要 + 开始导航
+    private var routePlanBottomCard: some View {
+        VStack(spacing: 10) {
             routeChoiceCards
             // v1.99 骑行风险 + 路况摘要（骑士专属）
             if !model.riderRisks.isEmpty || !model.trafficSpans.isEmpty {
@@ -1974,8 +1992,8 @@ struct ContentView: View {
             .buttonStyle(.plain)
         }
         .padding(12)
-        .background(Color(.systemBackground).opacity(0.95), in: RoundedRectangle(cornerRadius: 22))
-        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
     }
@@ -1994,15 +2012,31 @@ struct ContentView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
-                // 途经 1、2、3…（橙点 + x 删除）
+                // 途经 1、2、3…（橙点 + 序号徽标 + 点击定位 + x 删除）
                 ForEach(Array(model.waypoints.enumerated()), id: \.element.id) { i, wp in
                     HStack(spacing: 7) {
                         Circle().fill(Color.orange).frame(width: 9, height: 9)
-                        Text("途经\(i + 1)：\(wp.name)")
+                        // 序号徽标（高德式）
+                        Text("\(i + 1)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 15, height: 15)
+                            .background(Color.orange, in: Circle())
+                        Text(wp.name)
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         Spacer(minLength: 4)
+                        // 点击途经点 → 地图定位到该点
+                        Button {
+                            haptic()
+                            model.focusWaypoint(wp)
+                        } label: {
+                            Image(systemName: "scope")
+                                .font(.footnote)
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.plain)
                         Button {
                             haptic()
                             model.removeWaypoint(wp)
@@ -2012,6 +2046,11 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        haptic()
+                        model.focusWaypoint(wp)
                     }
                 }
                 // 终点（红点）
@@ -2025,19 +2064,8 @@ struct ContentView: View {
                 // v2.19 服务小卡移到终点下方（同高德"驾车/公交/打车"一排的选择条）
                 serviceChipsRow
             }
-            // 右侧：交换 / 添加途径点
+            // 右侧：v2.21 按用户要求把「＋」上移到原交换箭头的位置，交换按钮下移
             VStack(spacing: 14) {
-                Button {
-                    haptic()
-                    model.swapOriginDest()
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.body.bold())
-                        .foregroundStyle(.primary)
-                        .frame(width: 34, height: 34)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
-                }
-                .buttonStyle(.plain)
                 Button {
                     haptic()
                     beginWaypointSelect()
@@ -2047,6 +2075,17 @@ struct ContentView: View {
                         .foregroundStyle(.blue)
                         .frame(width: 34, height: 34)
                         .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    haptic()
+                    model.swapOriginDest()
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.body.bold())
+                        .foregroundStyle(.primary)
+                        .frame(width: 34, height: 34)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
                 }
                 .buttonStyle(.plain)
             }
