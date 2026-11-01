@@ -152,10 +152,13 @@ enum RouteFetcher {
         if !amapKey.isEmpty {
             result = await fetchAmapDriving(from: start, to: end, key: amapKey)
         }
-        // 高德不足 2 条 → OSRM alternatives 补充（按距离差异去重，最多 4 条）
-        if result.count < 2 {
+        // v1.82 高德方案不足 4 条 → OSRM alternatives 补充（按距离差异去重，车道数据优先：
+        // 高德 v3 无车道字段，OSRM 方案的 lanes 更真实，切换备选方案可获得真实车道卡）
+        if result.count < 4 {
             let osrm = await fetchOsrmChoices(from: start, to: end)
-            for o in osrm {
+            // 含真实车道的方案排在前面
+            let laneFirst = osrm.filter { $0.turns.contains { !$0.lanes.isEmpty } } + osrm
+            for o in laneFirst {
                 if result.count >= 4 { break }
                 let dup = result.contains { abs($0.distanceM - o.distanceM) < max(80, $0.distanceM / 40) }
                 if !dup { result.append(o) }
@@ -193,7 +196,8 @@ enum RouteFetcher {
         return []
     }
 
-    /// 高德驾车路线规划API（v1.82 多策略合并：速度最快/距离最短/少收费/躲避拥堵 → 多条不同路线 + 真实优势标签）
+    /// 高德驾车路线规划API（v1.82 多策略合并：速度最快/距离最短 → 多条不同路线 + 真实优势标签；
+    /// 不足 2 条时再补少收费/躲避拥堵，控制请求数省配额——每次规划默认 2 次高德调用）
     private static func fetchAmapDriving(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
@@ -202,25 +206,38 @@ enum RouteFetcher {
         let origin = "\(start.longitude),\(start.latitude)"
         let destination = "\(end.longitude),\(end.latitude)"
         // v3 strategy：0=速度最快, 1=距离最短, 2=少收费, 4=躲避拥堵
-        let strategies: [(String, String)] = [
-            ("0", "推荐"), ("1", "最短"), ("2", "少收费"), ("4", "少拥堵")
-        ]
+        let primary: [(String, String)] = [("0", "推荐"), ("1", "最短")]
+        let extra: [(String, String)] = [("2", "少收费"), ("4", "少拥堵")]
         var out: [RouteChoice] = []
-        for (st, label) in strategies {
-            let urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=\(st)"
-            guard let url = URL(string: urlStr) else { continue }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let route = obj["route"] as? [String: Any],
-                  let paths = route["paths"] as? [[String: Any]],
-                  let first = paths.first,
-                  let rc = parseAmapPath(first, label: label) else { continue }
-            // 距离差异去重（>2% 视为不同路线）
-            let dup = out.contains { abs($0.distanceM - rc.distanceM) < max(50, rc.distanceM / 50) }
-            if !dup { out.append(rc) }
-            if out.count >= 3 { break }
+        for (st, label) in primary {
+            await fetchStrategy(origin: origin, destination: destination, key: key,
+                                st: st, label: label, out: &out)
+        }
+        // 主策略仍不足 2 条 → 补后两个策略
+        if out.count < 2 {
+            for (st, label) in extra {
+                await fetchStrategy(origin: origin, destination: destination, key: key,
+                                    st: st, label: label, out: &out)
+            }
         }
         return out
+    }
+
+    /// 单个 strategy 请求并去重合并（距离差异 >2% 视为不同路线）
+    private static func fetchStrategy(
+        origin: String, destination: String, key: String,
+        st: String, label: String, out: inout [RouteChoice]
+    ) async {
+        let urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=\(st)"
+        guard let url = URL(string: urlStr),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let route = obj["route"] as? [String: Any],
+              let paths = route["paths"] as? [[String: Any]],
+              let first = paths.first,
+              let rc = parseAmapPath(first, label: label) else { return }
+        let dup = out.contains { abs($0.distanceM - rc.distanceM) < max(50, rc.distanceM / 50) }
+        if !dup { out.append(rc) }
     }
 
     /// 解析高德 v3 单条 path 为 RouteChoice（折线点 + 转向步骤）

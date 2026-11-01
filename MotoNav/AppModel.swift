@@ -119,6 +119,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var arriveAnnounced = false
     /// 收藏点位（key: "lat,lon"）
     @Published var favorites: [String: String] = [:]
+    /// v1.82 收藏时间戳（key: "lat,lon" → 收藏时刻，用于"我的-收藏"按最新在前排序）
+    @Published var favoriteTimes: [String: Double] = [:]
     /// 常用地点（家/公司）
     struct SavedPlace: Codable { var name: String; var lat: Double; var lon: Double }
     /// v1.69 搜索面板快捷卡片（家/公司之外的"+"自定义点位）
@@ -255,12 +257,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 收藏 / 家 / 公司（v1.29）
 
     private let favKey = "fav_pois"
+    private let favTimesKey = "fav_pois_times"
     private let homeKey = "home_place"
     private let workKey = "work_place"
 
     private func loadFavorites() {
         if let d = UserDefaults.standard.dictionary(forKey: favKey) as? [String: String] {
             favorites = d
+        }
+        if let t = UserDefaults.standard.dictionary(forKey: favTimesKey) as? [String: Double] {
+            favoriteTimes = t
         }
     }
 
@@ -282,10 +288,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let key = "\(p.lat),\(p.lon)"
         if favorites[key] != nil {
             favorites.removeValue(forKey: key)
+            favoriteTimes.removeValue(forKey: key)
         } else {
             favorites[key] = p.name
+            favoriteTimes[key] = Date().timeIntervalSince1970
         }
         UserDefaults.standard.set(favorites, forKey: favKey)
+        UserDefaults.standard.set(favoriteTimes, forKey: favTimesKey)
     }
 
     /// v1.81 联想地点/信息卡收藏（与点位收藏共用同一收藏夹）
@@ -298,10 +307,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let key = "\(lat),\(lon)"
         if favorites[key] != nil {
             favorites.removeValue(forKey: key)
+            favoriteTimes.removeValue(forKey: key)
         } else {
             favorites[key] = name
+            favoriteTimes[key] = Date().timeIntervalSince1970
         }
         UserDefaults.standard.set(favorites, forKey: favKey)
+        UserDefaults.standard.set(favoriteTimes, forKey: favTimesKey)
     }
 
     /// v1.81 高德周边搜索（信息卡"搜周边"）：以该点为中心返回附近 POI
@@ -1198,6 +1210,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func speak(_ text: String, priority: Int = 0) {
         guard !voiceMuted else { return }
+        // v1.82 后台播报节流：切后台后普通提示 30 秒内最多 1 次、高优先级 8 秒 1 次，
+        // 避免持续语音唤醒造成耗电与系统后台资源限制（导航提醒依旧后台播报）
+        if UIApplication.shared.applicationState == .background {
+            let since = Date().timeIntervalSince(lastSpeakAt)
+            if since < 30 && priority < 2 { return }
+            if since < 8 { return }
+        }
         // v1.81.4 后台语音播报：playback 会话（Info.plist 已含 audio 后台模式），导航切后台语音继续
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
@@ -1825,7 +1844,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         } else {
             toDest = distanceM(coord, CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
         }
-        if toDest < 100 {
+        // v1.82 到达阈值按当前速度动态调整：快路提前判定（>40km/h 用 150 米，低速 80 米），避免高速误判或低速过早
+        let arriveThreshold = (currentSpeed * 3.6) > 40 ? 150 : 80
+        if toDest < Double(arriveThreshold) {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"
             navigating = false
@@ -1891,6 +1912,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let nt = routeTurns.first { $0.fromStartM > traveled }
         return NavStatus(remainM: remainM, remainS: remainS, speedKph: speed,
                          nextTurn: nt, distToTurnM: nt.map { $0.fromStartM - traveled } ?? 0)
+    }
+
+    /// v1.82 当前所在道路名：取已通过转向点中最后一个转入的道路（高德式顶部道路名）
+    var currentRoadName: String {
+        guard navigating, let loc = currentLocation, !route.isEmpty else { return "" }
+        let toDest = distanceM(loc, route.last ?? CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
+        let traveled = max(0, routeDistanceM - Int(toDest))
+        var name = ""
+        for t in routeTurns where t.fromStartM <= traveled {
+            if !t.roadName.isEmpty { name = t.roadName }
+        }
+        return name
     }
 
     /// 沿路线折线累计已走距离（米）：定位点到折线的最近点（含前段距离）

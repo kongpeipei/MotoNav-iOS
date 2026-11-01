@@ -58,6 +58,8 @@ struct ContentView: View {
     @State private var searchHeight: CGFloat = 54
     /// 底部选项卡：0=导航主页，1=我的
     @State private var selectedTab = 0
+    /// v1.82 "我的-收藏"搜索过滤
+    @State private var favSearch = ""
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
@@ -685,7 +687,8 @@ struct ContentView: View {
                 }
                 Section {
                     // v1.81.1 收藏列表 = 内置点位收藏 + 联想地点收藏（共用同一收藏夹）
-                    let favPois: [Poi] = {
+                    // v1.82 按收藏时间倒序（最新在前）+ 搜索框过滤
+                    var favPois: [Poi] = {
                         var ps = model.pois.filter { model.isFavorite($0) }
                         for (key, name) in model.favorites {
                             let parts = key.split(separator: ",").compactMap { Double($0) }
@@ -696,6 +699,13 @@ struct ContentView: View {
                             ps.append(Poi(id: Int64(9_000_000 + abs(h) % 900_000),
                                           type: .CUSTOM, name: name, lat: parts[0], lon: parts[1],
                                           radiusM: 0, enabled: true, note: "联想收藏"))
+                        }
+                        ps.sort {
+                            (model.favoriteTimes["\($0.lat),\($0.lon)"] ?? 0)
+                                > (model.favoriteTimes["\($1.lat),\($1.lon)"] ?? 0)
+                        }
+                        if !favSearch.isEmpty {
+                            ps = ps.filter { $0.name.localizedCaseInsensitiveContains(favSearch) }
                         }
                         return ps
                     }()
@@ -731,7 +741,16 @@ struct ContentView: View {
                         }
                     }
                 } header: {
-                    Text("收藏")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("收藏")
+                        // v1.82 收藏搜索过滤（量多时按名称快速定位）
+                        TextField("搜索收藏", text: $favSearch)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                            .textInputAutocapitalization(.never)
+                    }
                 }
                 Section("搜索设置") {
                     Button {
@@ -760,7 +779,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.82")
+                        Text("v1.83")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1244,6 +1263,18 @@ struct ContentView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.8))
                         }
+                        // v1.82 顶部当前道路名（高德式，随导航推进更新）
+                        VStack(spacing: 2) {
+                            Text(model.currentRoadName.isEmpty ? "导航中" : model.currentRoadName)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Text("当前道路")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        .frame(maxWidth: .infinity)
                         Spacer()
                         VStack(alignment: .trailing, spacing: 0) {
                             Text("\(Int(ns.speedKph))")
