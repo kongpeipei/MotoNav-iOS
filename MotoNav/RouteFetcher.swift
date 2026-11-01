@@ -159,7 +159,7 @@ enum RouteFetcher {
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
         amapKey: String = "",
-        via: CLLocationCoordinate2D? = nil
+        via: [CLLocationCoordinate2D] = []
     ) async -> [RouteChoice] {
         var result: [RouteChoice] = []
         if !amapKey.isEmpty {
@@ -279,7 +279,7 @@ enum RouteFetcher {
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
         key: String,
-        via: CLLocationCoordinate2D? = nil
+        via: [CLLocationCoordinate2D] = []
     ) async -> [RouteChoice] {
         // v1.98 坐标系：app 内地图/标注/OSM 数据都是 WGS-84（屏幕网格为 WGS 墨卡托），
         // 高德接口收发都需要 GCJ-02 → 请求前 WGS→GCJ，返回后再 GCJ→WGS 绘制
@@ -287,11 +287,13 @@ enum RouteFetcher {
         let (glat2, glon2) = CoordConv.wgs2gcj(end.latitude, end.longitude)
         let origin = String(format: "%.6f,%.6f", glon1, glat1)
         let destination = String(format: "%.6f,%.6f", glon2, glat2)
-        // v1.99 途经点（"顺路加一站"）：高德 waypoints 参数，多个用 ; 分隔
+        // v1.99 途经点 / v2.19 多途经点：高德 waypoints 参数，多个用 ; 分隔，按顺序依次穿过
         var waypoints: String? = nil
-        if let v = via {
-            let (vlat, vlon) = CoordConv.wgs2gcj(v.latitude, v.longitude)
-            waypoints = String(format: "%.6f,%.6f", vlon, vlat)
+        if !via.isEmpty {
+            waypoints = via.map { v -> String in
+                let (vlat, vlon) = CoordConv.wgs2gcj(v.latitude, v.longitude)
+                return String(format: "%.6f,%.6f", vlon, vlat)
+            }.joined(separator: ";")
         }
 
         // v2.18 方案池 = 高德 v5「默认策略 + alternative_route=3」的多备选

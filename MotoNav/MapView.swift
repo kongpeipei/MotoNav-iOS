@@ -105,6 +105,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var cameraMarks: [PoliceCamera] = []
     /// v2.04 刚触发语音提醒的点位 id（地图上该点放大高亮 2 秒，视觉与语音对齐）
     var hotCameraId: Int = 0
+    /// v2.19 路线途经点（WGS-84，橙色"途"标注，随卡片增删同步）
+    var waypointMarks: [CLLocationCoordinate2D] = []
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -332,6 +334,31 @@ struct MapViewRepresentable: UIViewRepresentable {
                 if a.isHot != want {
                     a.isHot = want
                     (map.view(for: a) as? CameraPinView)?.setHot(want)
+                }
+            }
+        }
+        // v2.19 途经点标注（高德式橙色"途"，内容键相同跳过）
+        var viaHasher = Hasher()
+        for c in waypointMarks { viaHasher.combine(c.latitude); viaHasher.combine(c.longitude) }
+        let viaKey = viaHasher.finalize()
+        if viaKey != context.coordinator.lastViaKey {
+            context.coordinator.lastViaKey = viaKey
+            let existing = map.annotations.compactMap { $0 as? RouteEndAnnotation }
+                .filter { $0.kind == "via" }
+            let want = waypointMarks.map { MapGeo.toGCJ($0) }
+            if want.isEmpty {
+                existing.forEach { map.removeAnnotation($0) }
+            } else {
+                // 逐一复用/新增/删除：数量通常 1~3 个，直接按索引对齐即可
+                for (i, coord) in want.enumerated() {
+                    if i < existing.count {
+                        existing[i].setCoordinate(coord)
+                    } else {
+                        map.addAnnotation(RouteEndAnnotation(kind: "via", coordinate: coord))
+                    }
+                }
+                for j in want.count..<existing.count {
+                    map.removeAnnotation(existing[j])
                 }
             }
         }
@@ -744,6 +771,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var tipPolygonOverlay: MKPolygon?
         var lastZoomOutTick = 0
         var lastPreviewKey = ""
+        var lastViaKey: Int?
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
@@ -1057,8 +1085,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let id = "routeEnd"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
                     ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
-                v.markerTintColor = re.kind == "start" ? .systemGreen : .systemRed
-                v.glyphText = re.kind == "start" ? "起" : "终"
+                switch re.kind {
+                case "start": v.markerTintColor = .systemGreen; v.glyphText = "起"
+                case "via": v.markerTintColor = .systemOrange; v.glyphText = "途"
+                default: v.markerTintColor = .systemRed; v.glyphText = "终"
+                }
                 v.titleVisibility = .adaptive
                 return v
             }
@@ -1224,14 +1255,26 @@ final class TeamAnnotation: NSObject, MKAnnotation {
 /// 路线起点/终点标记
 final class RouteEndAnnotation: NSObject, MKAnnotation {
     let kind: String
-    private let wgs: CLLocationCoordinate2D
+    fileprivate private(set) var wgs: CLLocationCoordinate2D
     var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
     init(kind: String, coordinate: CLLocationCoordinate2D) {
         self.kind = kind
         self.wgs = coordinate
         super.init()
     }
-    var title: String? { kind == "start" ? "起点" : "终点" }
+    var title: String? {
+        switch kind {
+        case "start": return "起点"
+        case "via": return "途经点"
+        default: return "终点"
+        }
+    }
+    /// v2.19 途经点复用标注时更新坐标（手动发 KVO，MapKit 靠它移动大头针）
+    func setCoordinate(_ c: CLLocationCoordinate2D) {
+        willChangeValue(forKey: "coordinate")
+        wgs = MapGeo.toWGS(c)
+        didChangeValue(forKey: "coordinate")
+    }
 }
 
 final class PoiAnnotation: NSObject, MKAnnotation {

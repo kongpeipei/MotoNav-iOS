@@ -106,6 +106,8 @@ struct ContentView: View {
     @State private var favSearch = ""
     /// v1.97 "我的-常用地点"编辑目标（点铅笔后进入搜索选点，卡片收藏键确认）
     @State private var slotTarget: CommonPlaceSlot?
+    /// v2.19 途经点选择模式（点规划卡"+"后搜索选点，卡片收藏键"设为途经点"确认）
+    @State private var waypointSelecting = false
     /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
     @State private var tripAutoDismissTask: Task<Void, Never>?
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
@@ -457,6 +459,7 @@ struct ContentView: View {
             pois: model.pois,
             userLocation: model.currentLocation,
             route: model.route,
+            waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
             choiceRoutes: model.routeChoices.map(\.points),
             selectedRouteIdx: model.selectedRouteIdx,
             routePois: model.routePois,
@@ -598,7 +601,8 @@ struct ContentView: View {
             },
             // v2.04 官方电警点位图层（关闭时传空数组，地图上立即消失）
             cameraMarks: camStore.layerOn ? camStore.all : [],
-            hotCameraId: model.hotCameraId
+            hotCameraId: model.hotCameraId,
+            waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -1234,6 +1238,18 @@ struct ContentView: View {
 
     /// 地点卡收藏键（编辑态）：把当前地点写入所点选项；再点一次则取消并删除该选项
     private func toggleSlotAssignment(name: String, lat: Double, lon: Double) {
+        // v2.19 途经点选择模式：同一地点再点一次 = 取消；加完自动退出选择态
+        if waypointSelecting {
+            if let existing = model.waypoints.first(where: { nearSamePlace($0, lat, lon) }) {
+                model.removeWaypoint(existing)
+            } else {
+                model.addWaypoint(name: name, lat: lat, lon: lon)
+            }
+            waypointSelecting = false
+            searchFocused = false
+            dismissKeyboard()
+            return
+        }
         guard let slot = slotTarget else { return }
         haptic()
         if model.commonPlaceMatches(slot, lat: lat, lon: lon) {
@@ -1258,6 +1274,10 @@ struct ContentView: View {
 
     /// 卡片收藏键文字（编辑态显示"设为家/设为公司/设为常用/取消"）
     private func favoriteActionTitle(lat: Double, lon: Double) -> String {
+        // v2.19 途经点选择模式：卡片键显示"设为途经点 / 取消途经"
+        if waypointSelecting {
+            return model.waypoints.contains(where: { nearSamePlace($0, lat, lon) }) ? "取消途经" : "设为途经点"
+        }
         guard let slot = slotTarget else { return "收藏" }
         if model.commonPlaceMatches(slot, lat: lat, lon: lon) {
             switch slot {
@@ -1272,6 +1292,12 @@ struct ContentView: View {
         case .favorite: return "改到此地"
         case .custom, .newCustom: return "设为常用"
         }
+    }
+
+    /// v2.19 判断途经点与给定坐标是否为同一地点（20 米内）
+    private func nearSamePlace(_ wp: RouteWaypoint, _ lat: Double, _ lon: Double) -> Bool {
+        model.distanceM(CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon),
+                        CLLocationCoordinate2D(latitude: lat, longitude: lon)) < 20
     }
 
     /// 编辑态下该地点是否就是选项当前地点（星星实心）
@@ -1326,7 +1352,7 @@ struct ContentView: View {
                         searchFocused = true
                     } label: {
                         HStack(spacing: 6) {
-                            Text("我的位置")
+                            Text(model.originName)
                                 .font(.caption)
                                 .foregroundStyle(.primary)
                             Image(systemName: "arrow.right")
@@ -1887,16 +1913,18 @@ struct ContentView: View {
 
     /// v1.81.3 左滑关闭路线规划卡（清掉路线方案，搜索主卡自动恢复）
     private func closeRoutePlan() {
+        waypointSelecting = false
         model.route = []
         model.routePois = []
         model.routeTurns = []
         model.routeChoices = []
     }
 
-    /// v1.81.3 路线规划卡：头部 + 方案选项卡 + 绿色开始导航，白底圆角（样式同地点卡）
+    /// v2.19 路线规划卡（高德式）：上半 = 起点上/途经中/终点下 + 右侧(交换/加号) + 服务小卡；
+    /// 下半 = 横排方案卡 + 绿色开始导航。任何改动（交换/加途经/删途经）地图同步重规划。
     private var routePlanCard: some View {
         VStack(spacing: 10) {
-            routeChoiceHeader
+            routePlanHeader
             routeChoiceCards
             // v1.99 骑行风险 + 路况摘要（骑士专属）
             if !model.riderRisks.isEmpty || !model.trafficSpans.isEmpty {
@@ -1926,25 +1954,6 @@ struct ContentView: View {
                 .padding(.vertical, 4)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
             }
-            // v1.99 途经点（顺路加一站）
-            if !model.waypointName.isEmpty {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                        .font(.caption2).foregroundStyle(.blue)
-                    Text("途经：\(model.waypointName)").font(.caption2).lineLimit(1)
-                    Spacer()
-                    Button {
-                        haptic()
-                        model.clearWaypoint()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            // v1.99 沿途服务：点一个类别 → 搜路线附近，点结果即"顺路加一站"
-            serviceChipsRow
             Button {
                 haptic()
                 model.toggleNavigation()
@@ -1963,6 +1972,99 @@ struct ContentView: View {
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
+    }
+
+    /// v2.19 规划卡头部（高德式）：出发点在上、途经点居中、终点在下；
+    /// 右侧竖排「交换」「添加途径点」；服务小卡（加油/充电…）贴在终点下方，
+    /// 点类别 → 点结果即作为途经点加入，路线立刻重新规划并穿过该点。
+    private var routePlanHeader: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 9) {
+                // 出发点（绿点）
+                HStack(spacing: 7) {
+                    Circle().fill(Color.green).frame(width: 9, height: 9)
+                    Text(model.originName)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                // 途经 1、2、3…（橙点 + x 删除）
+                ForEach(Array(model.waypoints.enumerated()), id: \.element.id) { i, wp in
+                    HStack(spacing: 7) {
+                        Circle().fill(Color.orange).frame(width: 9, height: 9)
+                        Text("途经\(i + 1)：\(wp.name)")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Button {
+                            haptic()
+                            model.removeWaypoint(wp)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                // 终点（红点）
+                HStack(spacing: 7) {
+                    Circle().fill(Color.red).frame(width: 9, height: 9)
+                    Text(model.destName)
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                // v2.19 服务小卡移到终点下方（同高德"驾车/公交/打车"一排的选择条）
+                serviceChipsRow
+            }
+            // 右侧：交换 / 添加途径点
+            VStack(spacing: 14) {
+                Button {
+                    haptic()
+                    model.swapOriginDest()
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.body.bold())
+                        .foregroundStyle(.primary)
+                        .frame(width: 34, height: 34)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    haptic()
+                    beginWaypointSelect()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.body.bold())
+                        .foregroundStyle(.blue)
+                        .frame(width: 34, height: 34)
+                        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    /// v2.19 点"+"：进入途经点选择模式——搜索或点地图地点，点地点卡「设为途经点」确认
+    private func beginWaypointSelect() {
+        selectedTab = 0
+        uiHidden = false
+        tapPlace = nil
+        tipCard = nil
+        onlineTips = []
+        searchText = ""
+        showSuggestions = false
+        searchExpanded = false
+        waypointSelecting = true
+        showSearchField = true
+        model.status = "选择途经点：搜索或点地图地点，再点卡片「设为途经点」"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard waypointSelecting else { return }
+            searchFocused = true
+        }
     }
 
     /// 拥堵段 / 缓行段数量（规划卡摘要）
@@ -2009,7 +2111,7 @@ struct ContentView: View {
                         ForEach(model.serviceTips.prefix(6)) { tip in
                             Button {
                                 haptic()
-                                model.setWaypoint(name: tip.name, lat: tip.lat, lon: tip.lon)
+                                model.addWaypoint(name: tip.name, lat: tip.lat, lon: tip.lon)
                                 model.clearServices()
                             } label: {
                                 HStack(spacing: 6) {

@@ -27,6 +27,15 @@ final class CompassState: ObservableObject {
 }
 
 
+/// v2.19 路线途经点（名称 + WGS-84 坐标）
+struct RouteWaypoint: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let lat: Double
+    let lon: Double
+}
+
+
 /// CLLocationCoordinate2D Codable（轨迹历史持久化）
 
 @MainActor
@@ -224,9 +233,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var riderRisks: [RoadRisk] = []
     /// 当前路线的拥堵分段（红黄）
     @Published var trafficSpans: [TrafficSpan] = []
-    /// 途经点（"顺路加一站"）
-    @Published var waypoint: CLLocationCoordinate2D?
-    @Published var waypointName = ""
+    /// v2.19 途经点（可多个，路线依次穿过 起点→途经1→途经2→…→终点）
+    @Published var waypoints: [RouteWaypoint] = []
+    /// v2.19 起点（默认跟随当前定位；点交换按钮后固定为原终点）
+    @Published var originName = "我的位置"
+    @Published var originLat = 0.0
+    @Published var originLon = 0.0   // 0 = 跟随当前定位
     /// 足迹回放轨迹（我的-足迹 → 点一条记录）
     @Published var footprintPreview: [CLLocationCoordinate2D] = []
     /// 沿途服务设施搜索结果（"顺路加一站"）
@@ -1379,7 +1391,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         NotificationCenter.default.post(name: .motoAlert, object: p)
     }
 
-    private func distanceM(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+    func distanceM(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
         CLLocation(latitude: a.latitude, longitude: a.longitude)
             .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
     }
@@ -2115,7 +2127,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 规划到任意目的地并高亮沿途抓拍点位（起点/终点自动吸附到最近道路出入口）
     func planRoute(to name: String, lat: Double, lon: Double) {
-        guard let start = currentLocation else {
+        guard let start = resolvedOrigin else {
             status = "请先定位后再规划路线"
             return
         }
@@ -2128,7 +2140,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.98 与 fetchRouteChoices 对齐：直接用高德多方案（不再走 OSRM 吸附），
             // 取推荐方案作为当前路线，方案列表一并保留供切换
             let rawChoices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey,
-                                                          via: self.waypoint)
+                                                          via: self.waypointCoords)
             let choices = self.preferMotoRoutes(rawChoices)
             if let r = choices.first {
                 if choices.count > 1 {
@@ -2176,7 +2188,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 目的地未变才替换（用户可能已改目标）
             guard self.destName == name, self.destLat == lat, self.destLon == lon else { return }
             let retry = await RouteFetcher.fetchAll(from: from, to: to, amapKey: amapKey,
-                                                    via: self.waypoint)
+                                                    via: self.waypointCoords)
             if retry.isEmpty { return }
             let list = retry.map { c -> RouteChoice in
                 let n = nearbyPoisOnRoute(c.points).count
@@ -2219,7 +2231,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// "去这里/导航到这里"触发：获取多路线方案（起点=当前定位点，终点吸附到最近道路出入口）
     /// autoStart=true 时路线就绪后自动进入导航（地点信息卡"导航"按钮）
     func fetchRouteChoices(to name: String, lat: Double, lon: Double, autoStart: Bool = false) {
-        guard let start = currentLocation else {
+        guard let start = resolvedOrigin else {
             status = "请先定位后再规划路线"
             return
         }
@@ -2233,7 +2245,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 吸附点常落到高德认不出的路上，表现为"路线起点悬空、整条线压不到路"。
             // 高德规划接口本身会把起终点吸附到可通行道路，直接传原始坐标最稳。
             let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey,
-                                                      via: self.waypoint)
+                                                      via: self.waypointCoords)
             if choices.isEmpty {
                 fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon, walkLeg: [])
             } else {
@@ -2440,7 +2452,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.98 偏航重规划也走高德（与规划同源），不再用 OSRM 吸附终点
             let dest = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
             let choices = await RouteFetcher.fetchAll(from: start, to: dest, amapKey: amapKey,
-                                                      via: self.waypoint)
+                                                      via: self.waypointCoords)
             if let r = choices.first {
                 route = r.points
                 routeTurns = r.turns
@@ -2587,18 +2599,67 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 顺路加一站：设置途经点并重新规划（保留原终点）
-    func setWaypoint(name: String, lat: Double, lon: Double) {
-        waypoint = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        waypointName = name
-        status = "已顺路添加「\(name)」，正在重新规划…"
-        guard destLat != 0 || destLon != 0 else { return }
-        fetchRouteChoices(to: destName, lat: destLat, lon: destLon, autoStart: false)
+    /// 起点解析：未手动设置时跟随当前定位
+    var resolvedOrigin: CLLocationCoordinate2D? {
+        if originLat != 0 || originLon != 0 {
+            return CLLocationCoordinate2D(latitude: originLat, longitude: originLon)
+        }
+        return currentLocation
     }
 
-    func clearWaypoint() {
-        waypoint = nil
-        waypointName = ""
+    /// v2.19 途经点坐标（高德 waypoints 参数，WGS 传入前转 GCJ 在 RouteFetcher 内处理）
+    var waypointCoords: [CLLocationCoordinate2D] {
+        waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+    }
+
+    /// 添加途经点并立即重新规划（路线自动穿过 起点→途经1→2→…→终点）
+    func addWaypoint(name: String, lat: Double, lon: Double) {
+        guard waypoints.count < 5 else {
+            status = "途经点最多 5 个，先删掉一个再加"
+            return
+        }
+        let wp = RouteWaypoint(name: name, lat: lat, lon: lon)
+        waypoints.append(wp)
+        status = "已添加途经「\(name)」，正在重新规划…"
+        replan()
+    }
+
+    func removeWaypoint(_ wp: RouteWaypoint) {
+        waypoints.removeAll { $0.id == wp.id }
+        status = "已删除途经「\(wp.name)」，正在重新规划…"
+        replan()
+    }
+
+    func clearWaypoints() {
+        waypoints.removeAll()
+    }
+
+    /// v2.19 起终点互换：起点变为原终点，终点变为原起点，互换后立即重新规划
+    func swapOriginDest() {
+        guard destLat != 0 || destLon != 0 else {
+            status = "还没有终点，先选一个目的地"
+            return
+        }
+        guard let oldOrigin = resolvedOrigin else {
+            status = "请先定位后再规划路线"
+            return
+        }
+        let oldOriginName = originName
+        // 起点固定为原终点（不再跟随定位），终点取原起点
+        originName = destName
+        originLat = destLat
+        originLon = destLon
+        destName = oldOriginName
+        destLat = oldOrigin.latitude
+        destLon = oldOrigin.longitude
+        status = "已交换起点终点，正在重新规划…"
+        replan()
+    }
+
+    /// 按当前起点/途经/终点重新拉方案（不自动开始导航）
+    func replan() {
+        guard destLat != 0 || destLon != 0 else { return }
+        fetchRouteChoices(to: destName, lat: destLat, lon: destLon, autoStart: false)
     }
 
     /// 沿途服务设施：以路线中点（无路线时用当前定位）为中心按关键词搜索
