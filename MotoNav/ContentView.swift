@@ -983,6 +983,18 @@ struct ContentView: View {
         }
     }
 
+    /// v1.81.4 车道兜底：路线无车道数据时按转向生成默认车道组（首个为需走车道，绿色高亮）
+    private func navLaneFallback(_ modifier: String) -> [String] {
+        switch modifier {
+        case "left", "sharp left": return ["left", "straight"]
+        case "right", "sharp right": return ["straight", "right"]
+        case "slight left": return ["left", "straight"]
+        case "slight right": return ["straight", "right"]
+        case "uturn": return ["uturn"]
+        default: return ["straight"]
+        }
+    }
+
     /// 转向图标（SF Symbols）
     private func navTurnIcon(_ modifier: String) -> String {
         switch modifier {
@@ -1242,33 +1254,36 @@ struct ContentView: View {
                                 .foregroundStyle(.white.opacity(0.8))
                         }
                     }
-                    // 第二行：下一转向指示（<500米时显示，高德"前方X米右转 进入XX路"）
+                    // v1.81.4 车道卡（<500米时显示，高德同款）：左侧上方动作文字+车道图标(需走车道绿色高亮)，右侧距离+道路名称
                     if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
-                        HStack(spacing: 6) {
-                            Image(systemName: navTurnIcon(t.modifier))
-                                .font(.subheadline.bold())
-                            Text("前方\(navDist(ns.distToTurnM))\(navTurnText(t))")
-                                .font(.subheadline.bold())
-                            if !t.roadName.isEmpty {
-                                Text("进入 \(t.roadName)")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.white.opacity(0.92))
-                                    .lineLimit(1)
+                        HStack(alignment: .top, spacing: 14) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(navTurnText(t))
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.white.opacity(0.72))
+                                HStack(spacing: 5) {
+                                    let lanes = t.lanes.isEmpty ? navLaneFallback(t.modifier) : t.lanes
+                                    ForEach(Array(lanes.enumerated()), id: \.offset) { idx, lane in
+                                        Image(systemName: navLaneIcon(lane))
+                                            .font(.subheadline.bold())
+                                            .foregroundStyle(idx == 0 ? Color.green : .white.opacity(0.42))
+                                    }
+                                }
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 0) {
+                                Text("\(navDist(ns.distToTurnM))")
+                                    .font(.system(size: 24, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                if !t.roadName.isEmpty {
+                                    Text(t.roadName)
+                                        .font(.caption)
+                                        .foregroundStyle(.white.opacity(0.92))
+                                        .lineLimit(1)
+                                }
                             }
                         }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    // 车道指引（<500米时随转向显示）
-                    if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0, !t.lanes.isEmpty {
-                        HStack(spacing: 3) {
-                            ForEach(t.lanes, id: \.self) { lane in
-                                Image(systemName: navLaneIcon(lane))
-                                    .font(.footnote.bold())
-                                    .foregroundStyle(.white.opacity(0.9))
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity)
                     }
                 }
                 .padding(.horizontal, 16)
