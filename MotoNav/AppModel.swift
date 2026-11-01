@@ -2065,9 +2065,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if a.2 != b.2 { return a.2 }
             return a.1 < b.1
         }
-        // 100 公里以外基本已经跨市：只要有 100km 内的结果，就不让外地条目挤进列表
-        let near = rows.filter { $0.1 <= 100_000 }
-        let kept = near.isEmpty ? Array(rows.prefix(10)) : near
+        // v2.25 距离过滤放宽：**精确命中（名称含关键词）的条目不受距离限制**。
+        // 用户搜"吴圩镇"（在滁州定远县，距合肥 55~68km；若人在更远的城市可能超 100km）
+        // 就是明确要那个地方，不能因为"跨市"就把它从列表里抹掉。
+        // 非精确命中的条目仍按 100km 过滤，避免外地无关 POI 挤进列表。
+        let exactRows = rows.filter { $0.2 }
+        let otherRows = rows.filter { !$0.2 && $0.1 <= 100_000 }
+        var kept = exactRows + otherRows
+        if kept.isEmpty {
+            // 全都超距（且无精确命中）→ 退而取最近的 10 条，别让列表空掉
+            kept = Array(rows.prefix(10))
+        }
         return kept.map { $0.0 }
     }
 
