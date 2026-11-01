@@ -105,7 +105,7 @@ enum RouteFetcher {
     }
 
     /// v1.65 步行连接段：当前位置 → 起点吸附出入口（OSRM foot 步行路线，GPS 点在停车区/小区内时连到最近道路）；
-    /// 失败返回空数组，调用方回退直线段
+    /// v1.82 请求失败时返回直线段兜底：保证绿线从当前位置连到出口，绝不凭空出现在路上
     static func walkPoints(
         from: CLLocationCoordinate2D,
         to: CLLocationCoordinate2D
@@ -117,7 +117,7 @@ enum RouteFetcher {
         guard let url = URL(string:
             "https://router.project-osrm.org/route/v1/foot/\(coord)"
             + "?overview=full&geometries=geojson"
-        ) else { return [] }
+        ) else { return [from, to] }
         var req = URLRequest(url: url)
         req.timeoutInterval = 10
         req.setValue("MotoNavHelper/1.0", forHTTPHeaderField: "User-Agent")
@@ -127,29 +127,55 @@ enum RouteFetcher {
                let routes = root["routes"] as? [[String: Any]],
                let r0 = routes.first,
                let geom = r0["geometry"] as? [String: Any],
-               let coords = geom["coordinates"] as? [[Double]] {
+               let coords = geom["coordinates"] as? [[Double]],
+               !coords.isEmpty {
                 return coords.compactMap { c in
                     c.count >= 2 ? CLLocationCoordinate2D(latitude: c[1], longitude: c[0]) : nil
                 }
             }
         }
-        return []
+        // v1.82 直线兜底：步行服务不可用时直接用直线连接，绿线起点仍是当前位置（不悬空）
+        return [from, to]
     }
 
-    /// 获取多条路线方案（alternatives=3），按用时升序 + 分配优点标签
+    /// 获取多条路线方案，分配优点标签
     /// v1.26：增加请求超时与一次重试，公共实例不稳定时降低"直线降级"概率
     /// v1.57：优先使用高德路线规划API，失败回退OSRM
+    /// v1.82：高德多策略合并出多条不同路线；仍不足 2 条时用 OSRM alternatives 补充，保证"合理推荐多条并列出优势"
     static func fetchAll(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
         amapKey: String = ""
     ) async -> [RouteChoice] {
-        // 优先使用高德路线规划
+        var result: [RouteChoice] = []
+        // 优先使用高德路线规划（多策略合并）
         if !amapKey.isEmpty {
-            let amapResult = await fetchAmapDriving(from: start, to: end, key: amapKey)
-            if !amapResult.isEmpty { return amapResult }
+            result = await fetchAmapDriving(from: start, to: end, key: amapKey)
         }
-        // 回退OSRM
+        // 高德不足 2 条 → OSRM alternatives 补充（按距离差异去重，最多 4 条）
+        if result.count < 2 {
+            let osrm = await fetchOsrmChoices(from: start, to: end)
+            for o in osrm {
+                if result.count >= 4 { break }
+                let dup = result.contains { abs($0.distanceM - o.distanceM) < max(80, $0.distanceM / 40) }
+                if !dup { result.append(o) }
+            }
+        }
+        // 首条固定"推荐"（综合最优的第一方案）
+        if !result.isEmpty {
+            let f = result[0]
+            result[0] = RouteChoice(points: f.points, distanceM: f.distanceM,
+                                    durationS: f.durationS, turns: f.turns,
+                                    label: "推荐", poiCount: 0)
+        }
+        return result
+    }
+
+    /// OSRM alternatives 多方案（公共服务，作为高德方案不足时的补充来源）
+    private static func fetchOsrmChoices(
+        from start: CLLocationCoordinate2D,
+        to end: CLLocationCoordinate2D
+    ) async -> [RouteChoice] {
         let coord = "\(start.longitude),\(start.latitude);\(end.longitude),\(end.latitude)"
         guard let url = URL(string:
             "https://router.project-osrm.org/route/v1/driving/\(coord)"
@@ -167,7 +193,7 @@ enum RouteFetcher {
         return []
     }
 
-    /// 高德驾车路线规划API
+    /// 高德驾车路线规划API（v1.82 多策略合并：速度最快/距离最短/少收费/躲避拥堵 → 多条不同路线 + 真实优势标签）
     private static func fetchAmapDriving(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
@@ -175,79 +201,64 @@ enum RouteFetcher {
     ) async -> [RouteChoice] {
         let origin = "\(start.longitude),\(start.latitude)"
         let destination = "\(end.longitude),\(end.latitude)"
-        let urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=2"
-        guard let url = URL(string: urlStr) else { return [] }
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        // v3 strategy：0=速度最快, 1=距离最短, 2=少收费, 4=躲避拥堵
+        let strategies: [(String, String)] = [
+            ("0", "推荐"), ("1", "最短"), ("2", "少收费"), ("4", "少拥堵")
+        ]
+        var out: [RouteChoice] = []
+        for (st, label) in strategies {
+            let urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=\(st)"
+            guard let url = URL(string: urlStr) else { continue }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let route = obj["route"] as? [String: Any],
-                  let paths = route["paths"] as? [[String: Any]] else {
-                return []
-            }
-            
-            var out: [RouteChoice] = []
-            for (i, p) in paths.enumerated() {
-                guard let distStr = p["distance"] as? String,
-                      let distanceM = Int(distStr),
-                      let durStr = p["duration"] as? String,
-                      let durationS = Int(durStr),
-                      let steps = p["steps"] as? [[String: Any]] else {
-                    continue
-                }
-                
-                // 解析路线点
-                var points: [CLLocationCoordinate2D] = []
-                var turns: [RouteTurn] = []
-                var acc = 0
-                
-                for step in steps {
-                    guard let polyline = step["polyline"] as? String else { continue }
-                    let coords = polyline.split(separator: ";").map { seg -> CLLocationCoordinate2D in
-                        let parts = seg.split(separator: ",").compactMap { Double($0) }
-                        return CLLocationCoordinate2D(latitude: parts[1], longitude: parts[0])
-                    }
-                    points.append(contentsOf: coords)
-                    
-                    // 解析转向步骤
-                    if let roadName = step["road"] as? String,
-                       let action = step["action"] as? String,
-                       let originStr = step["origin"] as? String {
-                        let originParts = originStr.split(separator: ",").compactMap { Double($0) }
-                        if originParts.count >= 2 {
-                            acc += Int(step["distance"] as? String ?? "0") ?? 0
-                            turns.append(RouteTurn(
-                                fromStartM: acc,
-                                action: action,
-                                modifier: step["assist_action"] as? String ?? "",
-                                roadName: roadName,
-                                lanes: [],
-                                coordinate: CLLocationCoordinate2D(latitude: originParts[1], longitude: originParts[0])
-                            ))
-                        }
-                    }
-                }
-                
-                let label: String
-                switch i {
-                case 0: label = "推荐"
-                case 1: label = "备选"
-                default: label = "路线\(i+1)"
-                }
-                
-                out.append(RouteChoice(
-                    points: points,
-                    distanceM: distanceM,
-                    durationS: durationS,
-                    turns: turns,
-                    label: label,
-                    poiCount: 0
-                ))
-            }
-            return out
-        } catch {
-            return []
+                  let paths = route["paths"] as? [[String: Any]],
+                  let first = paths.first,
+                  let rc = parseAmapPath(first, label: label) else { continue }
+            // 距离差异去重（>2% 视为不同路线）
+            let dup = out.contains { abs($0.distanceM - rc.distanceM) < max(50, rc.distanceM / 50) }
+            if !dup { out.append(rc) }
+            if out.count >= 3 { break }
         }
+        return out
+    }
+
+    /// 解析高德 v3 单条 path 为 RouteChoice（折线点 + 转向步骤）
+    private static func parseAmapPath(_ p: [String: Any], label: String) -> RouteChoice? {
+        guard let distStr = p["distance"] as? String,
+              let distanceM = Int(distStr),
+              let durStr = p["duration"] as? String,
+              let durationS = Int(durStr),
+              let steps = p["steps"] as? [[String: Any]] else { return nil }
+        var points: [CLLocationCoordinate2D] = []
+        var turns: [RouteTurn] = []
+        var acc = 0
+        for step in steps {
+            guard let polyline = step["polyline"] as? String else { continue }
+            let coords = polyline.split(separator: ";").map { seg -> CLLocationCoordinate2D in
+                let parts = seg.split(separator: ",").compactMap { Double($0) }
+                return CLLocationCoordinate2D(latitude: parts[1], longitude: parts[0])
+            }
+            points.append(contentsOf: coords)
+            if let roadName = step["road"] as? String,
+               let action = step["action"] as? String,
+               let originStr = step["origin"] as? String {
+                let originParts = originStr.split(separator: ",").compactMap { Double($0) }
+                if originParts.count >= 2 {
+                    acc += Int(step["distance"] as? String ?? "0") ?? 0
+                    turns.append(RouteTurn(
+                        fromStartM: acc,
+                        action: action,
+                        modifier: step["assist_action"] as? String ?? "",
+                        roadName: roadName,
+                        lanes: [],
+                        coordinate: CLLocationCoordinate2D(latitude: originParts[1], longitude: originParts[0])
+                    ))
+                }
+            }
+        }
+        return RouteChoice(points: points, distanceM: distanceM, durationS: durationS,
+                           turns: turns, label: label, poiCount: 0)
     }
 
     private static func parseAll(_ data: Data) -> [RouteChoice] {
