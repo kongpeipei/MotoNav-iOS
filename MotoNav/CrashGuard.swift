@@ -84,14 +84,23 @@ enum CrashGuard {
                 contents: Data("=== 骑士地图崩溃日志（出现 [崩溃] 行说明进程非正常退出）===\n".utf8))
         }
 
-        // 1) Objective-C 异常：不在信号上下文，可以正常用 Foundation
+        // 1) Objective-C 异常：不在信号上下文，可以正常用 Foundation。
+        //    注意：这个闭包必须是 @convention(c)，**不能引用任何 static 成员**
+        //    （引用就等于捕获 self/元类型，编译直接报 "cannot be formed from a closure
+        //    that captures context"），所以路径在这里原地算一遍。
         NSSetUncaughtExceptionHandler { ex in
             let head = "\n[崩溃] 未捕获异常 \(ex.name.rawValue)\n原因: \(ex.reason ?? "无")\n"
             let stack = ex.callStackSymbols.prefix(24).joined(separator: "\n")
             let text = head + "调用栈:\n" + stack + "\n"
+            let url = FileManager.default
+                .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("crash.log")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: Data(), attributes: nil)
+            }
             // 此刻进程将死，用追加方式直接写，不用原子写
             if let d = text.data(using: .utf8),
-               let fh = try? FileHandle(forWritingTo: crashFileURL) {
+               let fh = try? FileHandle(forWritingTo: url) {
                 fh.seekToEndOfFile()
                 fh.write(d)
                 try? fh.close()
