@@ -5,6 +5,7 @@ import UserNotifications
 import UIKit
 import ActivityKit
 import CryptoKit
+import AudioToolbox
 
 extension Notification.Name {
     /// 触发点位提醒（object 为 Poi）
@@ -47,6 +48,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cruiseMode = false
     @Published var cruiseTick = 0
     private var cruiseBase: CLLocationCoordinate2D?
+    /// v1.90 省电模式（电量≤20% 或系统低电量模式自动开启：降定位频率 + 地图调暗）
+    @Published var powerSaving = false
+    /// 省电模式总开关（默认开；"我的"页可关）
+    var powerSaveEnabled: Bool { UserDefaults.standard.object(forKey: "powerSaveEnabled") as? Bool ?? true }
     /// 当前选中的路线方案下标（高德式：默认选中推荐，卡片点击切换）
     @Published var selectedRouteIdx = 0
     /// 手机朝向（度，0=北，顺时针）
@@ -253,9 +258,38 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         loadFavorites()
         loadHomeWork()
         loadQuickPois()
+        // v1.90 省电模式：监听电池电量和系统低电量模式，自动降定位频率
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.applyPowerSaving() }
+        }
+        NotificationCenter.default.addObserver(
+            forName: ProcessInfo.powerStateDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.applyPowerSaving() }
+        }
+        applyPowerSaving()
         NotificationCenter.default.addObserver(
             self, selector: #selector(authorizeAndStart),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    /// v1.90 省电模式应用：电量≤20% 或系统低电量模式 → 定位 distanceFilter 降到 50 米（降频省电）
+    func applyPowerSaving() {
+        let level = UIDevice.current.batteryLevel
+        let lowBattery = level >= 0 && level <= 0.20 // batteryLevel=-1 表示未知（模拟器/未开启监控）
+        let sysLow = ProcessInfo.processInfo.isLowPowerModeEnabled
+        let on = powerSaveEnabled && (lowBattery || sysLow)
+        guard on != powerSaving else { return }
+        powerSaving = on
+        lm.distanceFilter = on ? 50 : kCLDistanceFilterNone
+        if on {
+            status = "已开启省电模式：降低定位频率、调暗地图（电量恢复后自动关闭）"
+        } else {
+            status = "省电模式已关闭"
+        }
     }
 
     // MARK: - 收藏 / 家 / 公司（v1.29）
@@ -1898,6 +1932,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if toDest < Double(arriveThreshold) {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"
+            // v1.90 到达震动提醒（骑行中不低头也感知到站）
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
             navigating = false
             UIApplication.shared.isIdleTimerDisabled = false
             navigateFollowTick += 1

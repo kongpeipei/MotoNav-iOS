@@ -252,8 +252,11 @@ enum RouteFetcher {
         to end: CLLocationCoordinate2D,
         key: String
     ) async -> [RouteChoice] {
-        let origin = "\(start.longitude),\(start.latitude)"
-        let destination = "\(end.longitude),\(end.latitude)"
+        // v1.90 高德接口坐标是 GCJ-02：请求前把 WGS84（系统定位）起终点转成 GCJ，避免起终点位置偏移
+        let (glat1, glon1) = CoordConv.wgs2gcj(start.latitude, start.longitude)
+        let (glat2, glon2) = CoordConv.wgs2gcj(end.latitude, end.longitude)
+        let origin = "\(glon1),\(glat1)"
+        let destination = "\(glon2),\(glat2)"
         // v3 strategy：0=速度最快, 1=距离最短, 2=少收费, 4=躲避拥堵
         let primary: [(String, String)] = [("0", "推荐"), ("1", "最短")]
         let extra: [(String, String)] = [("2", "少收费"), ("4", "少拥堵")]
@@ -301,9 +304,12 @@ enum RouteFetcher {
         var acc = 0
         for step in steps {
             guard let polyline = step["polyline"] as? String else { continue }
+            // v1.90 高德返回 GCJ-02 → 转 WGS84 再绘制（苹果地图坐标系），
+            // 修复"当前定位点与路线不连接"（此前路线整体偏移 50~500 米）
             let coords = polyline.split(separator: ";").map { seg -> CLLocationCoordinate2D in
                 let parts = seg.split(separator: ",").compactMap { Double($0) }
-                return CLLocationCoordinate2D(latitude: parts[1], longitude: parts[0])
+                let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+                return CLLocationCoordinate2D(latitude: wlat, longitude: wlon)
             }
             points.append(contentsOf: coords)
             if let roadName = step["road"] as? String,
@@ -312,13 +318,14 @@ enum RouteFetcher {
                 let originParts = originStr.split(separator: ",").compactMap { Double($0) }
                 if originParts.count >= 2 {
                     acc += Int(step["distance"] as? String ?? "0") ?? 0
+                    let (tlat, tlon) = CoordConv.gcj2wgs(originParts[1], originParts[0])
                     turns.append(RouteTurn(
                         fromStartM: acc,
                         action: action,
                         modifier: step["assist_action"] as? String ?? "",
                         roadName: roadName,
                         lanes: [],
-                        coordinate: CLLocationCoordinate2D(latitude: originParts[1], longitude: originParts[0])
+                        coordinate: CLLocationCoordinate2D(latitude: tlat, longitude: tlon)
                     ))
                 }
             }

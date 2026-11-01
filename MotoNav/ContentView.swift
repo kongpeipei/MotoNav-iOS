@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    /// v1.90 省电模式总开关（"我的"页可关；关闭后低电量也不再降频/调暗）
+    @AppStorage("powerSaveEnabled") private var powerSaveEnabled = true
     @State private var searchText = ""
     @State private var suggestions: [String] = []
     @State private var showSuggestions = false
@@ -95,12 +97,20 @@ struct ContentView: View {
                 if !uiHidden && !model.cruiseMode {
                     weatherFX
                 }
+                // v1.90 省电模式：低电量时地图加一层轻黑罩（调暗省电），不拦截手势
+                if model.powerSaving {
+                    Color.black.opacity(0.25)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                }
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
                 if !uiHidden {
                     // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
                     // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
                     if !showRouteOverview {
                         compassOverlay
+                        // v1.90 顶部居中道路名胶囊（高德式：导航中显示当前道路名，一目了然）
+                        if model.navigating { roadNamePill }
                         // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
                         DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
                         // 地图缩放 + / - 按钮（含当前定位按钮）
@@ -478,26 +488,28 @@ struct ContentView: View {
     }
 
     /// 雨丝：斜向短直线匀速下落
-    /// v1.87 雨丝：降速（约 260~560 px/s，原 650~1270 太快）+ 长短不一 + 倾角各异 + 透明度随机 + 轻微横漂
+    /// v1.87 降速（260~560 px/s）+ 长短不一 + 倾角各异 + 透明度随机 + 轻微横漂
+    /// v1.90 高德同款：向右下统一斜落（斜率 0.15~0.28）、密度 170 条、线宽 0.8~1.5、
+    /// 长度 22~40、透明度 0.35~0.60、速度 300~520 px/s
     private func drawRainFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval, base: Color) {
-        let n = 150
+        let n = 170
         for i in 0..<n {
             let r1 = fxHash(i)
             let r2 = fxHash(i + 500)
             let r3 = fxHash(i + 900)
             let r4 = fxHash(i + 1300)
             let x0 = r1 * size.width
-            let speed = 260 + r2 * 300
+            let speed = 300 + r2 * 220
             let y = (t * speed + r2 * 9000).truncatingRemainder(dividingBy: size.height + 260) - 130
-            // 长短不一（18~48）、倾角各异（0.08~0.26）、透明度随机（0.30~0.60）
-            let len = 18 + r3 * 30
-            let slope = 0.08 + r4 * 0.18
-            let sway = sin(t * 1.6 + r2 * 6.28318) * 6
-            let x = x0 + sway - y * slope
+            // 长度（22~40）、倾角（0.15~0.28，向右下）、透明度（0.35~0.60）
+            let len = 22 + r3 * 18
+            let slope = 0.15 + r4 * 0.13
+            let sway = sin(t * 1.6 + r2 * 6.28318) * 4
+            let x = x0 + sway + y * slope
             var p = Path()
             p.move(to: CGPoint(x: x, y: y))
-            p.addLine(to: CGPoint(x: x - len * slope, y: y + len))
-            ctx.stroke(p, with: .color(base.opacity(0.30 + r1 * 0.30)), lineWidth: 0.9 + r2 * 0.7)
+            p.addLine(to: CGPoint(x: x + len * slope, y: y + len))
+            ctx.stroke(p, with: .color(base.opacity(0.35 + r1 * 0.25)), lineWidth: 0.8 + r2 * 0.7)
         }
     }
 
@@ -713,6 +725,17 @@ struct ContentView: View {
                 } header: {
                     Text("语音播报")
                 }
+                // v1.90 省电模式开关（电量≤20% 或系统低电量模式时自动降定位频率+调暗地图）
+                Section {
+                    Toggle("省电模式", isOn: $powerSaveEnabled)
+                        .onChange(of: powerSaveEnabled) { _, _ in
+                            model.applyPowerSaving()
+                        }
+                } header: {
+                    Text("省电")
+                } footer: {
+                    Text("电量低于 20% 或系统低电量模式时，自动降低定位频率并调暗地图节省电量；恢复后自动还原。")
+                }
                 // v1.63：常用地点分组（家/公司/收藏），主界面不再放快捷按钮
                 Section {
                     Button {
@@ -859,7 +882,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.89")
+                        Text("v1.90")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1047,7 +1070,8 @@ struct ContentView: View {
                     let d = model.distance(to: n, from: loc)
                     if d < 900 {
                         HStack(spacing: 6) {
-                            Image(systemName: n.type == .RED_LIGHT ? "stopwatch" : "camera")
+                            // v1.90 电子眼图标按类型细分（红绿灯/测速/压线/限行）
+                            Image(systemName: n.type.alertIcon)
                                 .font(.footnote.bold())
                                 .foregroundStyle(.yellow)
                             Text("前方\(Int(d))米 \(n.type.voicePrefix) · \(n.name)")
@@ -1561,7 +1585,7 @@ struct ContentView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        // v1.90 第二行：下一转向预告（<500米）+ 当前道路 + 实时速度（由原顶部大数字条并入）
+                        // v1.90 第二行：下一转向预告（<500米）+ 实时速度（当前道路名已上移到顶部胶囊，避免重复）
                         HStack(spacing: 8) {
                             if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
                                 HStack(spacing: 4) {
@@ -1575,19 +1599,15 @@ struct ContentView: View {
                                 }
                             }
                             Spacer()
-                            Text(model.currentRoadName.isEmpty ? "导航中" : model.currentRoadName)
-                                .font(.footnote.bold())
-                                .foregroundStyle(mainFg)
-                                .lineLimit(1)
-                            Spacer()
                             Text("\(Int(ns.speedKph)) km/h")
                                 .font(.footnote.bold())
                                 .foregroundStyle(mainFg)
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
-                        // v1.90 第三行：预计到达（浅灰小字，左对齐）
+                        // v1.90 第三行：预计到达（浅灰小字，卡片下方居中显示，高德同款）
                         HStack {
+                            Spacer()
                             Text("预计 \(arriveTxt) 到达")
                                 .font(.caption)
                                 .foregroundStyle(arriveFg)
@@ -1795,6 +1815,24 @@ struct ContentView: View {
     }
 
     /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
+    /// v1.90 顶部居中道路名胶囊（高德式）：导航中显示当前道路名，黑色半透明底，不挡地图
+    /// 道路名为空时隐藏（不再显示"导航中"占位）
+    private var roadNamePill: some View {
+        VStack {
+            if !model.currentRoadName.isEmpty {
+                Text(model.currentRoadName)
+                    .font(.footnote.bold())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(Color.black.opacity(0.55), in: Capsule())
+                    .padding(.top, 58)
+            }
+            Spacer()
+        }
+    }
+
     private var compassOverlay: some View {
         // v1.80 指南针可自由拖动，位置持久化（下次打开保持）
         // v1.85 默认位置移到最高处（屏幕顶部）

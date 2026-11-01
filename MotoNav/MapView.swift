@@ -888,6 +888,15 @@ final class AmapTileRenderer: MKOverlayRenderer {
     private var inflight = 0
     /// 夜间瓦片（导航中 style=8）
     var dark = false
+    /// v1.90 瓦片磁盘缓存目录（Caches/Tiles）：常用区域瓦片自动落盘，离线可用、省流量
+    private static let diskDir: URL = {
+        let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Tiles", isDirectory: true)
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }()
+    private let ioQueue = DispatchQueue(label: "amap.tile.io")
+    private static let diskMaxFiles = 1200
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
         let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
@@ -934,6 +943,19 @@ final class AmapTileRenderer: MKOverlayRenderer {
     }
 
     private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        // v1.90 磁盘缓存命中直接使用（离线可用）：读盘 → 入内存缓存 → 触发重绘，不再发网络请求
+        let diskURL = Self.diskDir.appendingPathComponent("\(key).png")
+        if FileManager.default.fileExists(atPath: diskURL.path) {
+            lock.lock()
+            if cache[key] == nil, let img = UIImage(contentsOfFile: diskURL.path) {
+                cache[key] = img
+                pending.remove(key)
+                lock.unlock()
+                setNeedsDisplay()
+                return
+            }
+            lock.unlock()
+        }
         lock.lock()
         if inflight >= 16 {
             pending.remove(key)
@@ -963,6 +985,14 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 if let data, let img = UIImage(data: data) {
                     self.cache[key] = img
                     self.pending.remove(key)
+                    // v1.90 瓦片落盘（后台队列，不阻塞渲染；离线/无网时命中磁盘直接显示）
+                    let url = Self.diskDir.appendingPathComponent("\(key).png")
+                    self.ioQueue.async {
+                        if !FileManager.default.fileExists(atPath: url.path) {
+                            try? data.write(to: url)
+                        }
+                        Self.trimDiskIfNeeded()
+                    }
                     if self.cache.count > 200 {
                         var drop = 50
                         while drop > 0, let k = self.cache.keys.first {
@@ -977,6 +1007,26 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 self.lock.unlock()
             }
         }.resume()
+    }
+
+    /// v1.90 磁盘瓦片超量清理：超过上限时删除最旧的，避免缓存无限膨胀
+    private static func trimDiskIfNeeded() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: diskDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: []) else { return }
+        guard files.count > diskMaxFiles else { return }
+        let sorted = files.sorted { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? .distantPast
+            return da < db
+        }
+        for f in sorted.prefix(files.count - diskMaxFiles + 200) {
+            try? fm.removeItem(at: f)
+        }
     }
 
     /// 瓦片 y → 中心纬度（Web Mercator）

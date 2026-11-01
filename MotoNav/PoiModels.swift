@@ -41,6 +41,17 @@ enum PoiType: String, Codable, CaseIterable {
         }
     }
 
+    /// v1.90 电子眼预警图标（SF Symbol，按类型细分：红绿灯/测速/压线/限行/自定义）
+    var alertIcon: String {
+        switch self {
+        case .RED_LIGHT: return "stopwatch"
+        case .SPEED: return "speedometer"
+        case .LANE: return "road.lanes"
+        case .RESTRICTION: return "nosign"
+        case .CUSTOM: return "mappin"
+        }
+    }
+
     /// 是否为电警拍照类型（自定义标记不是电警，不出现在「添加违法拍照」类型选择里）
     var isCamera: Bool { self != .CUSTOM }
 }
