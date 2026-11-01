@@ -658,6 +658,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.removeObject(forKey: historyKey)
     }
 
+    /// v1.82 删除单个搜索历史（联想列表"常搜"项左拉删除）
+    func removeHistory(_ name: String) {
+        searchHistory.removeAll { $0 == name }
+        UserDefaults.standard.set(searchHistory, forKey: historyKey)
+    }
+
     // MARK: - 类别搜索（学校/医院/加油站，附近10公里）
 
     /// 类别搜索结果（name + 坐标 + 类别）

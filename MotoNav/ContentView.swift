@@ -100,7 +100,7 @@ struct ContentView: View {
                 // 导航中悬浮退出按钮（可上下移动；左拉删除=退出导航）
                 if model.navigating {
                     DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true,
-                                   deleteLabel: "左拉删除",
+                                   deleteLabel: "删除",
                                    onSwipeLeft: { haptic(); model.toggleNavigation() }) { exitNavOverlay }
                 }
                 // v1.81.4 导航全览操作条（高德同款：固定全览 / 取消全览(13s)）
@@ -120,7 +120,7 @@ struct ContentView: View {
                 // v1.81.4 本次行程卡：结束导航后显示（白底卡，字号同退出导航卡，可上下移动/左滑关闭）
                 if let s = model.tripSummary {
                     DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
-                                   deleteLabel: "左拉删除",
+                                   deleteLabel: "删除",
                                    onSwipeLeft: { dismissTripAndReset() }) { tripSummaryCard(s) }
                 }
                 // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
@@ -831,12 +831,12 @@ struct ContentView: View {
             if !model.navigating {
                 if let t = tipCard {
                     DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
-                                   deleteLabel: "左拉删除",
+                                   deleteLabel: "删除",
                                    onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
                 } else if !model.routeChoices.isEmpty {
                     // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
                     DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90),
-                                   deleteLabel: "左拉删除",
+                                   deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
                 } else {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
@@ -2149,7 +2149,8 @@ struct ContentView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(onlineTips) { tip in
-                    VStack(spacing: 0) {
+                    // v1.82 常搜项（历史搜索记录）左拉单个删除，其余项正常
+                    let row = VStack(spacing: 0) {
                         HStack {
                             Image(systemName: "mappin.circle.fill")
                                 .foregroundStyle(.green)
@@ -2200,6 +2201,11 @@ struct ContentView: View {
                             showTipCard(name: tip.name, lat: tip.lat, lon: tip.lon, sub: tip.sub)
                         }
                         Divider()
+                    }
+                    if model.searchHistory.contains(tip.name) {
+                        SwipeDeleteRow(onDelete: { model.removeHistory(tip.name) }) { row }
+                    } else {
+                        row
                     }
                 }
             }
@@ -2661,6 +2667,49 @@ struct VoiceSettingsSheet: View {
     }
 }
 
+/// v1.82 列表行左滑删除（联想"常搜"项用）：左拉露出右侧红色删除按钮块（高度同行），滑过一半触发删除
+private struct SwipeDeleteRow<Content: View>: View {
+    let onDelete: () -> Void
+    @ViewBuilder let content: Content
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            HStack(spacing: 0) {
+                Spacer()
+                Button {
+                    onDelete()
+                } label: {
+                    Text("删除")
+                        .font(.headline.bold())
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: 92)
+                .background(Color.red)
+            }
+            .opacity(offset < -8 ? 1 : 0)
+            .animation(.easeOut(duration: 0.15), value: offset < -8)
+            content
+                .offset(x: offset)
+        }
+        .clipped()
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { v in
+                    if v.translation.width < 0 { offset = v.translation.width }
+                }
+                .onEnded { v in
+                    if offset < -46 {
+                        onDelete()
+                    } else {
+                        withAnimation(.spring(duration: 0.3)) { offset = 0 }
+                    }
+                }
+        )
+    }
+}
+
 /// v1.80 可拖动悬浮控件：位置以 0-1 归一化持久化到 UserDefaults，下次打开还原
 /// v1.81.2 支持 onSwipeLeft：向左大幅滑动（>80pt 且横向为主）触发回调关闭，否则正常拖动记忆
 /// v1.81.4 支持 lockX：仅上下移动（横向锁定在初始 x）
@@ -2696,18 +2745,19 @@ private struct DraggableFloat<Content: View>: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .trailing) {
-                // v1.81.4 红色删除卡：大小与卡片相同，仅左拉时出现（未左拉完全透明），卡片左移后从右侧露出
+                // v1.81.4 红色删除按钮块（模仿高德样式）：固定宽度、高度同卡片、仅左拉时出现
                 if let lbl = deleteLabel {
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(Color.red)
-                        .overlay(
-                            Text(lbl)
-                                .font(.subheadline.bold())
-                                .foregroundStyle(.white)
-                                .padding(.trailing, 24),
-                            alignment: .trailing)
-                        .opacity(dragOffset < -8 ? 1 : 0)
-                        .animation(.easeOut(duration: 0.15), value: dragOffset < -8)
+                    HStack(spacing: 0) {
+                        Spacer()
+                        Text(lbl)
+                            .font(.headline.bold())
+                            .foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: 92)
+                    .background(Color.red)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .opacity(dragOffset < -8 ? 1 : 0)
+                    .animation(.easeOut(duration: 0.15), value: dragOffset < -8)
                 }
                 content
                     .offset(x: dragOffset)
