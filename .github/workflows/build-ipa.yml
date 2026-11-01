@@ -190,15 +190,16 @@ jobs:
 
           OUTABS="$GITHUB_WORKSPACE/$OUT"
           (cd "$W" && zip -qry "$OUTABS" Payload)
-          echo "== 体积 =="; ls -lh "$OUT" | awk '{print "  "$5"  "$9}'
+          echo "== 体积 =="; ls -lh "$OUT" 2>&1 | awk '{print "  "$5"  "$9}'
 
           # ---- 结构校验（缺 Widget 直接失败，避免交出"看着能用"的包）----
           echo "== IPA 结构 =="
           APPIN="Payload/$(basename "$APP")/"   # 末尾斜杠：下面所有拼接都靠它
-          unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/MotoNavWidget.appex/Info.plist" || {
+          unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/MotoNavWidget.appex/" || {
             echo "!! PlugIns 中缺少 MotoNavWidget.appex"; unzip -Z1 "$OUT" | grep PlugIns || true; exit 1; }
           EXT="$RUNNER_TEMP/ext"; rm -rf "$EXT"; mkdir -p "$EXT"
-          unzip -o -q "$OUT" "${APPIN}PlugIns/MotoNavWidget.appex" -d "$EXT"
+          # 目录条目名带尾部斜杠，解包必须用通配符，否则 unzip 报 "filename not matched" 并以 11 退出
+          unzip -o -q "$OUT" "${APPIN}PlugIns/MotoNavWidget.appex/*" -d "$EXT"
           EXTPL="$EXT/${APPIN}PlugIns/MotoNavWidget.appex/Info.plist"
           EXT_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXTPL" 2>/dev/null || echo '-')
           EXT_POINT=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXTPL" 2>/dev/null || echo '-')
