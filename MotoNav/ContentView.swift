@@ -76,14 +76,12 @@ struct ContentView: View {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
                 mapLayer
+                // v1.81.4 全屏天气动画（高德同款）：下雨雨丝/下雪飘雪，透明覆盖不拦截手势
+                weatherFX
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
                 if !uiHidden {
-                    // v1.81.2 指南针/天气/路线胶囊/缩放/GPS/图层交通 均可自由拖动，位置持久化
+                    // v1.81.2 指南针/路线胶囊/缩放/GPS/图层交通 均可自由拖动，位置持久化（天气条已移除，改为全屏动画）
                     compassOverlay
-                    // 天气条（屏幕最上边；导航中隐藏，高德导航顶部只留导航信息）
-                    if !model.navigating {
-                        DraggableFloat(key: "weather", defaultPos: CGPoint(x: 0.5, y: 0.05)) { weatherOverlay }
-                    }
                     // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
                     DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
                     // 地图缩放 + / - 按钮（含当前定位按钮）
@@ -364,35 +362,68 @@ struct ContentView: View {
     }
 
     /// 天气条：屏幕最上边居中一行（与左上角指南针分离不重复；导航中隐藏，高德导航顶部只留导航信息）
-    private var weatherOverlay: some View {
-        VStack {
-            HStack {
-                Spacer()
-                if let w = model.weatherText {
-                    HStack(spacing: 6) {
-                        // 当前天气：图标+温度加粗，降水/风为小字
-                        Text(w)
-                            .font(.footnote.bold())
-                            .foregroundStyle(.primary)
-                        if let t = model.tomorrowText {
-                            Text("·")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            // 明日：小字次要色
-                            Text(t)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+    /// v1.81.4 全屏天气动画（高德同款）：下雨=斜落雨丝，下雪=飘落雪花
+    /// 透明 Canvas 覆盖整个地图，不拦截任何手势；顶部天气胶囊卡已移除
+    private var weatherFX: some View {
+        Group {
+            if let code = model.weatherCode {
+                let isRain = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].contains(code)
+                let isSnow = [71, 73, 75, 77, 85, 86].contains(code)
+                if isRain || isSnow {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
+                        Canvas { ctx, size in
+                            let t = tl.date.timeIntervalSinceReferenceDate
+                            if isRain {
+                                drawRainFX(ctx: ctx, size: size, t: t)
+                            } else {
+                                drawSnowFX(ctx: ctx, size: size, t: t)
+                            }
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+                    .allowsHitTesting(false)
                 }
-                Spacer()
             }
-            Spacer()
+        }
+    }
+
+    /// 确定性伪随机 [0,1)，粒子用（无状态，直接按索引哈希）
+    private func fxHash(_ i: Int) -> Double {
+        let x = Double(i) * 0.6180339887498948
+        return x - floor(x)
+    }
+
+    /// 雨丝：斜向短直线匀速下落
+    private func drawRainFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval) {
+        let n = 150
+        for i in 0..<n {
+            let r1 = fxHash(i)
+            let r2 = fxHash(i + 500)
+            let x0 = r1 * size.width
+            let speed = 650 + r2 * 620
+            let y = (t * speed + r2 * 9000).truncatingRemainder(dividingBy: size.height + 220) - 110
+            let len = 14 + r2 * 14
+            let x = x0 - y * 0.16
+            var p = Path()
+            p.move(to: CGPoint(x: x, y: y))
+            p.addLine(to: CGPoint(x: x - len * 0.16, y: y + len))
+            ctx.stroke(p, with: .color(.white.opacity(0.42)), lineWidth: 1.1)
+        }
+    }
+
+    /// 雪花：白色小圆点，下落 + 横向摆动
+    private func drawSnowFX(ctx: GraphicsContext, size: CGSize, t: TimeInterval) {
+        let n = 90
+        for i in 0..<n {
+            let r1 = fxHash(i)
+            let r2 = fxHash(i + 300)
+            let x0 = r1 * size.width
+            let speed = 50 + r2 * 70
+            let y = (t * speed + r2 * 4000).truncatingRemainder(dividingBy: size.height + 140) - 70
+            let sway = sin(t * 1.3 + r2 * 6.28318) * 26
+            let x = (x0 + sway + size.width).truncatingRemainder(dividingBy: size.width)
+            let d = 1.6 + r1 * 2.4
+            ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: d, height: d)),
+                     with: .color(.white.opacity(0.82)))
         }
     }
 

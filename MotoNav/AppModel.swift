@@ -50,6 +50,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var bgImage: UIImage?
     /// 天气文本（小图标 + 温度，显示在 ⋯ 左侧）
     @Published var weatherText: String?
+    /// 天气代码（WMO，v1.81.4 全屏天气动画用：雨/雪）
+    @Published var weatherCode: Int?
     /// 明日天气（最高/最低）
     @Published var tomorrowText: String?
     /// 搜索预览点（绿色高亮，等待"去这里"）
@@ -776,6 +778,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 temp = cur["temperature_2m"] as? Double ?? cur["temperature"] as? Double
                 if let code = cur["weather_code"] as? Int ?? cur["weathercode"] as? Int {
                     icon = weatherIcon(code)
+                    weatherCode = code
                 }
                 windKmH = cur["wind_speed_10m"] as? Double
             }
