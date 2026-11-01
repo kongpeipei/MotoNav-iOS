@@ -124,10 +124,8 @@ struct ContentView: View {
                 if model.navigating && !showRouteOverview {
                     DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { navSideOverlay }
                 }
-                // 高德式顶部大数字条（剩余里程/时间，导航中显示；可拖动；v1.84 全览时隐藏）
-                if !showRouteOverview {
-                    DraggableFloat(key: "navtop", defaultPos: CGPoint(x: 0.5, y: 0.13)) { navTopBar }
-                }
+                // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/抓拍/速度/道路/预计到达），
+                // 移除顶部重复的大数字条 navTopBar，避免信息分散（高德同款单卡片式导航状态）
                 // v1.84 巡航模式顶部卡片（白底：速度 + 最近拍照点）
                 if model.cruiseMode && !model.navigating {
                     cruiseCard
@@ -298,6 +296,13 @@ struct ContentView: View {
                     UserDefaults.standard.removeObject(forKey: k)
                 }
                 UserDefaults.standard.set(true, forKey: "uiPosV185Applied")
+            }
+            // v1.90 GPS 上移到最上方：仅一次重置 gps 旧拖动记忆（之后用户拖动仍会持久化）
+            if !UserDefaults.standard.bool(forKey: "uiPosV190Applied") {
+                for k in ["gps.x", "gps.y"] {
+                    UserDefaults.standard.removeObject(forKey: k)
+                }
+                UserDefaults.standard.set(true, forKey: "uiPosV190Applied")
             }
         }
         // v1.86 行程卡出现 5 秒后自动收起回首页（高德式；用户已操作则取消）
@@ -585,8 +590,9 @@ struct ContentView: View {
     }
 
     /// v1.81 右上角 GPS 信号按钮（可拖动；内容用视图+onTapGesture，避免 Button 拦截拖拽导致不跟手）
+    /// v1.90 上移到最上方（与缩放按钮同一水平线，左侧错开避免重叠）
     private var layerTrafficButtons: some View {
-        DraggableFloat(key: "gps", defaultPos: CGPoint(x: 0.86, y: 0.24)) {
+        DraggableFloat(key: "gps", defaultPos: CGPoint(x: 0.70, y: 0.075)) {
             VStack(spacing: 8) {
                 // GPS信号显示按钮（点击显示定位精度详情）
                 HStack(spacing: 4) {
@@ -853,7 +859,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.88")
+                        Text("v1.89")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1507,12 +1513,11 @@ struct ContentView: View {
                     .padding(.horizontal, 14)
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                 } else if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
-                    // v1.88 深色模式退出卡纯黑底白字（提前算好颜色常量，降低编译器推断复杂度）
-                    let dimFg: Color = colorScheme == .light ? Color.black.opacity(0.45) : Color.white.opacity(0.7)
-                    let mainFg: Color = colorScheme == .light ? Color.black.opacity(0.7) : Color.white.opacity(0.85)
-                    let arriveFg: Color = colorScheme == .light ? Color.secondary : Color.white.opacity(0.7)
-                    let cardBG: Color = colorScheme == .light ? Color(.systemBackground).opacity(0.97) : Color.black.opacity(0.94)
-                    let cardStroke: Color = colorScheme == .light ? Color.black.opacity(0.08) : Color.white.opacity(0.16)
+                    // v1.90 统一白底黑字（深浅色模式一致，高德同款导航状态卡）
+                    // 第一行：分钟/公里/红绿灯/抓拍；第二行：下一转向+当前道路+速度；第三行：预计到达
+                    let dimFg: Color = Color.black.opacity(0.45)
+                    let mainFg: Color = Color.black.opacity(0.75)
+                    let arriveFg: Color = Color.gray
                     let minTxt = "\(max(ns.remainS, 0) / 60)"
                     let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
                     let lights = model.routeTurns.count
@@ -1522,51 +1527,77 @@ struct ContentView: View {
                         f.dateFormat = "HH:mm"
                         return f.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
                     }()
-                    HStack(spacing: 0) {
-                        Button {
-                            haptic()
-                            showExitConfirm = true
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title3)
-                                .foregroundStyle(dimFg)
-                                .padding(.horizontal, 10)
+                    VStack(spacing: 0) {
+                        // 第一行：退出 × ｜ 分钟 ｜ 公里 ｜ 红绿灯 ｜ 抓拍 ｜ 全览
+                        HStack(spacing: 0) {
+                            Button {
+                                haptic()
+                                showExitConfirm = true
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(dimFg)
+                                    .padding(.horizontal, 10)
+                            }
+                            .buttonStyle(.plain)
+                            exitCellDivider
+                            exitStatusCell(minTxt, "分钟", forceBlack: true)
+                            exitCellDivider
+                            exitStatusCell(kmTxt, "公里", forceBlack: true)
+                            exitCellDivider
+                            exitStatusCell("\(lights)", "红绿灯", forceBlack: true)
+                            exitCellDivider
+                            exitStatusCell("\(snaps)", "抓拍", forceBlack: true)
+                            exitCellDivider
+                            // 全览按钮
+                            Button {
+                                haptic()
+                                startRouteOverview()
+                            } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundStyle(mainFg)
+                                    .padding(.horizontal, 12)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                        exitCellDivider
-                        exitStatusCell(minTxt, "分钟")
-                        exitCellDivider
-                        exitStatusCell(kmTxt, "公里")
-                        exitCellDivider
-                        exitStatusCell("\(lights)", "红绿灯")
-                        exitCellDivider
-                        exitStatusCell("\(snaps)", "抓拍")
-                        exitCellDivider
-                        // v1.85 到达时间改为浅灰色小字放卡片下方一行（原右侧"到达"格移除）
-                        Button {
-                            haptic()
-                            startRouteOverview()
-                        } label: {
-                            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                .font(.system(size: 22, weight: .semibold))
+                        // v1.90 第二行：下一转向预告（<500米）+ 当前道路 + 实时速度（由原顶部大数字条并入）
+                        HStack(spacing: 8) {
+                            if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
+                                HStack(spacing: 4) {
+                                    Image(systemName: navTurnIcon(t.modifier))
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                                    Text("\(navDist(ns.distToTurnM))\(t.roadName.isEmpty ? "" : " " + t.roadName)")
+                                        .font(.footnote.semibold())
+                                        .foregroundStyle(mainFg)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                            Text(model.currentRoadName.isEmpty ? "导航中" : model.currentRoadName)
+                                .font(.footnote.bold())
                                 .foregroundStyle(mainFg)
-                                .padding(.horizontal, 12)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(Int(ns.speedKph)) km/h")
+                                .font(.footnote.bold())
+                                .foregroundStyle(mainFg)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        // v1.90 第三行：预计到达（浅灰小字，左对齐）
+                        HStack {
+                            Text("预计 \(arriveTxt) 到达")
+                                .font(.caption)
+                                .foregroundStyle(arriveFg)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
                     }
-                    // v1.85 预计到达：浅灰色小字，显示在卡片下方整行
-                    HStack {
-                        Text("预计 \(arriveTxt) 到达")
-                            .font(.caption)
-                            .foregroundStyle(arriveFg)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                    .padding(.vertical, 12)
-                    // v1.87 深色模式退出卡纯黑底（浅色模式保持白底）
-                    .background(cardBG, in: RoundedRectangle(cornerRadius: 18))
-                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(cardStroke, lineWidth: 1))
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
                     .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
                     .padding(.horizontal, 14)
                 }
@@ -1684,15 +1715,15 @@ struct ContentView: View {
         .padding(.horizontal, 14)
     }
 
-    /// 退出导航状态卡单格（大字+小标签；v1.85 字号随卡片放大，v1.87 深色模式白字）
-    private func exitStatusCell(_ big: String, _ small: String) -> some View {
+    /// 退出导航状态卡单格（大字+小标签；v1.85 字号随卡片放大，v1.87 深色模式白字，v1.90 白底卡用 forceBlack）
+    private func exitStatusCell(_ big: String, _ small: String, forceBlack: Bool = false) -> some View {
         VStack(spacing: 2) {
             Text(big)
                 .font(.system(size: 28, weight: .heavy))
-                .foregroundStyle(colorScheme == .light ? .black : .white)
+                .foregroundStyle(forceBlack ? Color.black : (colorScheme == .light ? .black : .white))
             Text(small)
                 .font(.caption)
-                .foregroundStyle(colorScheme == .light ? .black.opacity(0.55) : .white.opacity(0.7))
+                .foregroundStyle(forceBlack ? Color.black.opacity(0.55) : (colorScheme == .light ? .black.opacity(0.55) : .white.opacity(0.7)))
         }
         .frame(minWidth: 0, maxWidth: .infinity)
     }
