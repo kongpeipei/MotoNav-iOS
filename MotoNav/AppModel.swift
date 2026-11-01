@@ -52,6 +52,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.02 比例尺文本（放在 ObservableObject 里而不是 View 的 @State：
     /// 地图回调改 @State 会在 SwiftUI 更新周期内触发"下一轮更新"，形成循环，是启动卡顿/闪退的根因之一）
     @Published var scaleText = "200 米"
+    // MARK: v2.04 官方电警接近提醒
+    /// 正在提醒的点位 id（地图上该点放大 1.45 倍 + 白圈加粗）
+    @Published var hotCameraId: Int = 0
+    /// 接近横幅文案（nil 表示不显示）
+    @Published var cameraAlert: String?
+    /// 已进入 260m 圈的点位（离开 400m 后移除，实现"每次靠近只播一次"）
+    private var camArmed: Set<Int> = []
+    /// 每个点位最近一次播报时间（2 分钟内不重复，防止路口来回抖动刷屏）
+    private var camSpokenAt: [Int: Date] = [:]
+    /// 上次做接近判定的位置（位移 <20m 直接跳过，静止时不做无用计算）
+    private var camLastPos: CLLocationCoordinate2D?
+    /// 横幅自动消失任务
+    private var camBannerTask: DispatchWorkItem?
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
@@ -1178,6 +1191,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             throttledPowerSavingCheck()
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
+            // v2.04 官方电警接近提醒：不看是否在导航，只要在移动就判
+            checkPoliceCameras(at: coord)
             checkNavigation(at: coord)
             updateCruise(at: coord)
         }
@@ -2249,6 +2264,94 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         ordered[0] = RouteChoice(points: f.points, distanceM: f.distanceM, durationS: f.durationS,
                                  turns: f.turns, label: "推荐", poiCount: f.poiCount, traffic: f.traffic)
         return ordered
+    }
+
+    // MARK: - v2.04 官方电警接近提醒（不需要导航）
+
+    /// 接近合肥交警公示的电警/卡口点位时提醒一次。
+    ///
+    /// 三条设计约束，都是踩过的坑：
+    /// 1. **用位移判定"在移动"而不是 speed**：隧道、树荫、桥下 speed 长期为 0，
+    ///    用 speed 判断会出现"车在开却不提醒"；位移 ≥20m 更稳。
+    /// 2. **进入 260m 播报、离开 400m 重新武装**：单个阈值会在临界点反复触发刷屏。
+    /// 3. **和导航播报错峰**：转向指令优先级 2/3，这里用 1，撞车时延迟 3.5 秒再补一次，
+    ///    否则「前方 200 米左转」刚播完，电警提醒会被 2.5 秒静默窗口吞掉。
+    func checkPoliceCameras(at coord: CLLocationCoordinate2D, force: Bool = false) {
+        let store = PoliceCameraStore.shared
+        guard store.voiceOn else { return }
+        if !force {
+            let moved = camLastPos.map { distanceM($0, coord) } ?? .greatestFiniteMagnitude
+            guard moved >= 20 else { return }
+            camLastPos = coord
+        }
+
+        // 已经离开 400m 的点位解除武装（下次靠近还能再报）
+        if !camArmed.isEmpty {
+            var keep: Set<Int> = []
+            for c in store.all where camArmed.contains(c.id) {
+                if distanceM(coord, c.coordinate) <= 400 { keep.insert(c.id) }
+            }
+            camArmed = keep
+        }
+
+        // 找 260m 内最近的一个
+        var best: (PoliceCamera, Double)?
+        for c in store.all {
+            let d = distanceM(coord, c.coordinate)
+            if d <= 260 {
+                if best == nil || d < best!.1 { best = (c, d) }
+            }
+        }
+        guard let (cam, d) = best else { return }
+        guard !camArmed.contains(cam.id) else { return }
+        if let t = camSpokenAt[cam.id], Date().timeIntervalSince(t) < 120 {
+            camArmed.insert(cam.id)
+            return
+        }
+        // 与导航播报错峰：3 秒内刚播过别的内容，就 3.5 秒后再来（此时人已更靠近，判定仍有效）
+        if !force, Date().timeIntervalSince(lastSpeakAt) < 3.0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                guard let self, let loc = self.currentLocation else { return }
+                self.checkPoliceCameras(at: loc, force: true)
+            }
+            return
+        }
+
+        camArmed.insert(cam.id)
+        camSpokenAt[cam.id] = Date()
+        hotCameraId = cam.id
+        let meters = max(10, Int((d / 10).rounded()) * 10)
+        speak("前方\(meters)米，\(cam.spokenName)，\(cam.type.voiceAction)", priority: 1)
+        showCameraBanner("\(cam.type.title) · \(cam.spokenName) · \(meters) 米")
+    }
+
+    /// 顶部横幅：8 秒后自动收起，同时把地图上高亮的点恢复
+    private func showCameraBanner(_ text: String) {
+        camBannerTask?.cancel()
+        cameraAlert = text
+        let task = DispatchWorkItem { [weak self] in
+            self?.cameraAlert = nil
+            self?.hotCameraId = 0
+        }
+        camBannerTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: task)
+    }
+
+    /// 手动点"电警"按钮时看一眼附近：给用户一个"离我最近的拍照点在哪"的反馈
+    func describeNearbyCameras() {
+        guard let loc = currentLocation else {
+            status = "还没定位到，稍后再试"
+            return
+        }
+        let near = PoliceCameraStore.shared.nearest(to: loc, limit: 3)
+        guard let first = near.first else {
+            status = "附近 5 公里内没有已收录的官方电警点位"
+            return
+        }
+        let parts = near.map { c, d in "\(c.name) \(Int(d))米" }
+        status = "最近拍照点：" + parts.joined(separator: "；")
+        hotCameraId = first.0.id
+        showCameraBanner("\(first.0.type.title) · \(first.0.spokenName) · \(Int(first.1)) 米")
     }
 
     /// 导航中：向前 500 米内出现禁摩/隧道/高架等风险段时播报（每段只报一次）

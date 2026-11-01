@@ -12,6 +12,8 @@ struct ContentView: View {
     @StateObject private var footprints = FootprintStore.shared
     /// v1.99 离线地图包
     @StateObject private var offline = OfflineMapManager.shared
+    /// v2.04 官方电警点位库（合肥交警公示）
+    @StateObject private var camStore = PoliceCameraStore.shared
     /// v1.90 省电模式总开关（"我的"页可关；关闭后低电量也不再降频/调暗）
     @AppStorage("powerSaveEnabled") private var powerSaveEnabled = true
     @State private var searchText = ""
@@ -146,6 +148,16 @@ struct ContentView: View {
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
+                }
+                // v2.04 接近电警横幅：沉浸/导航状态下也要显示（安全提醒优先于界面整洁）
+                if let alert = model.cameraAlert {
+                    cameraAlertBanner(alert)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 96)
+                        .padding(.horizontal, 16)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                        .zIndex(20)
                 }
                 // 导航中悬浮退出按钮（仅上下移动；v1.85 取消左滑删除，全览时隐藏，取消全览恢复）
                 if model.navigating && !showRouteOverview {
@@ -528,7 +540,10 @@ struct ContentView: View {
                         mapLoadError = err
                     }
                 }
-            }
+            },
+            // v2.04 官方电警点位图层（关闭时传空数组，地图上立即消失）
+            cameraMarks: camStore.layerOn ? camStore.all : [],
+            hotCameraId: model.hotCameraId
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())
@@ -614,6 +629,24 @@ struct ContentView: View {
             }
             Spacer()
         }
+    }
+
+    /// v2.04 接近官方电警的横幅（红底白字，与地图上放大的那个点位一一对应）
+    private func cameraAlertBanner(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 15, weight: .black))
+            Text(text)
+                .font(.system(size: 14, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color(red: 0.86, green: 0.15, blue: 0.18), in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 6, y: 3)
     }
 
     /// v2.01 右上角比例尺：白底半透明胶囊 + 一段 58pt 比例尺线（数值随缩放变化）
@@ -939,7 +972,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.03")
+                Text("v2.04")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -2092,6 +2125,36 @@ struct ContentView: View {
                                         : AnyShapeStyle(Color.white), in: Circle())
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    }
+                    // v2.04 官方电警点位（点开小菜单：图层 / 语音 / 看最近的）
+                    Menu {
+                        Toggle(isOn: $camStore.layerOn) {
+                            Label("地图显示电警点位", systemImage: "camera.fill")
+                        }
+                        Toggle(isOn: $camStore.voiceOn) {
+                            Label("接近时语音提醒", systemImage: "speaker.wave.2.fill")
+                        }
+                        Divider()
+                        Button {
+                            model.describeNearbyCameras()
+                        } label: {
+                            Label("看离我最近的拍照点", systemImage: "location.circle")
+                        }
+                        Divider()
+                        Text("已收录 \(camStore.all.count) 个点位")
+                        Text("来源：合肥市公安局交警支队公示")
+                    } label: {
+                        ZStack {
+                            Circle().fill(camStore.layerOn
+                                          ? Color(red: 0.90, green: 0.16, blue: 0.20)
+                                          : Color.white)
+                            Image(systemName: camStore.layerOn ? "camera.fill" : "camera")
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundStyle(camStore.layerOn ? .white : .primary)
+                        }
+                        .frame(width: 44, height: 44)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
         }
     }

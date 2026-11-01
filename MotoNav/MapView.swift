@@ -99,6 +99,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     var teamMembers: [TeamMember] = []
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
+    /// v2.04 官方电警点位（图层开启时传入，关闭传空数组）
+    var cameraMarks: [PoliceCamera] = []
+    /// v2.04 刚触发语音提醒的点位 id（地图上该点放大高亮 2 秒，视觉与语音对齐）
+    var hotCameraId: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -239,6 +243,24 @@ struct MapViewRepresentable: UIViewRepresentable {
                     a.poi = p
                     a.onRoute = routePois.contains { $0.id == p.id }
                 }
+            }
+        }
+        // v2.04 官方电警点位图层（按 id 增量同步，避免每次重建几十个 annotation）
+        let camIds = Set(cameraMarks.map(\.id))
+        map.annotations
+            .compactMap { $0 as? CameraAnnotation }
+            .filter { !camIds.contains($0.cameraId) }
+            .forEach { map.removeAnnotation($0) }
+        let existingCam = Set(map.annotations.compactMap { ($0 as? CameraAnnotation)?.cameraId })
+        for c in cameraMarks where !existingCam.contains(c.id) {
+            map.addAnnotation(CameraAnnotation(camera: c, hot: 0))
+        }
+        // 刚播报的点位：外圈加粗 + 放大，让"听到的"和"看到的"是同一个点
+        for a in map.annotations.compactMap({ $0 as? CameraAnnotation }) {
+            let want = (a.cameraId == hotCameraId && hotCameraId != 0)
+            if a.isHot != want {
+                a.isHot = want
+                (map.view(for: a) as? CameraPinView)?.setHot(want)
             }
         }
         // 终点标记（高德式：起点=当前定位蓝箭头，不再画"起"标记；终点保留"终"）
@@ -947,6 +969,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.displayPriority = .required
                 return v
             }
+            // v2.04 官方电警点位：红底相机图标（比 MKMarker 轻，几十个点也不拖慢瓦片）
+            if let cam = annotation as? CameraAnnotation {
+                let id = "policeCam"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? CameraPinView
+                    ?? CameraPinView(annotation: cam, reuseIdentifier: id)
+                v.annotation = cam
+                v.configure(kind: cam.kind)
+                v.setHot(cam.isHot)
+                return v
+            }
             guard let pa = annotation as? PoiAnnotation else { return nil }
             let id = "poi"
             let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
@@ -1385,3 +1417,94 @@ final class AmapTileRenderer: MKOverlayRenderer {
     }
 }
 
+
+// MARK: - v2.04 官方电警点位标注
+
+/// 合肥交警公示的电警/卡口点位标注。
+/// 注意坐标空间：MapKit 国内按 GCJ-02 解释 addAnnotation，内部存 WGS，
+/// 所以这里统一走 MapGeo.toGCJ，和路线折线用同一层转换，不会出现"路线对齐了、点位偏了"。
+final class CameraAnnotation: NSObject, MKAnnotation {
+    let cameraId: Int
+    let kind: CameraKind
+    let cameraName: String
+    let dirs: String
+    /// 是否处于"刚播报"高亮态
+    var isHot = false
+
+    @objc dynamic var coordinate: CLLocationCoordinate2D
+
+    init(camera: PoliceCamera, hot: Int) {
+        self.cameraId = camera.id
+        self.kind = camera.type
+        self.cameraName = camera.name
+        self.dirs = camera.dirs
+        self.coordinate = MapGeo.toGCJ(camera.coordinate)
+        self.isHot = (hot == camera.id && hot != 0)
+        super.init()
+    }
+
+    var title: String? { "\(kind.title) · \(cameraName)" }
+    var subtitle: String? { dirs.isEmpty ? "" : "抓拍方向：\(dirs)" }
+}
+
+/// 轻量点位视图：圆形色块 + 相机图标。不用 MKMarkerAnnotationView 是因为
+/// 几十个 marker 一起改尺寸会触发地图重新布局，v2.02 的"雪花点"就是这么来的。
+final class CameraPinView: MKAnnotationView {
+    private let badge = UIView()
+    private let icon = UIImageView()
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        backgroundColor = .clear
+        canShowCallout = true
+        collisionMode = .rectangle
+        displayPriority = .defaultHigh
+        setUp()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setUp() {
+        badge.layer.cornerRadius = 14
+        badge.layer.borderWidth = 2
+        badge.layer.borderColor = UIColor.white.cgColor
+        badge.layer.shadowColor = UIColor.black.cgColor
+        badge.layer.shadowOpacity = 0.28
+        badge.layer.shadowRadius = 3
+        badge.layer.shadowOffset = CGSize(width: 0, height: 1.5)
+        badge.isUserInteractionEnabled = false
+        addSubview(badge)
+
+        icon.contentMode = .scaleAspectFit
+        icon.tintColor = .white
+        icon.isUserInteractionEnabled = false
+        addSubview(icon)
+    }
+
+    private var configuredKind: CameraKind?
+
+    func configure(kind: CameraKind) {
+        // 复用时会反复调 viewFor，样式没变就不要重设 frame（每次重设会让地图重新布局）
+        guard configuredKind != kind else { return }
+        configuredKind = kind
+        badge.backgroundColor = kind.color
+        icon.image = UIImage(systemName: kind.icon,
+                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .bold))
+        frame = CGRect(x: 0, y: 0, width: 30, height: 30)
+        badge.frame = CGRect(x: 0, y: 0, width: 28, height: 28)
+        badge.center = CGPoint(x: 15, y: 15)
+        icon.frame = CGRect(x: 0, y: 0, width: 16, height: 16)
+        icon.center = CGPoint(x: 15, y: 15)
+        centerOffset = .zero
+    }
+
+    /// 播报时放大并加白圈，播完缩回，避免地图上"一堆点分不清哪个在提醒"
+    func setHot(_ hot: Bool) {
+        let s: CGFloat = hot ? 1.45 : 1.0
+        UIView.animate(withDuration: 0.22, delay: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.badge.transform = CGAffineTransform(scaleX: s, y: s)
+            self.badge.layer.borderWidth = hot ? 3 : 2
+        }
+    }
+}
