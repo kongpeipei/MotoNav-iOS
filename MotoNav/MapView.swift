@@ -312,6 +312,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             context.coordinator.setRegionProgrammatically {
                 map.userTrackingMode = .followWithHeading
+                if navigating {
+                    // v1.81.4 开始导航时地图缩放到合适程度（高德导航视野：相机约 750m 高）
+                    var cam = map.camera
+                    cam.distance = 750
+                    cam.pitch = 55
+                    map.camera = cam
+                }
             }
         }
         // 导航中拖动/旋转地图后，车开远（>100米）自动拉回跟随（高德导航行为）
