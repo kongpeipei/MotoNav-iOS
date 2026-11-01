@@ -20,8 +20,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // v2.03：启动埋点。能打到这一行说明进程已经起来、签名校验通过，
+        // 后面若闪退就不是签名问题，而是初始化阶段（日志可在「文件」App 里查看）。
+        let bundle = Bundle.main
+        let ver = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        StartupLog.mark("app-launch", "v\(ver) (\(build))")
         // 提前初始化共享模型，注册通知与定位
         _ = AppModel.shared
+        StartupLog.mark("model-ready")
         return true
     }
 

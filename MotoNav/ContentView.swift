@@ -329,6 +329,9 @@ struct ContentView: View {
             Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
         }
         .onAppear {
+            // v2.03：首屏已渲染 → 启动链路走通。若设备上 startup.log 停在这行之前，
+            // 说明是签名/entitlement 被杀，不是代码问题。
+            StartupLog.mark("ui-ready")
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
@@ -936,7 +939,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.02")
+                Text("v2.03")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }

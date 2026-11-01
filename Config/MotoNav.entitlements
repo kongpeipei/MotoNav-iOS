@@ -3,13 +3,16 @@
 <plist version="1.0">
 <dict>
 	<!--
-		CarPlay 导航类 Entitlement。
-		注意：该能力必须在 Apple Developer 后台申请（Capabilities → CarPlay → 选择 Maps/导航类目），
-		需要付费开发者账号，且由 Apple 审批通过后才生效。
-		审批前 App 仍可正常构建、安装到 iPhone 使用（仅 CarPlay 界面不出现）；
-		获批后重新签名安装即可在车载屏幕上使用。
+		v2.03：不再声明任何特殊能力。
+
+		此前这里写着 com.apple.developer.carplay-maps（CarPlay 导航类能力）。
+		该能力必须在 Apple Developer 后台单独申请并由 Apple 审批，普通个人/企业证书
+		一律没有。用第三方签名服务重签时，签名工具会保留/补上这条 entitlement，
+		而证书对应的 provisioning profile 里没有它 → iOS 启动校验失败，
+		表现就是「点图标闪一下就退回桌面」。
+
+		此文件保留空字典，是为了让工程里的 CODE_SIGN_ENTITLEMENTS 配置继续有效，
+		同时又不会给重签工具留下任何需要"补能力"的线索。
 	-->
-	<key>com.apple.developer.carplay-maps</key>
-	<true/>
 </dict>
 </plist>

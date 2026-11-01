@@ -14,8 +14,8 @@
 #      ExportOptions 合并进 2 个步骤，减少 step 启动开销。
 #   4. 瘦身与装包合并：归档后只解包一次、压缩一次（旧版 zip→unzip→zip 三轮）。
 #   5. 产物上传用 compression-level 0（IPA 已是压缩包，再压纯属浪费 CPU）。
-#   6. 保留全部安全校验：Widget 扩展是否存在、扩展点是否正确、是否链接 WidgetKit、
-#      BundleID 前缀、IPA 结构。
+#   6. 保留安全校验：PlugIns 已剥离（v2.03 起刻意不带扩展，避免重签后启动闪退）、
+#      CarPlay 场景声明已移除、主程序 Info 完整。
 # =============================================================================
 name: Build IPA
 
@@ -147,7 +147,7 @@ jobs:
           plutil -lint ExportOptions.plist
 
       # 编译 + 归档一步完成（旧版是"先 build 一遍，再 archive 一遍"，编译两遍）
-      - name: 3) Archive（编译 + 归档，含 Widget 扩展）
+      - name: 3) Archive（编译 + 归档）
         run: |
           set -o pipefail
           xcodebuild archive \
@@ -183,6 +183,15 @@ jobs:
           APP=$(find "$RUNNER_TEMP/MotoNav.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' | head -1)
           cp -R "$APP" "$W/Payload/"
 
+          # v2.03 关键：剥离 Widget 扩展（PlugIns）
+          # 第三方签名服务（企业证书/全能签一类）重签时经常只签主 App、漏签或错签 appex，
+          # 或者改了主 App 的 BundleID 却没同步改 appex 的子标识；
+          # 这两种情况 iOS 启动校验都会直接杀掉主进程 —— 现象就是「点图标闪一下退回桌面」。
+          # 扩展只用于灵动岛/锁屏提醒，剥离后 App 全部功能正常，只是没有灵动岛卡片，
+          # 换来的是重签成功率的数量级提升（单二进制，签名工具没有出错空间）。
+          rm -rf "$W/Payload"/*.app/PlugIns
+          echo "== 已剥离扩展 =="
+
           # 瘦身：调试附件 + Swift 模块接口（重签后无用）
           find "$W/Payload" -name '*.dSYM' -type d -prune -exec rm -rf {} + 2>/dev/null || true
           find "$W/Payload" -name '*.swiftmodule' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -192,29 +201,16 @@ jobs:
           (cd "$W" && zip -qry "$OUTABS" Payload)
           echo "== 体积 =="; ls -lh "$OUT" 2>&1 | awk '{print "  "$5"  "$9}'
 
-          # ---- 结构校验（缺 Widget 直接失败，避免交出"看着能用"的包）----
+          # ---- 结构校验：v2.03 起刻意不带扩展；带扩展反而会让重签失败 ----
           echo "== IPA 结构 =="
           APPIN="Payload/$(basename "$APP")/"   # 末尾斜杠：下面所有拼接都靠它
-          unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/MotoNavWidget.appex/" || {
-            echo "!! PlugIns 中缺少 MotoNavWidget.appex"; unzip -Z1 "$OUT" | grep PlugIns || true; exit 1; }
-          EXT="$RUNNER_TEMP/ext"; rm -rf "$EXT"; mkdir -p "$EXT"
-          # 目录条目名带尾部斜杠，解包必须用通配符，否则 unzip 报 "filename not matched" 并以 11 退出
-          unzip -o -q "$OUT" "${APPIN}PlugIns/MotoNavWidget.appex/*" -d "$EXT"
-          EXTPL="$EXT/${APPIN}PlugIns/MotoNavWidget.appex/Info.plist"
-          EXT_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXTPL" 2>/dev/null || echo '-')
-          EXT_POINT=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXTPL" 2>/dev/null || echo '-')
-          echo "  appex: $EXT_ID / 扩展点 $EXT_POINT"
-          [ "$EXT_POINT" = "com.apple.widgetkit-extension" ] || { echo "!! 扩展点异常: $EXT_POINT"; exit 1; }
-          case "$EXT_ID" in
-            com.motonav.app.ios.*) echo "  BundleID 前缀正确" ;;
-            *) echo "!! 扩展 BundleID 非主应用子标识: $EXT_ID"; exit 1 ;;
-          esac
-          EXT_BIN="$EXT/${APPIN}PlugIns/MotoNavWidget.appex/MotoNavWidget"
-          if [ -f "$EXT_BIN" ]; then
-            echo "  扩展二进制 $(ls -lh "$EXT_BIN" | awk '{print $5}')"
-            otool -L "$EXT_BIN" | grep -q "WidgetKit.framework" || {
-              echo "!! 扩展未链接 WidgetKit（Widget 被裁成空壳，通常缺 @main WidgetBundle）"; exit 1; }
+          if unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/"; then
+            echo "!! 包内仍残留 PlugIns（会导致重签后启动即闪退）"
+            unzip -Z1 "$OUT" | grep PlugIns | head
+            exit 1
           fi
+          echo "  PlugIns: 已剥离（单二进制，重签最稳）"
+          echo "  CarPlay 场景声明: $(unzip -p "$OUT" "${APPIN}Info.plist" | /usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest' 2>/dev/null >/dev/null && echo '存在(异常)' || echo '已移除')"
           echo "== 主程序 Info =="
           unzip -p "$OUT" "${APPIN}Info.plist" > "$RUNNER_TEMP/main.plist"
           for k in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion MinimumOSVersion; do
