@@ -131,6 +131,7 @@ struct ContentView: View {
                     // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
                     // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
                     if !showRouteOverview {
+                        BodyProbe("bp-compass")
                         compassOverlay
                         // v1.90 顶部居中道路名胶囊（高德式：导航中显示当前道路名，一目了然）
                         if model.navigating { roadNamePill }
@@ -143,6 +144,7 @@ struct ContentView: View {
                             DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { zoomOverlay }
                         }
                         // v2.01 右上角比例尺（随缩放实时变化；原 GPS 按钮已移除）
+                        BodyProbe("bp-scale")
                         scaleOverlay
                     }
                     // v1.97 常用地点设置提示条（从"我的"点铅笔后回到地图时显示）
@@ -155,6 +157,7 @@ struct ContentView: View {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
                 }
+                BodyProbe("bp-alert")
                 // v2.04 接近电警横幅：沉浸/导航状态下也要显示（安全提醒优先于界面整洁）
                 if let alert = model.cameraAlert {
                     cameraAlertBanner(alert)
@@ -351,7 +354,8 @@ struct ContentView: View {
         .onAppear {
             // v2.03：首屏已渲染 → 启动链路走通。若设备上 startup.log 停在这行之前，
             // 说明是签名/entitlement 被杀，不是代码问题。
-            StartupLog.mark("ui-ready")
+            StartupLog.markSync("ui-ready")
+            UserDefaults.standard.set(0, forKey: "motonav.bootAttempts")
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
@@ -980,7 +984,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.08")
+                Text("v2.09")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -1279,7 +1283,9 @@ struct ContentView: View {
         // v1.81.3 地点卡/路线规划卡出现时隐藏搜索主卡；两卡左滑关闭后恢复
         // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
+            BodyProbe("bo-enter")
             if !model.navigating && !model.cruiseMode {
+                BodyProbe("bo-branch")
                 if let tp = tapPlace {
                     // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
                     DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
@@ -1301,8 +1307,11 @@ struct ContentView: View {
                     // 地图上再挂一条既挡视线又重复
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
+                BodyProbe("bo-cat")
                 if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
+                    BodyProbe("bo-main")
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { bottomMainCard }
+                    BodyProbe("bo-main-after")
                 }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条

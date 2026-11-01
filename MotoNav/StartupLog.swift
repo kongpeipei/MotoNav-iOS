@@ -40,6 +40,18 @@ enum StartupLog {
         mark(stage, "ERROR: \(err.localizedDescription)")
     }
 
+    /// 同步写盘（v2.09）。
+    ///
+    /// `mark` 是把写入丢到串行队列里，正常用没问题；但**进程被系统硬杀时不保证落地**，
+    /// 之前几版最后一行日志因此不可信（bf-end / map-make 可能确实执行了，只是没写进去）。
+    /// 诊断关键路径（body 各段、makeUIView 各步）一律用这个，代价是几十次同步写，可接受。
+    static func markSync(_ stage: String, _ detail: String = "") {
+        // 锁在 append 内部（异步路径同样走那里），这里不要再加锁，否则同一把非递归锁会死锁
+        append("\(timestamp()) \(stage)\(detail.isEmpty ? "" : " — " + detail)\n")
+    }
+
+    private static let syncLock = NSLock()
+
     /// 只记第一次（用于 body / updateUIView 这类每次刷新都会跑的位置，避免刷屏）
     private static var onceKeys = Set<String>()
     private static let onceLock = NSLock()
@@ -48,7 +60,7 @@ enum StartupLog {
         let first = onceKeys.insert(stage).inserted
         onceLock.unlock()
         guard first else { return }
-        mark(stage, detail)
+        markSync(stage, detail)
     }
 
     private static func timestamp() -> String {
@@ -59,6 +71,8 @@ enum StartupLog {
     }
 
     private static func append(_ line: String) {
+        syncLock.lock()
+        defer { syncLock.unlock() }
         let url = fileURL
         var data = (try? Data(contentsOf: url)) ?? Data()
         // 日志上限 64KB：超过就砍掉前半段，防止长期使用无限增长

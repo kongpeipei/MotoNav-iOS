@@ -38,6 +38,9 @@ import UIKit
 /// 目的单一：验证"窗口能不能显示、主线程循环是否在跑"。
 /// 页面上有实时时钟——时钟还在跳就是主线程活着，冻住就是卡死。
 final class DiagRootController: UIViewController {
+    /// 点「载入主界面」时回调（AppDelegate 里换根视图）
+    var onLoadUI: (() -> Void)?
+
     private let clock = UILabel()
     private let tailLabel = UILabel()
     private var timer: Timer?
@@ -69,7 +72,7 @@ final class DiagRootController: UIViewController {
         clock.text = "--:--:--"
 
         let hint = UILabel()
-        hint.text = "2 秒后自动进入地图界面"
+        hint.text = "自动尝试载入主界面；若失败会退回这一页"
         hint.font = .systemFont(ofSize: 13)
         hint.textColor = UIColor.white.withAlphaComponent(0.75)
         hint.textAlignment = .center
@@ -79,7 +82,18 @@ final class DiagRootController: UIViewController {
         tailLabel.numberOfLines = 0
         tailLabel.text = StartupLog.tail(10)
 
-        let stack = UIStackView(arrangedSubviews: [title, sub, clock, hint, tailLabel])
+        // 手动载入按钮：自动载入失败后仍能一键重试，App 永远"打得开"
+        let loadBtn = UIButton(type: .system)
+        loadBtn.setTitle("载入主界面", for: .normal)
+        loadBtn.setTitleColor(.black, for: .normal)
+        loadBtn.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+        loadBtn.backgroundColor = .white
+        loadBtn.translatesAutoresizingMaskIntoConstraints = false
+        loadBtn.layer.cornerRadius = 12
+        loadBtn.addTarget(self, action: #selector(loadTapped), for: .touchUpInside)
+        loadBtn.heightAnchor.constraint(equalToConstant: 46).isActive = true
+
+        let stack = UIStackView(arrangedSubviews: [title, sub, clock, hint, loadBtn, tailLabel])
         stack.axis = .vertical
         stack.spacing = 14
         stack.alignment = .fill
@@ -109,6 +123,11 @@ final class DiagRootController: UIViewController {
         StartupLog.markOnce("diag-vc-layout", "\(Int(view.bounds.width))x\(Int(view.bounds.height))")
     }
 
+    @objc private func loadTapped() {
+        StartupLog.markSync("manual-load-tap")
+        onLoadUI?()
+    }
+
     deinit { timer?.invalidate() }
 }
 
@@ -127,7 +146,7 @@ final class MotoHost: UIHostingController<AnyView> {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        StartupLog.mark("host-appeared", "SwiftUI 宿主已上屏")
+        StartupLog.markSync("host-appeared", "SwiftUI 宿主已上屏")
     }
 
     override func viewDidLayoutSubviews() {
@@ -175,9 +194,9 @@ struct BootstrapView: View {
             }
         }
         .onAppear {
-            StartupLog.mark("swiftui-appear", "BootstrapView 已上屏")
+            StartupLog.markSync("swiftui-appear", "BootstrapView 已上屏")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                StartupLog.mark("content-mount", "开始挂载 ContentView")
+                StartupLog.markSync("content-mount", "开始挂载 ContentView")
                 withAnimation(.easeInOut(duration: 0.25)) { showContent = true }
             }
         }

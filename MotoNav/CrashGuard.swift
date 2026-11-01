@@ -127,7 +127,7 @@ enum CrashGuard {
         let marks: [Double] = [0.3, 0.8, 1.4, 2.0, 2.6, 3.2, 4.0, 6.0, 10.0, 16.0]
         for d in marks {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + d) {
-                StartupLog.mark(String(format: "tick-%.1fs", d), "内存 \(memMB())MB")
+                StartupLog.markSync(String(format: "tick-%.1fs", d), "内存 \(memMB())MB")
             }
         }
         // 主线程探针：往主队列投一个任务，1.2 秒内没被执行 → 主线程卡死

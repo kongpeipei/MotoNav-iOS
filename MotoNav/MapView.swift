@@ -105,8 +105,9 @@ struct MapViewRepresentable: UIViewRepresentable {
     var hotCameraId: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
-        StartupLog.mark("map-make")
+        StartupLog.markSync("map-make")
         let map = MKMapView()
+        StartupLog.markSync("map-init-done")
         map.showsUserLocation = true
         map.showsCompass = false // 使用自绘指南针（左上角）
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
@@ -116,8 +117,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 路线折线/点位标注都叠在瓦片之上（v1.62 灰罩+盖路线问题已修复：
         // ①层级由 aboveLabels 改 aboveRoads ②未加载瓦片透明露出苹果底图兜底 ③多子域轮询防限流)
         // v1.78：黑屏回归苹果 MapKit 引擎（3D Metal 渲染与设备不兼容），高德瓦片视觉保留
+        StartupLog.markSync("tile-overlay-before")
         let amapOverlay = AmapTileOverlay()
+        StartupLog.markSync("tile-overlay-inited")
         map.insertOverlay(amapOverlay, at: 0, level: .aboveRoads)
+        StartupLog.markSync("tile-overlay-added")
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.6
@@ -133,6 +137,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         doubleTap.delegate = context.coordinator
         map.addGestureRecognizer(doubleTap)
         tap.require(toFail: doubleTap)
+        StartupLog.markSync("map-make-done")
         return map
     }
 

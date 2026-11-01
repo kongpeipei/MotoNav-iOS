@@ -51,9 +51,18 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // v2.08：先挂纯 UIKit 页面，确认窗口/渲染/主线程都正常，再换 SwiftUI。
         // 一上来就挂 SwiftUI 时，一旦它那边出问题就是黑屏，什么都看不到；
         // 先给一个必然能显示的 UIView，屏幕亮起来就知道走到哪一步了。
+        // 启动次数计数：上一次没走到首屏（ui-ready 会把计数清零），这次就停在自检页手动载入，
+        // 保证 App 任何时候都"打得开"，不会又变成一块黑屏。
+        let ud = UserDefaults.standard
+        let attempt = ud.integer(forKey: "motonav.bootAttempts") + 1
+        ud.set(attempt, forKey: "motonav.bootAttempts")
+        StartupLog.mark("boot-attempt", "第 \(attempt) 次")
+
         let win = UIWindow(frame: UIScreen.main.bounds)
         win.backgroundColor = UIColor(red: 0.06, green: 0.55, blue: 0.32, alpha: 1)
-        win.rootViewController = DiagRootController()
+        let diag = DiagRootController()
+        diag.onLoadUI = { [weak self] in self?.switchToSwiftUI() }
+        win.rootViewController = diag
         win.makeKeyAndVisible()
         window = win
         StartupLog.mark("window-visible")
@@ -62,8 +71,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let scenes = UIApplication.shared.connectedScenes.count
         StartupLog.mark("scene-check", "scenes=\(scenes) state=\(UIApplication.shared.applicationState.rawValue)")
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.switchToSwiftUI()
+        if attempt <= 1 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.switchToSwiftUI()
+            }
+        } else {
+            StartupLog.mark("safe-hold", "上次启动未到首屏，停在自检页等手动载入")
         }
 
         return true
@@ -75,7 +88,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             StartupLog.mark("swap-no-window")
             return
         }
-        StartupLog.mark("swap-begin")
+        StartupLog.markSync("swap-begin")
         let root = AnyView(BootstrapView().environmentObject(AppModel.shared))
         let host = MotoHost(rootView: root)
         win.rootViewController = host
