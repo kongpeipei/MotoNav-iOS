@@ -459,7 +459,6 @@ struct ContentView: View {
             pois: model.pois,
             userLocation: model.currentLocation,
             route: model.route,
-            waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
             choiceRoutes: model.routeChoices.map(\.points),
             selectedRouteIdx: model.selectedRouteIdx,
             routePois: model.routePois,
@@ -602,14 +601,14 @@ struct ContentView: View {
             // v2.04 官方电警点位图层（关闭时传空数组，地图上立即消失）
             cameraMarks: camStore.layerOn ? camStore.all : [],
             hotCameraId: model.hotCameraId,
+            waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
             onCameraMoved: { id, lat, lon in
                 // v2.20 电警点手动拖动 → 落点写回仓库（持久化，重启仍生效）
                 camStore.adjust(id: id, lat: lat, lon: lon)
                 if let c = camStore.all.first(where: { $0.id == id }) {
                     model.status = "已校准「\(c.name)」位置"
                 }
-            },
-            waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+            }
         )
         .ignoresSafeArea()
         .contentShape(Rectangle())

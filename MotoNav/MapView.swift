@@ -1107,8 +1107,17 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             case .ending:
                 draggingCameraId = 0
-                let wgs = MapGeo.toWGS(cam.coordinate)
-                onCameraMoved?(cam.cameraId, wgs.latitude, wgs.longitude)
+                // 以"图钉最终屏幕位置"反算坐标（不依赖 MapKit 是否回写 annotation.coordinate），
+                // 保证松手落点与手指位置一致
+                let gcj = mapView.convert(view.center, toCoordinateFrom: mapView)
+                cam.setCoordinate(gcj)
+                let wgs = MapGeo.toWGS(gcj)
+                // 几乎没动就不写覆盖表（避免误触产生一堆无效校准）
+                let dx = (wgs.latitude - cam.originWGS.latitude) * 111_000
+                let dy = (wgs.longitude - cam.originWGS.longitude) * 94_000
+                if hypot(dx, dy) > 3 {
+                    onCameraMoved?(cam.cameraId, wgs.latitude, wgs.longitude)
+                }
             case .canceling:
                 draggingCameraId = 0
                 cam.cancelDrag()
@@ -1844,6 +1853,8 @@ final class CameraAnnotation: NSObject, MKAnnotation {
     @objc dynamic var coordinate: CLLocationCoordinate2D
     /// v2.20 拖动前的坐标（取消拖动时回滚）
     private var originCoordinate: CLLocationCoordinate2D
+    /// v2.20 拖动前的 WGS 坐标（判断是否真的移动过）
+    private var originWGS: CLLocationCoordinate2D
 
     init(camera: PoliceCamera, hot: Int) {
         self.cameraId = camera.id
@@ -1853,6 +1864,7 @@ final class CameraAnnotation: NSObject, MKAnnotation {
         let gcj = MapGeo.toGCJ(camera.coordinate)
         self.coordinate = gcj
         self.originCoordinate = gcj
+        self.originWGS = camera.coordinate
         self.isHot = (hot == camera.id && hot != 0)
         super.init()
     }
@@ -1863,8 +1875,11 @@ final class CameraAnnotation: NSObject, MKAnnotation {
         coordinate = gcj
     }
 
-    /// v2.20 拖动开始：记录原坐标
-    func beginDrag() { originCoordinate = coordinate }
+    /// v2.20 拖动开始：记录原坐标（用于取消回滚 / 判断是否真的移动过）
+    func beginDrag() {
+        originCoordinate = coordinate
+        originWGS = MapGeo.toWGS(coordinate)
+    }
 
     /// v2.20 拖动取消：回到原坐标
     func cancelDrag() { setCoordinate(originCoordinate) }
