@@ -266,7 +266,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             Task { @MainActor in self?.applyPowerSaving() }
         }
         NotificationCenter.default.addObserver(
-            forName: ProcessInfo.powerStateDidChangeNotification, object: nil, queue: .main
+            forName: Notification.Name.NSProcessInfoPowerStateDidChange, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.applyPowerSaving() }
         }
