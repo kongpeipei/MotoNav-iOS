@@ -760,7 +760,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.81")
+                        Text("v1.82")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1909,10 +1909,46 @@ struct ContentView: View {
     private var quickAccessPanel: some View {
         VStack(spacing: 6) {
             quickCardsRow
+            // v1.81.4 搜索历史小字提醒：显示在搜索框卡片内，与搜索框状态同步
+            //（搜索框聚焦且空输入时显示，输入内容后自动隐藏；点击任一历史词可快速搜索）
             if !model.searchHistory.isEmpty {
-                historyList
+                historyHintRow
             }
         }
+    }
+
+    /// v1.81.4 搜索历史小字提醒（高德式小字行：最近搜索 + 清空）
+    private var historyHintRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(model.searchHistory, id: \.self) { name in
+                        Button {
+                            searchText = name
+                            showSuggestions = false
+                            dismissKeyboard()
+                            doSearch(name)
+                        } label: {
+                            Text(name)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Spacer()
+            Button("清空") {
+                model.clearHistory()
+            }
+            .font(.caption2)
+            .foregroundStyle(.blue)
+        }
+        .padding(.horizontal, 4)
     }
 
     /// v1.69 单行快捷卡片：家 / 公司 / +（自定义选点） 横向滚动
@@ -1988,60 +2024,6 @@ struct ContentView: View {
     }
 
     /// v1.69 高德样式历史搜索记录列表（名称 + 分隔线 + 清空）
-    private var historyList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("历史搜索")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("清空") {
-                    model.clearHistory()
-                    model.status = "搜索历史已清空"
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(model.searchHistory, id: \.self) { item in
-                        Button {
-                            searchText = item
-                            showSuggestions = false
-                            dismissKeyboard()
-                            doSearch()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .foregroundStyle(.gray)
-                                Text(displayName(item))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        Divider().padding(.leading, 38)
-                    }
-                }
-            }
-            .frame(maxHeight: 220)
-        }
-        .background(.bar)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
-        .padding(.horizontal)
-    }
-
     /// v1.69 快捷卡片通用外观
     private func quickCard(
         icon: String, color: Color, title: String, sub: String,
@@ -2714,7 +2696,7 @@ private struct DraggableFloat<Content: View>: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .trailing) {
-                // v1.81.4 红色删除卡：大小与卡片相同，卡片左移后从右侧露出
+                // v1.81.4 红色删除卡：大小与卡片相同，仅左拉时出现（未左拉完全透明），卡片左移后从右侧露出
                 if let lbl = deleteLabel {
                     RoundedRectangle(cornerRadius: 18)
                         .fill(Color.red)
@@ -2724,6 +2706,8 @@ private struct DraggableFloat<Content: View>: View {
                                 .foregroundStyle(.white)
                                 .padding(.trailing, 24),
                             alignment: .trailing)
+                        .opacity(dragOffset < -8 ? 1 : 0)
+                        .animation(.easeOut(duration: 0.15), value: dragOffset < -8)
                 }
                 content
                     .offset(x: dragOffset)

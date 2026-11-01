@@ -11,7 +11,7 @@ final class PoiRepository {
     func load() -> [Poi] {
         // 内置点位版本机制：Documents 点位 + 用户自定义点（id≥1000 或 isCustom，含被拖动过的内置点）合并，保留用户数据
         let savedVer = UserDefaults.standard.integer(forKey: "poiAppVersion")
-        let currentVer = 181
+        let currentVer = 182
         if let docs = readFromDocuments(), savedVer >= currentVer {
             pois = docs
         } else {
