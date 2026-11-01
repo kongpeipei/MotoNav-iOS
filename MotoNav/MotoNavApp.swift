@@ -20,6 +20,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // v2.05：先把崩溃钩子装上，再干别的。这样之后无论哪一步炸了，
+        // 都会在 Documents/startup.log 里留下一行「[崩溃] ...」，不用连电脑取日志。
+        CrashGuard.install()
+
         // v2.03：启动埋点。能打到这一行说明进程已经起来、签名校验通过，
         // 后面若闪退就不是签名问题，而是初始化阶段（日志可在「文件」App 里查看）。
         let bundle = Bundle.main
