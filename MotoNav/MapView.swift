@@ -317,7 +317,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 if navigating {
                     // v1.81.4 开始导航时地图缩放到合适程度（高德导航视野：相机约 750m 高）
                     var cam = map.camera
-                    cam.distance = 750
+                    cam.altitude = 750
                     cam.pitch = 55
                     map.camera = cam
                 }

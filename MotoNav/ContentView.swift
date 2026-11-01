@@ -121,7 +121,7 @@ struct ContentView: View {
                 if let s = model.tripSummary {
                     DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
                                    deleteLabel: "左拉删除",
-                                   onSwipeLeft: { model.tripSummary = nil }) { tripSummaryCard(s) }
+                                   onSwipeLeft: { dismissTripAndReset() }) { tripSummaryCard(s) }
                 }
                 // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
                 if mapLoadFailed {
@@ -1448,6 +1448,16 @@ struct ContentView: View {
         overviewTask?.cancel()
         overviewTask = nil
         model.navigateFollowTick += 1
+    }
+
+    /// v1.81.4 关闭本次行程卡并回到初始界面（清空路线/方案/地点卡等全部残留状态）
+    private func dismissTripAndReset() {
+        model.tripSummary = nil
+        tipCard = nil
+        tipRoad = nil
+        tipAoiName = nil
+        tipPolygon = nil
+        model.clearRoute()
     }
 
     /// 退出导航状态卡分格（v1.81.4 放大，对齐高德底部卡）
