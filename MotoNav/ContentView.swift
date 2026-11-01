@@ -99,8 +99,8 @@ struct ContentView: View {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
                 }
-                // 导航中悬浮退出按钮（可上下移动；左拉删除=退出导航）
-                if model.navigating {
+                // 导航中悬浮退出按钮（可上下移动；左拉删除=退出导航；v1.84 全览时隐藏，取消全览恢复）
+                if model.navigating && !showRouteOverview {
                     DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { haptic(); model.toggleNavigation() }) { exitNavOverlay }
@@ -109,12 +109,19 @@ struct ContentView: View {
                 if model.navigating && showRouteOverview {
                     DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { routeOverviewBar }
                 }
-                // v1.63 导航态左侧竖排：刷新 / 极简（可拖动）
-                if model.navigating {
+                // v1.63 导航态左侧竖排：刷新 / 极简（可拖动；v1.84 全览时隐藏）
+                if model.navigating && !showRouteOverview {
                     DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { navSideOverlay }
                 }
-                // 高德式顶部大数字条（剩余里程/时间，导航中显示；可拖动）
-                DraggableFloat(key: "navtop", defaultPos: CGPoint(x: 0.5, y: 0.13)) { navTopBar }
+                // 高德式顶部大数字条（剩余里程/时间，导航中显示；可拖动；v1.84 全览时隐藏）
+                if !showRouteOverview {
+                    DraggableFloat(key: "navtop", defaultPos: CGPoint(x: 0.5, y: 0.13)) { navTopBar }
+                }
+                // v1.84 巡航模式顶部卡片（白底：速度 + 最近拍照点）
+                if model.cruiseMode && !model.navigating {
+                    cruiseCard
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 // v1.66：沉浸模式下底部内容（搜索框/规划卡/导航卡）隐藏；导航中导航卡不受影响
                 if !uiHidden || model.navigating {
                     bottomOverlay
@@ -294,6 +301,8 @@ struct ContentView: View {
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
             overviewTick: model.overviewTick,
+            cruise: model.cruiseMode,
+            cruiseTick: model.cruiseTick,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
             onLongPress: { coord in
@@ -779,7 +788,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.83")
+                        Text("v1.84")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -854,7 +863,8 @@ struct ContentView: View {
                                    onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
                 } else if !model.routeChoices.isEmpty {
                     // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
-                    DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90),
+                    // v1.84 仅上下移动，除非左拉删除（左拉时允许左右移动触发删除）
+                    DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90), lockX: true,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
                 } else {
@@ -1241,6 +1251,63 @@ struct ContentView: View {
     /// 高德式顶部导航条：剩余里程 + 时间 + 下一转向预告（<500米显示，高德顶部主条样式）
     /// v1.65 顶部导航综合条（高德式合并布局，自上而下不重叠）：
     /// 第一行：剩余距离 + 剩余时间 + 实时速度；第二行：下一转向指示（图标+距离+路名+车道）
+    /// v1.84 巡航模式顶部卡片（白底，高德同款）：实时速度 + 最近拍照点，右上角×关闭巡航
+    private var cruiseCard: some View {
+        let cam = model.nearestCruiseCamera
+        let speed = Int(model.currentSpeed * 3.6)
+        return HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "location.fill")
+                        .font(.caption.bold())
+                        .foregroundStyle(.blue)
+                    Text("巡航模式")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("\(speed)")
+                        .font(.system(size: 34, weight: .heavy))
+                        .foregroundStyle(.black)
+                    Text("km/h")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("最近拍照")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(cam.name)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.black)
+                    .lineLimit(1)
+                Text(cam.dist > 0 ? "约\(cam.dist)米" : "附近暂无")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+            Button {
+                haptic()
+                withAnimation(.easeOut(duration: 0.2)) { model.exitCruise() }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color(.systemGray6), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.14), radius: 10, y: 3)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .position(x: UIScreen.main.bounds.width / 2, y: 150)
+    }
+
     private var navTopBar: some View {
         VStack {
             if model.navigating, let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {

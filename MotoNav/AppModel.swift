@@ -43,6 +43,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var zoomOutTick = 0
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
     @Published var navigateFollowTick = 0
+    /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
+    @Published var cruiseMode = false
+    @Published var cruiseTick = 0
+    private var cruiseBase: CLLocationCoordinate2D?
     /// 当前选中的路线方案下标（高德式：默认选中推荐，卡片点击切换）
     @Published var selectedRouteIdx = 0
     /// 手机朝向（度，0=北，顺时针）
@@ -932,7 +936,50 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if weatherText == nil { fetchWeather() }
             checkAlerts(at: coord)
             checkNavigation(at: coord)
+            updateCruise(at: coord)
         }
+    }
+
+    // MARK: - 巡航模式（v1.84）
+
+    /// 非导航状态下自动检测：定位点累计移动 ≥300 米进入巡航模式（地图缩放合理位置 + 定位点跟随）
+    func updateCruise(at coord: CLLocationCoordinate2D) {
+        guard !navigating else {
+            if cruiseMode { exitCruise() }
+            return
+        }
+        if let base = cruiseBase {
+            if !cruiseMode && distanceM(coord, base) >= 300 {
+                cruiseMode = true
+                cruiseTick += 1
+                cruiseBase = nil
+            }
+        } else {
+            cruiseBase = coord
+        }
+        if cruiseMode {
+            cruiseTick += 1 // 驱动地图跟随定位点（MapView 内做 GPS 抖动节流）
+        }
+    }
+
+    /// 关闭巡航模式（卡片右上角 ×）：恢复初始地图，重新累计位移
+    func exitCruise() {
+        cruiseMode = false
+        cruiseBase = nil
+        cruiseTick += 1
+    }
+
+    /// 巡航卡片"最近拍照点"：距离当前位置最近的启用电警点位
+    var nearestCruiseCamera: (name: String, dist: Int) {
+        guard let loc = currentLocation else { return ("暂无拍照点", 0) }
+        var best: Poi?
+        var bd = Double.greatestFiniteMagnitude
+        for p in pois where p.enabled && p.type.isCamera {
+            let d = distanceM(loc, p.coordinate)
+            if d < bd { bd = d; best = p }
+        }
+        if let b = best { return (b.name, Int(bd)) }
+        return ("暂无拍照点", 0)
     }
 
     nonisolated func locationManager(

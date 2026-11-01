@@ -35,6 +35,9 @@ struct MapViewRepresentable: UIViewRepresentable {
     let navigating: Bool
     /// 导航中路线全览请求计数（v1.81.4 导航退出卡"全览"）
     let overviewTick: Int
+    /// v1.84 巡航模式：非导航下定位点跟随（300m 位移触发后持续）
+    let cruise: Bool
+    let cruiseTick: Int
     /// 地图缩放按钮计数
     let zoomInTick: Int
     let zoomOutTick: Int
@@ -352,6 +355,36 @@ struct MapViewRepresentable: UIViewRepresentable {
         } else if navigating, let loc = userLocation {
             context.coordinator.navLastFollow = loc
         }
+        // v1.84 巡航模式：进入时缩放巡航视野（约 3000m 高，平视），随后定位点跟随（GPS 抖动 >25m 才更新相机）
+        if cruise != context.coordinator.lastCruise {
+            context.coordinator.lastCruise = cruise
+            if cruise, let loc = userLocation {
+                context.coordinator.userMoved = false
+                context.coordinator.cruiseLastLoc = loc
+                context.coordinator.setRegionProgrammatically {
+                    var cam = map.camera
+                    cam.centerCoordinate = loc
+                    cam.altitude = 3000
+                    cam.pitch = 0
+                    map.camera = cam
+                }
+            }
+        } else if cruise, cruiseTick != context.coordinator.lastCruiseTick {
+            context.coordinator.lastCruiseTick = cruiseTick
+            if let loc = userLocation {
+                let last = context.coordinator.cruiseLastLoc
+                if last == nil ||
+                    CLLocation(latitude: loc.latitude, longitude: loc.longitude)
+                        .distance(from: CLLocation(latitude: last!.latitude, longitude: last!.longitude)) > 25 {
+                    context.coordinator.cruiseLastLoc = loc
+                    context.coordinator.setRegionProgrammatically {
+                        var cam = map.camera
+                        cam.centerCoordinate = loc
+                        map.camera = cam
+                    }
+                }
+            }
+        }
         // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
         let isNav = navigating
         if isNav != context.coordinator.lastPitchState {
@@ -430,6 +463,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPreviewKey = ""
         /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
         var lastPitchState: Bool?
+        /// v1.84 巡航模式状态记忆（巡航开关切换/跟随 tick/上次相机中心节流）
+        var lastCruise: Bool?
+        var lastCruiseTick = 0
+        var cruiseLastLoc: CLLocationCoordinate2D?
         /// 导航深色底图状态记忆
         var lastDarkState: Bool?
         /// v1.67 高德瓦片 renderer 引用 + 深色（夜间瓦片 style=8）状态

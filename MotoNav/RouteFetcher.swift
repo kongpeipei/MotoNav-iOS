@@ -164,6 +164,8 @@ enum RouteFetcher {
                 if !dup { result.append(o) }
             }
         }
+        // v1.84 路线质量过滤：剔除异常/绕路/折返乱窜的不可用方案（哪怕只剩 1 条推荐）
+        result = filterUsableChoices(result, from: start, to: end)
         // 首条固定"推荐"（综合最优的第一方案）
         if !result.isEmpty {
             let f = result[0]
@@ -172,6 +174,53 @@ enum RouteFetcher {
                                     label: "推荐", poiCount: 0)
         }
         return result
+    }
+
+    /// v1.84 方案质量过滤：
+    /// 1) 数据异常（0 米/0 秒/折线点过少）直接剔除；
+    /// 2) 距离合理性：过短（<直线40%）或严重绕路（>直线5倍）剔除；
+    /// 3) 连续大幅折返（>137° 反向占比过高）→ 横穿小区/无路网乱绕特征，剔除。
+    static func filterUsableChoices(
+        _ choices: [RouteChoice],
+        from start: CLLocationCoordinate2D,
+        to end: CLLocationCoordinate2D
+    ) -> [RouteChoice] {
+        let straight = CLLocation(latitude: start.latitude, longitude: start.longitude)
+            .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+        return choices.filter { c in
+            guard c.points.count >= 2, c.distanceM >= 30, c.durationS >= 20 else { return false }
+            if straight > 50 {
+                if Double(c.distanceM) < straight * 0.4 || Double(c.distanceM) > straight * 5.0 {
+                    return false
+                }
+            }
+            return !hasExcessiveReversals(c)
+        }
+    }
+
+    /// 折返检测：连续方向角反转 >137° 且单段长 >25m 的次数占比过高 → 路线乱绕（横穿小区/无路网）
+    private static func hasExcessiveReversals(_ c: RouteChoice) -> Bool {
+        let pts = c.points
+        guard pts.count > 6 else { return false }
+        var reversals = 0
+        var segCount = 0
+        var prevBearing: Double?
+        for i in 1..<pts.count {
+            let len = CLLocation(latitude: pts[i-1].latitude, longitude: pts[i-1].longitude)
+                .distance(from: CLLocation(latitude: pts[i].latitude, longitude: pts[i].longitude))
+            guard len > 25 else { continue }
+            let dx = (pts[i].longitude - pts[i-1].longitude) * cos(pts[i-1].latitude * .pi / 180)
+            let dy = pts[i].latitude - pts[i-1].latitude
+            let bearing = atan2(dy, dx)
+            if let pb = prevBearing {
+                var d = abs(bearing - pb)
+                if d > .pi { d = 2 * .pi - d }
+                if d > 2.4 { reversals += 1 } // ~137.5°
+                segCount += 1
+            }
+            prevBearing = bearing
+        }
+        return segCount > 2 && Double(reversals) / Double(segCount) > 0.35
     }
 
     /// OSRM alternatives 多方案（公共服务，作为高德方案不足时的补充来源）
