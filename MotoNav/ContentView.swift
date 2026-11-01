@@ -1569,7 +1569,7 @@ struct ContentView: View {
                                         .font(.subheadline.bold())
                                         .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                                     Text("\(navDist(ns.distToTurnM))\(t.roadName.isEmpty ? "" : " " + t.roadName)")
-                                        .font(.footnote.semibold())
+                                        .font(.footnote.weight(.semibold))
                                         .foregroundStyle(mainFg)
                                         .lineLimit(1)
                                 }
