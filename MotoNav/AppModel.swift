@@ -45,6 +45,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var fitTick = 0    /// 地图缩放按钮计数（+1 放大 / 缩小，MapView 响应）
     @Published var zoomInTick = 0
     @Published var zoomOutTick = 0
+    /// v2.01 地图俯仰角（0=2D 平视 / 45=3D 俯视）；导航开始自动 45，右上"3D"按钮切换
+    @Published var pitchDeg: Double = 0
+    /// v2.01 路线上的信号灯路口（红绿灯倒计时用）
+    @Published var trafficLights: [TrafficLight] = []
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
@@ -1917,6 +1921,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 fitTick += 1
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
                 trafficSpans = r.traffic
+                trafficLights = TrafficLightBuilder.lights(turns: r.turns)
                 status = routeSummary(name, distanceM: r.distanceM, durationS: r.durationS, poiCount: near.count)
             } else {
                 fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon)
@@ -1933,6 +1938,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routeDistanceM = 0
         routeDurationS = 0
         routeChoices = []
+        trafficLights = []
         fitTick += 1
         status = "路线服务不可用，直线仅为示意（可能横穿不可通行区域），正在自动重试…"
         Task {
@@ -1970,6 +1976,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routePois = []
         routeTurns = []
         routeChoices = []
+        trafficLights = []
         routeDistanceM = 0
         routeDurationS = 0
         lastTurnSpoken = -1
@@ -2049,6 +2056,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // v1.99 骑行风险 + 路况（切方案时同步刷新）
         riderRisks = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
         trafficSpans = c.traffic
+        trafficLights = TrafficLightBuilder.lights(turns: c.turns)
         lastRiskSpoken.removeAll()
         status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
         if !riderRisks.isEmpty {
@@ -2091,6 +2099,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if navigating {
             navigating = false
             UIApplication.shared.isIdleTimerDisabled = false // 恢复自动锁屏
+            pitchDeg = 0          // v2.01 退出导航回 2D 平视
             navigateFollowTick += 1
             routeChoices = [] // v1.85 结束导航隐藏路线推荐卡，只保留行程卡（轻点卡片外任意处回首页）
             selectedRouteIdx = 0
@@ -2102,6 +2111,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             guard route.count >= 2 else { status = "请先搜索目的地并规划路线"; return }
             navigating = true
             UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
+            pitchDeg = 45         // v2.01 开始导航：3D 45° 俯视 + 约 200 米视野（见 MapView）
             navigateFollowTick += 1
             tripSummary = nil // v1.81.4 新导航开始时清除上次行程卡
             navStart = Date()
@@ -2210,6 +2220,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 // v1.99 偏航重规划后风险/路况同步刷新
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
                 trafficSpans = r.traffic
+                trafficLights = TrafficLightBuilder.lights(turns: r.turns)
             }
         }
     }
@@ -2407,6 +2418,23 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let nt = routeTurns.first { $0.fromStartM > traveled }
         return NavStatus(remainM: remainM, remainS: remainS, speedKph: speed,
                          nextTurn: nt, distToTurnM: nt.map { $0.fromStartM - traveled } ?? 0)
+    }
+
+    /// v2.01 下一个信号灯（导航中做红绿灯倒计时）：260 米内的第一个灯
+    var nextTrafficLight: (light: TrafficLight, dist: Int)? {
+        guard navigating, !trafficLights.isEmpty,
+              let loc = currentLocation, route.count >= 2 else { return nil }
+        let traveled = traveledM(route, loc)
+        guard let l = trafficLights.first(where: { $0.fromStartM > traveled - 15 }) else { return nil }
+        let d = l.fromStartM - traveled
+        guard d <= 260 else { return nil }
+        return (l, max(0, d))
+    }
+
+    /// v2.01 3D / 2D 切换（地图右侧"3D"按钮）
+    func togglePitch() {
+        pitchDeg = pitchDeg > 0 ? 0 : 45
+        status = pitchDeg > 0 ? "3D 俯视 45°" : "2D 平视"
     }
 
     /// v1.82 当前所在道路名：取已通过转向点中最后一个转入的道路（高德式顶部道路名）

@@ -87,6 +87,8 @@ struct ContentView: View {
     @State private var showTeamRide = false
     /// v1.99 搜索结果排序（0 距离 / 1 名称）
     @State private var tipSort = 0
+    /// v2.01 右上角比例尺文本（由地图缩放回传）
+    @State private var scaleText = "200 米"
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
     @State private var minimalMap = false
     /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
@@ -136,8 +138,8 @@ struct ContentView: View {
                         if tapPlace == nil && tipCard == nil {
                             DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { zoomOverlay }
                         }
-                        // 右上角 GPS 信号按钮（内部已可拖动）
-                        layerTrafficButtons
+                        // v2.01 右上角比例尺（随缩放实时变化；原 GPS 按钮已移除）
+                        scaleOverlay
                     }
                     // v1.97 常用地点设置提示条（从"我的"点铅笔后回到地图时显示）
                     if slotTarget != nil && !model.navigating {
@@ -437,6 +439,10 @@ struct ContentView: View {
             cruiseTick: model.cruiseTick,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
+            pitchDeg: model.pitchDeg,
+            onScaleChange: { t in
+                if t != scaleText { scaleText = t }
+            },
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -631,56 +637,43 @@ struct ContentView: View {
         }
     }
 
-    /// v1.81 右上角 GPS 信号按钮（可拖动；内容用视图+onTapGesture，避免 Button 拦截拖拽导致不跟手）
-    /// v1.90 上移到最上方（与缩放按钮同一水平线，左侧错开避免重叠）
-    private var layerTrafficButtons: some View {
-        DraggableFloat(key: "gps", defaultPos: CGPoint(x: 0.70, y: 0.075)) {
-            VStack(spacing: 8) {
-                // GPS信号显示按钮（点击显示定位精度详情）
-                HStack(spacing: 4) {
-                    Image(systemName: "scope")
+    /// v2.01 右上角比例尺：白底半透明胶囊 + 一段 58pt 比例尺线（数值随缩放变化）
+    private var scaleOverlay: some View {
+        VStack {
+            HStack {
+                Spacer()
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(scaleText)
                         .font(.caption2.bold())
-                    Text(gpsSignalText())
-                        .font(.caption.bold())
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(gpsSignalColor(), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                .contentShape(Capsule())
-                .onTapGesture {
-                    let acc = model.locationAccuracy
-                    let signalLevel: String
-                    if acc <= 10 {
-                        signalLevel = "强（\(Int(acc))米）"
-                    } else if acc <= 50 {
-                        signalLevel = "中（\(Int(acc))米）"
-                    } else {
-                        signalLevel = "弱（\(Int(acc))米）"
+                        .foregroundStyle(.primary)
+                    ZStack(alignment: .bottomTrailing) {
+                        // 比例尺线（固定 58pt，右侧加两个端点竖线）
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.75))
+                            .frame(width: 58, height: 2)
+                            .overlay(alignment: .leading) {
+                                Rectangle().fill(Color.primary.opacity(0.75))
+                                    .frame(width: 2, height: 7)
+                            }
+                            .overlay(alignment: .trailing) {
+                                Rectangle().fill(Color.primary.opacity(0.75))
+                                    .frame(width: 2, height: 7)
+                            }
                     }
-                    model.status = "GPS信号：\(signalLevel)"
+                    .frame(width: 58, height: 7)
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.white.opacity(0.35), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
             }
+            Spacer()
         }
-    }
-    
-    /// GPS信号文字
-    private func gpsSignalText() -> String {
-        let acc = model.locationAccuracy
-        if acc <= 0 { return "定位中" }
-        if acc <= 10 { return "GPS·强" }
-        if acc <= 50 { return "GPS·中" }
-        return "GPS·弱"
-    }
-    
-    /// GPS信号颜色
-    private func gpsSignalColor() -> Color {
-        let acc = model.locationAccuracy
-        if acc <= 0 { return Color.gray }
-        if acc <= 10 { return Color.green }
-        if acc <= 50 { return Color.orange }
-        return Color.red
+        .padding(.top, 8)
+        .padding(.trailing, 14)
+        .allowsHitTesting(false)
     }
 
     /// v1.65 底部选项卡：导航 / 我的（白底、缩小、选中蓝色铺满整个按钮）
@@ -967,7 +960,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.00")
+                Text("v2.01")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -1723,7 +1716,7 @@ struct ContentView: View {
                     Rectangle().fill(.white.opacity(0.92))
                         .frame(width: 110, height: 12)
                     // 转弯箭头
-                    Image(systemName: navTurnIcon(t.modifier))
+                    Image(systemName: navTurnIcon(t))
                         .font(.system(size: 46, weight: .bold))
                         .foregroundStyle(Color(red: 0.25, green: 0.72, blue: 1.0))
                     // 路名标签
@@ -1820,6 +1813,16 @@ struct ContentView: View {
         }
     }
 
+    /// v2.01 转向图标（优先 modifier，高德中文 action 兜底）
+    private func navTurnIcon(_ t: RouteTurn) -> String {
+        if !t.modifier.isEmpty { return navTurnIcon(t.modifier) }
+        let a = t.action
+        if a.contains("掉头") { return "arrow.uturn.up.left" }
+        if a.contains("左") { return "arrow.turn.up.left" }
+        if a.contains("右") { return "arrow.turn.up.right" }
+        return "arrow.up"
+    }
+
     private func navTurnText(_ t: RouteTurn) -> String {
         switch t.modifier {
         case "left": return "左转"
@@ -1829,8 +1832,10 @@ struct ContentView: View {
         case "sharp left": return "急左转"
         case "sharp right": return "急右转"
         case "uturn": return "掉头"
-        default: return "继续"
+        default: break
         }
+        // v2.01 高德只给中文 action（左转/右转/直行…），用它兜底
+        return t.action.isEmpty ? "继续" : t.action
     }
 
     private func navDist(_ m: Int) -> String {
@@ -1977,14 +1982,15 @@ struct ContentView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Color(red: 0.16, green: 0.38, blue: 1.0), in: Capsule())
+                // v2.01 选中=绿（与地图上的绿色路线一致），未选中=灰
+                .background(sel ? Color(red: 0.13, green: 0.62, blue: 0.30) : Color.gray, in: Capsule())
         }
         .frame(width: 104, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
-        .background(sel ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0).opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial), in: RoundedRectangle(cornerRadius: 10))
+        .background(sel ? AnyShapeStyle(Color(red: 0.13, green: 0.62, blue: 0.30).opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(
-            sel ? Color(red: 0.16, green: 0.38, blue: 1.0) : .white.opacity(0.3),
+            sel ? Color(red: 0.13, green: 0.62, blue: 0.30) : Color.gray.opacity(0.45),
             lineWidth: sel ? 2 : 0.8))
     }
 
@@ -2039,6 +2045,22 @@ struct ContentView: View {
                             .foregroundStyle(.primary)
                             .frame(width: 44, height: 44)
                             .background(Color.white, in: Circle())
+                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    }
+                    // v2.01 3D / 2D 切换（与 +/- 同一竖列，紧挨着）
+                    Button {
+                        haptic()
+                        if model.cruiseMode { model.exitCruise() }
+                        model.togglePitch()
+                    } label: {
+                        Text(model.pitchDeg > 0 ? "2D" : "3D")
+                            .font(.system(size: 15, weight: .heavy))
+                            .foregroundStyle(model.pitchDeg > 0 ? .white : .primary)
+                            .frame(width: 44, height: 44)
+                            .background(model.pitchDeg > 0
+                                        ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                                        : AnyShapeStyle(Color.white), in: Circle())
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
@@ -2235,7 +2257,7 @@ struct ContentView: View {
                     let arriveFg: Color = Color.gray
                     let minTxt = "\(max(ns.remainS, 0) / 60)"
                     let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
-                    let lights = model.routeTurns.count
+                    let lights = model.trafficLights.count
                     let snaps = model.routePois.count
                     let arriveTxt: String = {
                         let f = DateFormatter()
@@ -2243,6 +2265,10 @@ struct ContentView: View {
                         return f.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
                     }()
                     VStack(spacing: 0) {
+                        // v2.01 红绿灯倒计时（距路口 260 米内出现）
+                        if let nl = model.nextTrafficLight {
+                            lightCountdownRow(nl)
+                        }
                         // 第一行：退出 × ｜ 分钟 ｜ 公里 ｜ 红绿灯 ｜ 抓拍 ｜ 全览
                         HStack(spacing: 0) {
                             Button {
@@ -2280,7 +2306,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
                                 HStack(spacing: 4) {
-                                    Image(systemName: navTurnIcon(t.modifier))
+                                    Image(systemName: navTurnIcon(t))
                                         .font(.subheadline.bold())
                                         .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                                     Text("\(navDist(ns.distToTurnM))\(t.roadName.isEmpty ? "" : " " + t.roadName)")
@@ -2296,6 +2322,10 @@ struct ContentView: View {
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
+                        // v2.01 车道级引导：推荐车道绿色高亮（距路口 300 米内）
+                        if let t = ns.nextTurn, ns.distToTurnM > 0, ns.distToTurnM < 300 {
+                            laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
+                        }
                         // v1.90 第三行：预计到达（浅灰小字，卡片下方居中显示，高德同款）
                         HStack {
                             Spacer()
@@ -2314,6 +2344,71 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// v2.01 红绿灯倒计时行（导航卡顶部）：信号灯图形 + 红/绿 + 剩余秒 + 距离
+    private func lightCountdownRow(_ nl: (light: TrafficLight, dist: Int)) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let st = nl.light.state(at: ctx.date)
+            HStack(spacing: 8) {
+                VStack(spacing: 3) {
+                    Circle()
+                        .fill(st.red ? Color.red : Color.red.opacity(0.18))
+                        .frame(width: 9, height: 9)
+                    Circle()
+                        .fill(st.red ? Color.green.opacity(0.18) : Color.green)
+                        .frame(width: 9, height: 9)
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 5))
+                Text(st.red ? "红灯" : "绿灯")
+                    .font(.caption.bold())
+                    .foregroundStyle(st.red ? Color.red : Color(red: 0.13, green: 0.62, blue: 0.30))
+                HStack(alignment: .firstTextBaseline, spacing: 1) {
+                    Text("\(st.remain)")
+                        .font(.system(size: 18, weight: .heavy))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.black.opacity(0.78))
+                    Text("秒")
+                        .font(.caption2)
+                        .foregroundStyle(Color.black.opacity(0.45))
+                }
+                Spacer()
+                Text(nl.dist > 8 ? "前方 \(nl.dist) 米 · 预计" : "已到路口")
+                    .font(.caption2)
+                    .foregroundStyle(Color.black.opacity(0.45))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background((st.red ? Color.red : Color.green).opacity(0.07))
+        }
+    }
+
+    /// v2.01 车道级引导行：推荐车道绿色高亮，其余灰显
+    private func laneGuideRow(_ t: RouteTurn, dimFg: Color, mainFg: Color) -> some View {
+        let lanes = LaneGuideBuilder.guides(turn: t)
+        return HStack(spacing: 5) {
+            Text("车道")
+                .font(.caption2)
+                .foregroundStyle(dimFg)
+            ForEach(lanes) { l in
+                Image(systemName: l.icon)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(l.recommended ? Color.white : mainFg.opacity(0.32))
+                    .frame(width: 26, height: 26)
+                    .background(l.recommended
+                                ? Color(red: 0.13, green: 0.62, blue: 0.30)
+                                : Color.black.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 6))
+            }
+            Spacer()
+            Text(navTurnText(t))
+                .font(.caption2.bold())
+                .foregroundStyle(dimFg)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 5)
     }
 
     /// v1.81.4 全览操作条（高德同款）：固定全览 / 取消全览(倒计时)

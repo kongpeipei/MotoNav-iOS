@@ -66,6 +66,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 地图缩放按钮计数
     let zoomInTick: Int
     let zoomOutTick: Int
+    /// v2.01 地图俯仰角（0=2D / 45=3D），导航开始自动 45
+    var pitchDeg: Double = 0
+    /// v2.01 比例尺回调（缩放时把"58pt 代表多少米"回传给 SwiftUI 右上角比例尺）
+    var onScaleChange: ((String) -> Void)?
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
     var onPoiLongPress: ((Poi) -> Void)?
     var onPoiMoved: ((Poi, Double, Double) -> Void)?
@@ -137,6 +141,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onCategorySelect = onCategorySelect
         context.coordinator.onMapTap = onMapTap
         context.coordinator.onRouteChoiceTap = onRouteChoiceTap
+        context.coordinator.onScaleChange = onScaleChange
+        context.coordinator.reportScale(map)
         context.coordinator.choiceRoutes = choiceRoutes
         context.coordinator.selectedRouteIdx = selectedRouteIdx
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
@@ -356,6 +362,19 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addOverlay(poly)
             }
         }
+        // v2.01 导航中沿路线铺白色方向箭头（高德同款）；只随路线变化重建
+        let arrowKey = navigating
+            ? "\(route.count)-\(route.first.map { "\($0.latitude),\($0.longitude)" } ?? "")-\(route.last.map { "\($0.latitude),\($0.longitude)" } ?? "")"
+            : "off"
+        if arrowKey != context.coordinator.lastArrowKey {
+            context.coordinator.lastArrowKey = arrowKey
+            map.annotations.compactMap { $0 as? RouteArrowAnnotation }.forEach { map.removeAnnotation($0) }
+            if navigating {
+                for a in MapViewRepresentable.buildArrows(route) {
+                    map.addAnnotation(a)
+                }
+            }
+        }
         // v1.99 足迹回放：蓝色虚线（不受路线清空影响）
         if footprint.count >= 2 {
             let gpts = MapGeo.toGCJ(footprint)
@@ -398,10 +417,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.setRegionProgrammatically {
                 map.userTrackingMode = .followWithHeading
                 if navigating {
-                    // v1.81.4 开始导航时地图缩放到合适程度（高德导航视野：相机约 750m 高）
+                    // v2.01 高德式导航视野：3D 45° 俯视，纵向约 200 米（≈三四栋楼）
                     var cam = map.camera
-                    cam.altitude = 750
-                    cam.pitch = 55
+                    cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+                    // centerCoordinateDistance 380m + 45° 俯角 ≈ 屏幕纵向 200 米
+                    cam.centerCoordinateDistance = 380
                     map.camera = cam
                 }
             }
@@ -465,12 +485,17 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
-        // 导航 3D 俯视视角（高德导航默认倾斜），非导航恢复平视；仅在状态切换时设置，不干扰双指俯仰
-        let isNav = navigating
-        if isNav != context.coordinator.lastPitchState {
-            context.coordinator.lastPitchState = isNav
-            map.camera.pitch = isNav ? 55 : 0
+        // v2.01 俯仰角由 AppModel.pitchDeg 驱动（导航开始 45°，退出 0°，右侧 3D 按钮切换）
+        if pitchDeg != context.coordinator.lastPitchDeg {
+            context.coordinator.lastPitchDeg = pitchDeg
+            let target = CGFloat(max(0, min(70, pitchDeg)))
+            context.coordinator.setRegionProgrammatically {
+                var cam = map.camera
+                cam.pitch = target
+                map.camera = cam
+            }
         }
+        let isNav = navigating
         // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随系统深浅
         if isNav != context.coordinator.lastDarkState {
             context.coordinator.lastDarkState = isNav
@@ -513,8 +538,32 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPlaceLongPress: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
+        /// v2.01 比例尺文本回调
+        var onScaleChange: ((String) -> Void)?
         /// v1.98 备选路线点击切换
         var onRouteChoiceTap: ((Int) -> Void)?
+
+        /// v2.01 比例尺：算出"58pt 比例尺条代表多少米"，取 1/2/5×10ⁿ 的整数刻度
+        func reportScale(_ map: MKMapView) {
+            guard map.bounds.height > 0 else { return }
+            let metersPerPoint = map.region.span.latitudeDelta * 111_000.0 / Double(map.bounds.height)
+            guard metersPerPoint > 0, metersPerPoint.isFinite else { return }
+            let target = metersPerPoint * 58.0
+            let nice: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500,
+                                  1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000]
+            var pick = nice.last!
+            for v in nice where v >= target { pick = v; break }
+            let text = pick >= 1000
+                ? "\\(Int(pick / 1000)) 公里"
+                : "\\(Int(pick)) 米"
+            guard text != lastScaleText else { return }
+            lastScaleText = text
+            // 地图代理回调里同步改 SwiftUI @State 会触发"Modifying state during view update"，
+            // 丢到下一轮主线程
+            DispatchQueue.main.async { [weak self] in
+                self?.onScaleChange?(text)
+            }
+        }
         var choiceRoutes: [[CLLocationCoordinate2D]] = []
         var selectedRouteIdx = 0
         /// v1.98 规划态：此时轻点地图任何位置（含地名标签）都应退出规划回首页
@@ -537,8 +586,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         var tipPolygonOverlay: MKPolygon?
         var lastZoomOutTick = 0
         var lastPreviewKey = ""
-        /// 导航 3D 俯仰状态记忆（仅状态切换时设置 pitch）
-        var lastPitchState: Bool?
+        /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
+        var lastPitchDeg: Double = 0
+        /// v2.01 路线方向箭头重建键
+        var lastArrowKey = ""
+        /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
+        var lastScaleText = ""
         /// v1.84 巡航模式状态记忆（巡航开关切换/跟随 tick/上次相机中心节流）
         var lastCruise: Bool?
         var lastCruiseTick = 0
@@ -682,6 +735,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             var hit: MKAnnotation?
             var hitDist = CGFloat.greatestFiniteMagnitude
             for a in map.annotations where !(a is MKUserLocation) {
+                if a is RouteArrowAnnotation { continue }   // 方向箭头不参与点选
                 let isPlace = a is PlaceAnnotation
                 // 被碰撞隐藏的地点标签不参与命中：缩小时大量标签被 MapKit 隐藏，
                 // 若仍参与命中，点空地会弹出看不见的地名卡
@@ -761,7 +815,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool { false }
 
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            reportScale(mapView)   // v2.01 缩放/俯仰时同步右上角比例尺
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            reportScale(mapView)
             // 程序 setRegion 触发时不标记用户移动
             if programmaticMove {
                 programmaticMove = false
@@ -806,6 +865,18 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v?.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
+                return v
+            }
+            if let ra = annotation as? RouteArrowAnnotation {
+                // v2.01 路线方向箭头（白色 chevron，已按航向预旋转）
+                let id = "routeArrow"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: id)
+                v.annotation = ra
+                v.image = MapViewRepresentable.arrowImage(bearing: ra.bearing)
+                v.canShowCallout = false
+                v.isEnabled = false
+                v.displayPriority = .defaultLow
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
@@ -917,10 +988,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                     r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
                     r.lineWidth = 5
                 } else if self.alternatePolylines.contains(where: { $0 === poly }) {
-                    // 备选路线：浅绿色虚线
-                    r.strokeColor = UIColor(red: 0.60, green: 0.85, blue: 0.62, alpha: 0.95)
-                    r.lineWidth = 4
-                    r.lineDashPattern = [6, 6]
+                    // v2.01 备选路线：灰色实线（高德同款）——点了哪条，哪条变绿，其余保持灰
+                    r.strokeColor = UIColor(white: 0.62, alpha: 1.0)
+                    r.lineWidth = 6
                 } else {
                     r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
                     r.lineWidth = 4
@@ -946,6 +1016,20 @@ struct MapViewRepresentable: UIViewRepresentable {
             return MKOverlayRenderer(overlay: overlay)
         }
     }
+}
+
+/// v2.01 路线方向箭头（导航中沿路线铺的白色 chevron）
+/// 内部存 WGS，`coordinate` 输出 GCJ；bearing 为航向（0=北）
+final class RouteArrowAnnotation: NSObject, MKAnnotation {
+    let bearing: Double
+    private let wgs: CLLocationCoordinate2D
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
+    init(wgs: CLLocationCoordinate2D, bearing: Double) {
+        self.wgs = wgs
+        self.bearing = bearing
+        super.init()
+    }
+    var title: String? { nil }
 }
 
 /// v1.99 组队队友标注（地图上的"骑手点"）
@@ -1089,6 +1173,77 @@ extension MapViewRepresentable {
             c.restoreGState()
         }
     }
+
+    /// v2.01 沿路线每隔约 65 米放一个方向箭头（最多 80 个，避免长路线拖慢渲染）
+    static func buildArrows(_ pts: [CLLocationCoordinate2D]) -> [RouteArrowAnnotation] {
+        guard pts.count >= 2 else { return [] }
+        var out: [RouteArrowAnnotation] = []
+        var acc = 0.0
+        var nextAt = 45.0
+        for i in 0..<(pts.count - 1) {
+            let a = pts[i], b = pts[i + 1]
+            let seg = a.distance(to: b)
+            guard seg > 0.01 else { continue }
+            while nextAt <= acc + seg && out.count < 80 {
+                let t = (nextAt - acc) / seg
+                let c = CLLocationCoordinate2D(
+                    latitude: a.latitude + (b.latitude - a.latitude) * t,
+                    longitude: a.longitude + (b.longitude - a.longitude) * t)
+                out.append(RouteArrowAnnotation(wgs: c, bearing: bearing(a, b)))
+                nextAt += 65
+            }
+            acc += seg
+        }
+        return out
+    }
+
+    /// 两点航向（度，0=正北）
+    static func bearing(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let p1 = a.latitude * .pi / 180
+        let p2 = b.latitude * .pi / 180
+        let dl = (b.longitude - a.longitude) * .pi / 180
+        let y = sin(dl) * cos(p2)
+        let x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl)
+        let deg = atan2(y, x) * 180 / .pi
+        return (deg + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    /// v2.01 箭头图案（按航向预旋转 10° 一档缓存，避免每帧重绘）
+    static func arrowImage(bearing: Double) -> UIImage {
+        let bucket = Int((bearing / 10).rounded()) % 36
+        if let hit = ArrowImageCache.shared.images[bucket] { return hit }
+        let size = CGSize(width: 22, height: 22)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+            c.translateBy(x: size.width / 2, y: size.height / 2)
+            c.rotate(by: CGFloat(Double(bucket) * 10 * .pi / 180))
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 0, y: -6.5))
+            path.addLine(to: CGPoint(x: -5.5, y: 4.5))
+            path.move(to: CGPoint(x: 0, y: -6.5))
+            path.addLine(to: CGPoint(x: 5.5, y: 4.5))
+            c.setLineCap(.round)
+            c.setLineJoin(.round)
+            // 深色描边打底（浅色道路上也能看清）
+            c.setLineWidth(4.6)
+            UIColor.black.withAlphaComponent(0.22).setStroke()
+            c.addPath(path.cgPath)
+            c.strokePath()
+            // 白色箭头
+            c.setLineWidth(2.8)
+            UIColor.white.setStroke()
+            c.addPath(path.cgPath)
+            c.strokePath()
+        }
+        ArrowImageCache.shared.images[bucket] = img
+        return img
+    }
+}
+
+/// v2.01 箭头图片缓存（扩展里不能声明静态存储属性，单独放一个类）
+final class ArrowImageCache {
+    static let shared = ArrowImageCache()
+    var images: [Int: UIImage] = [:]
 }
 
 // MARK: - v1.67 高德瓦片底图（纯高德视觉；GCJ→WGS 重投影 + NSLock 防渲染线程数据竞争闪退）
