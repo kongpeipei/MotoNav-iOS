@@ -14,6 +14,7 @@ extension Notification.Name {
     static let motoPoisChanged = Notification.Name("motoPoisChanged")
 }
 
+
 /// CLLocationCoordinate2D Codable（轨迹历史持久化）
 
 @MainActor
@@ -73,8 +74,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var cruiseBase: CLLocationCoordinate2D?
     /// v1.90 省电模式（电量≤20% 或系统低电量模式自动开启：降定位频率）
     @Published var powerSaving = false
-    /// v1.92 进入省电前的 distanceFilter 原值（退出省电时还原，避免反向升频）
-    private var baseDistanceFilter: CLLocationDistance = kCLDistanceFilterNone
     /// v1.92 电量复查节流时间戳（秒）
     private var lastPowerCheck: TimeInterval = 0
     /// 省电模式总开关（默认开；"我的"页可关）
@@ -356,13 +355,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 定位频率按「省电 + 是否导航」切换：
     /// - 省电且非导航 → 50 米过滤（省电）
     /// - 导航中一律不降频，否则转向/电子眼提醒会被推迟数十米，骑到跟前才报
-    /// v1.92 新增：退出省电时还原 baseDistanceFilter，而不是无脑设 kCLDistanceFilterNone
+    /// 定位频率：省电且非导航 → 50 米（几乎不动就不回调）；
+    /// 导航中 2 米（转弯/到点提示及时）；其余 8 米。
+    ///
+    /// v2.12：旧实现把 `baseDistanceFilter = lm.distanceFilter` 写在"进入省电"分支里，
+    /// 第二次进入省电时基准值已经被改成 50，退出省电就永远停在 50 米——反过来更耗电
+    /// （导航时 50 米才回调一次，转弯提示会明显滞后）。现在直接按状态算，不留隐式基准。
     private func updateLocationFilter() {
         if powerSaving && !navigating {
-            baseDistanceFilter = lm.distanceFilter
             lm.distanceFilter = 50
         } else {
-            lm.distanceFilter = baseDistanceFilter
+            lm.distanceFilter = navigating ? 2 : 8
         }
     }
 
@@ -894,7 +897,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 list.append(PlaceLabel(name: n, lat: lat, lon: lon))
             }
             if list.count > 30 {
-                placeLabels = Array(list.prefix(600))
+                // v2.12：地名标签从 600 降到 220。600 个 MKAnnotation 在低端机上光渲染就掉帧，
+                // 而屏幕上同时能看到的本来也就几十个；按到当前位置的距离排序，优先留住近处的。
+                let center = currentLocation
+                if let c = center {
+                    list.sort {
+                        distanceM(c, CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon))
+                            < distanceM(c, CLLocationCoordinate2D(latitude: $1.lat, longitude: $1.lon))
+                    }
+                }
+                placeLabels = Array(list.prefix(220))
             }
         }
     }
@@ -1017,8 +1029,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 天气（Open-Meteo 免费接口）
 
+    /// 上次发起天气请求的时间（v2.12：节流用）
+    private var lastWeatherTry: TimeInterval = 0
+
     func fetchWeather() {
         guard let loc = currentLocation else { return }
+        // v2.12：定位回调每秒都来，旧代码只在 weatherText == nil 时才拉，
+        // 一旦首次请求失败（弱网/无网），就会每次定位都重发一次请求 —— 一直失败一直发。
+        // 现在统一节流：5 分钟内最多请求一次，成功失败都算。
+        let now = Date().timeIntervalSince1970
+        guard now - lastWeatherTry > 300 else { return }
+        lastWeatherTry = now
         Task {
             var comps = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
             comps.queryItems = [
@@ -1146,6 +1167,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func startMonitoring() {
         guard !monitoring else { return }
+        lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        updateLocationFilter()
         lm.startUpdatingLocation()
         if CLLocationManager.headingAvailable() {
             // v1.63：摩托导航手机通常平放/斜放在车把支架，
@@ -1189,7 +1212,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                    speedKph: max(0, loc.speed) * 3.6)
             // v1.92 后台/前台都靠定位回调复查电量（通知在挂起时收不到）
             throttledPowerSavingCheck()
-            if weatherText == nil { fetchWeather() }
+            fetchWeather()
             checkAlerts(at: coord)
             // v2.04 官方电警接近提醒：不看是否在导航，只要在移动就判
             checkPoliceCameras(at: coord)
@@ -1244,8 +1267,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         _ manager: CLLocationManager,
         didUpdateHeading newHeading: CLHeading
     ) {
-        let h = newHeading.trueHeading
+        // trueHeading 无效（磁干扰/未校准）时退回磁北，否则会把指南针打成 0
+        let h = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         Task { @MainActor in
+            // v2.12 节流：朝向回调可达 10~20Hz，而 heading 变化会让整个界面重算一次。
+            // 2° 以内肉眼看不出来，直接丢掉，界面刷新频率能降一个数量级。
+            let diff = abs(h - heading)
+            let delta = min(diff, 360 - diff)
+            guard delta >= 2 else { return }
             heading = h
         }
     }

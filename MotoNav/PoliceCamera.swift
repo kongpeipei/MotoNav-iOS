@@ -129,11 +129,9 @@ final class PoliceCameraStore: ObservableObject {
         guard let url = Bundle.main.url(forResource: "hefei_cameras", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let list = try? JSONDecoder().decode([PoliceCamera].self, from: data) else {
-            StartupLog.mark("cameras-empty")
             return
         }
         all = list
-        StartupLog.mark("cameras-loaded", "\(list.count) 个点位")
     }
 
     /// 地图要显示的点位（关掉图层就是空数组）

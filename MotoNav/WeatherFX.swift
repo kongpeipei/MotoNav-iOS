@@ -115,17 +115,17 @@ enum WeatherFX {
 
         // 远层：细、淡、慢，模糊最多（空气透视）
         // v1.98 雨丝再短一半、密度提到 3 倍（苹果天气的细密雨幕观感）
-        rainLayer(ctx, size: size, t: t, count: Int(330 * s), salt: 100,
+        rainLayer(ctx, size: size, t: t, count: Int(170 * s), salt: 100,
                   speed: 300...430, length: 3...5, width: 0.7,
                   opacity: 0.26, blur: 0.9, gust: gust, base: base)
         // 中层
-        rainLayer(ctx, size: size, t: t, count: Int(240 * s), salt: 400,
+        rainLayer(ctx, size: size, t: t, count: Int(120 * s), salt: 400,
                   speed: 470...640, length: 5...8, width: 1.15,
-                  opacity: 0.36, blur: 0.35, gust: gust, base: base)
+                  opacity: 0.36, blur: 0, gust: gust, base: base)
         // 近层：稍长、粗、快，最实
-        rainLayer(ctx, size: size, t: t, count: Int(126 * s), salt: 700,
+        rainLayer(ctx, size: size, t: t, count: Int(70 * s), salt: 700,
                   speed: 700...960, length: 8...12, width: 1.75,
-                  opacity: 0.46, blur: 0.1, gust: gust, base: base)
+                  opacity: 0.46, blur: 0, gust: gust, base: base)
 
         // 大地湿气：底部渐隐的冷色薄雾（雨越大越明显）
         if intensity >= .medium {
@@ -208,17 +208,17 @@ enum WeatherFX {
         let wind = sin(t * 0.21) * 10 + sin(t * 0.07) * 6
 
         // 远层：小、淡、慢、糊
-        snowLayer(ctx, size: size, t: t, count: Int(70 * s), salt: 1300,
+        snowLayer(ctx, size: size, t: t, count: Int(42 * s), salt: 1300,
                   radius: 0.9...1.8, speed: 26...44, sway: 12,
                   opacity: 0.42, blur: 1.2, wind: wind * 0.5, base: base)
         // 中层
-        snowLayer(ctx, size: size, t: t, count: Int(46 * s), salt: 1600,
+        snowLayer(ctx, size: size, t: t, count: Int(28 * s), salt: 1600,
                   radius: 1.8...3.2, speed: 42...68, sway: 20,
-                  opacity: 0.62, blur: 0.5, wind: wind, base: base)
+                  opacity: 0.62, blur: 0, wind: wind, base: base)
         // 近层：大而虚（镜头景深散焦），飘得最快
-        snowLayer(ctx, size: size, t: t, count: Int(20 * s), salt: 1900,
+        snowLayer(ctx, size: size, t: t, count: Int(14 * s), salt: 1900,
                   radius: 3.4...6.2, speed: 66...104, sway: 30,
-                  opacity: 0.72, blur: 1.6, wind: wind * 1.5, base: base)
+                  opacity: 0.72, blur: 0, wind: wind * 1.5, base: base)
 
         // 少量近处"晶体"雪花：六角细枝 + 自转，点出雪花的形态
         crystalLayer(ctx, size: size, t: t, count: Int(9 * max(0.6, s)),
@@ -336,7 +336,7 @@ struct WeatherOverlay: View {
     var body: some View {
         Group {
             if let cfg = WeatherFX.config(for: code) {
-                TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 : 1.0 / 50.0)) { tl in
+                TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 : 1.0 / 30.0)) { tl in
                     Canvas { ctx, size in
                         // 减弱动态时冻结在一个稳定帧上（仍有静态雨雪幕，但不晃）
                         let t = reduceMotion ? 6.0 : tl.date.timeIntervalSinceReferenceDate

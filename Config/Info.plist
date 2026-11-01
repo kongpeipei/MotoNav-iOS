@@ -33,8 +33,6 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>骑行导航时需要在后台持续定位，以便及时提醒前方点位</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -44,8 +42,6 @@
 		<string>location</string>
 		<string>audio</string>
 	</array>
-	<key>UIFileSharingEnabled</key>
-	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

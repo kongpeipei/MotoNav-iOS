@@ -3,14 +3,35 @@ import MapKit
 import UIKit
 import UniformTypeIdentifiers
 
+/// v2.12 外观设置：跟随系统 / 强制浅色 / 强制深色
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case auto
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .auto: return "自动"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        }
+    }
+
+    /// nil = 跟随系统
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .auto: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
-    /// v2.10 精简模式：只渲染地图 + 一条搜索卡（不建 DraggableFloat、不建选项卡、不建电警按钮）。
-    /// 连续启动失败时由启动器自动切到这个模式，保证 App 至少能打开用。
-    /// 走环境变量而不是 init 参数：本结构体有一百多个 @State，自带 memberwise init 是 private，
-    /// 外面根本调不到 `ContentView(lite:)`，只有 Environment 能不改初始化器地传进来。
-    @Environment(\.motoLiteMode) private var lite
     /// v1.99 组队骑行（地图队友点 + 我的页队伍面板）
     @StateObject private var team = TeamRide.shared
     /// v1.99 足迹（我的-足迹）
@@ -21,6 +42,8 @@ struct ContentView: View {
     @StateObject private var camStore = PoliceCameraStore.shared
     /// v1.90 省电模式总开关（"我的"页可关；关闭后低电量也不再降频/调暗）
     @AppStorage("powerSaveEnabled") private var powerSaveEnabled = true
+    /// v2.12 外观：auto / light / dark（"我的"页省电下方三段式切换）
+    @AppStorage("appearanceMode") private var appearanceMode = AppearanceMode.auto.rawValue
     @State private var searchText = ""
     @State private var suggestions: [String] = []
     @State private var showSuggestions = false
@@ -109,21 +132,15 @@ struct ContentView: View {
     @State private var mapRetried = false
 
     var body: some View {
-        // v2.05 诊断：body 求值到了没（只记第一次，避免每秒刷屏）
-        let _ = StartupLog.markOnce("body-enter")
         ZStack {
-            BodyProbe("bf-enter")
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
-                BodyProbe("bf-map-before")
                 AnyView(mapLayer)
-                BodyProbe("bf-map-after")
                 // v1.81.4 全屏天气动画（高德同款）：下雨雨丝/下雪飘雪，透明覆盖不拦截手势
                 // v1.86 仅初始地图页/导航态渲染：沉浸模式与巡航模式暂停（省电、不挡视野）
                 if !uiHidden && !model.cruiseMode {
                     AnyView(weatherFX)
                 }
-                BodyProbe("bf-weather-after")
                 // v1.92 省电调暗：仅非导航态盖轻黑罩（OLED 上省电），
                 // 导航中不再遮挡——骑行户外阳光 + 头盔镜片下，地图变暗会看不清路口与电子眼
                 if model.powerSaving && !model.navigating {
@@ -132,13 +149,10 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                 }
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
-                // v2.10：精简模式下这一整组浮层（指南针/路线胶囊/缩放键/比例尺）都不建，
-                //        用来把"浮层带崩进程"和"地图本身有问题"彻底分开
-                if !uiHidden && !lite {
+                if !uiHidden {
                     // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
                     // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
                     if !showRouteOverview {
-                        BodyProbe("bp-compass")
                         AnyView(compassOverlay)
                         // v1.90 顶部居中道路名胶囊（高德式：导航中显示当前道路名，一目了然）
                         if model.navigating { AnyView(roadNamePill) }
@@ -151,7 +165,6 @@ struct ContentView: View {
                             DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
                         }
                         // v2.01 右上角比例尺（随缩放实时变化；原 GPS 按钮已移除）
-                        BodyProbe("bp-scale")
                         AnyView(scaleOverlay)
                     }
                     // v1.97 常用地点设置提示条（从"我的"点铅笔后回到地图时显示）
@@ -164,7 +177,6 @@ struct ContentView: View {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     AnyView(locateButtonOnly)
                 }
-                BodyProbe("bp-alert")
                 // v2.04 接近电警横幅：沉浸/导航状态下也要显示（安全提醒优先于界面整洁）
                 if let alert = model.cameraAlert {
                     AnyView(cameraAlertBanner(alert))
@@ -197,13 +209,7 @@ struct ContentView: View {
                 }
                 // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
                 if !uiHidden {
-                    BodyProbe("bf-bottom")
-                    // v2.10：精简模式下换成不含 DraggableFloat 的简单搜索卡
-                    if lite {
-                        AnyView(liteBottom)
-                    } else {
-                        AnyView(bottomOverlay)
-                    }
+                    AnyView(bottomOverlay)
                 }
                 // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
                 if model.tripSummary != nil {
@@ -230,7 +236,6 @@ struct ContentView: View {
                 AnyView(bottomTabBar)
             }
             // v1.86 启动闪屏：全屏黑色 + 白色楷体"骑士地图"，1 秒后淡出进入首页
-            BodyProbe("bf-end")
             if showSplash {
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -364,13 +369,6 @@ struct ContentView: View {
             Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
         }
         .onAppear {
-            // v2.03：首屏已渲染 → 启动链路走通。若设备上 startup.log 停在这行之前，
-            // 说明是签名/entitlement 被杀，不是代码问题。
-            StartupLog.markSync("ui-ready", lite ? "lite" : "full")
-            // 精简模式不算"启动成功"：否则下次又会先试完整版、再崩一次，来回折腾用户
-            if !lite {
-                UserDefaults.standard.set(0, forKey: "motonav.bootAttempts")
-            }
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
@@ -434,12 +432,14 @@ struct ContentView: View {
                 goHereLon = p.longitude
             }
         }
+        // v2.12 外观三段式：自动跟随系统 / 强制浅色 / 强制深色
+        // 放在根视图上，sheet、设置页、地图底图（MapView 读同一个 colorScheme）一起生效
+        .preferredColorScheme((AppearanceMode(rawValue: appearanceMode) ?? .auto).colorScheme)
     }
 
     /// 地图全屏层（高德式：地图在上，搜索框下置）
     private var mapLayer: some View {
-        let _ = StartupLog.markOnce("ml-enter")
-        return MapViewRepresentable(
+        MapViewRepresentable(
             pois: model.pois,
             userLocation: model.currentLocation,
             route: model.route,
@@ -772,6 +772,7 @@ struct ContentView: View {
         NavigationStack {
             List {
                 powerSection
+                appearanceSection
                 commonPlacesSection
                 rideSection
                 dataSection
@@ -799,6 +800,26 @@ struct ContentView: View {
             Text("省电")
         } footer: {
             Text("电量低于 20% 或系统低电量模式时，自动降低定位频率并调暗地图节省电量；恢复后自动还原。")
+        }
+    }
+
+    /// v2.12 外观：自动 / 浅色 / 深色（放在省电下方，三段式）
+    private var appearanceSection: some View {
+        Section {
+            Picker(selection: Binding(
+                get: { AppearanceMode(rawValue: appearanceMode) ?? .auto },
+                set: { appearanceMode = $0.rawValue })) {
+                ForEach(AppearanceMode.allCases) { m in
+                    Text(m.title).tag(m)
+                }
+            } label: {
+                Label("外观", systemImage: "circle.lefthalf.filled")
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("显示")
+        } footer: {
+            Text("自动跟随系统深浅色；手动切换立即生效。导航中地图始终使用深色底图，保证路口与电子眼清晰可辨。")
         }
     }
 
@@ -957,6 +978,14 @@ struct ContentView: View {
         m >= 1000 ? String(format: "%.1f km", Double(m) / 1000) : "\(m) m"
     }
 
+    /// v2.12 Key 展示：只露首尾 4 位，中间打点（避免整串 Key 明晃晃挂在界面上）
+    private var amapKeyMask: String {
+        let k = model.amapKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !k.isEmpty else { return "未设置" }
+        guard k.count > 10 else { return k }
+        return "\(k.prefix(4))…\(k.suffix(4))"
+    }
+
     /// 搜索 Key 设置
     private var searchKeySection: some View {
         Section("搜索设置") {
@@ -967,7 +996,7 @@ struct ContentView: View {
                 HStack {
                     Label("高德搜索 Key", systemImage: "key")
                     Spacer()
-                    Text(model.amapKey.isEmpty ? "未设置" : "已启用")
+                    Text(amapKeyMask)
                         .foregroundStyle(.secondary)
                         .font(.caption)
                 }
@@ -1004,12 +1033,17 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
-            HStack {
-                Label("高德Key", systemImage: "key.fill")
-                Spacer()
-                Text("6fd752…0066")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+            Button {
+                amapKeyInput = model.amapKey
+                showAmapKeyInput = true
+            } label: {
+                HStack {
+                    Label("高德搜索 Key", systemImage: "key.horizontal")
+                    Spacer()
+                    Text(amapKeyMask)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
             }
         }
     }
@@ -1293,65 +1327,13 @@ struct ContentView: View {
         }
     }
 
-    /// v2.10 精简模式底部卡：一条搜索框，不套 DraggableFloat、不做拖动/左滑删除。
-    /// 用途单一——主界面某个浮层把进程带崩时，这里能稳定显示，App 仍有搜索可用。
-    private var liteBottom: some View {
-        let _ = StartupLog.markOnce("lite-bottom")
-        return VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.subheadline)
-                    .foregroundStyle(.gray)
-                TextField("查找地点、公交、地铁", text: $searchText)
-                    .font(.subheadline)
-                    .submitLabel(.search)
-                    .onSubmit { expandSearchResults() }
-                Button {
-                    expandSearchResults()
-                } label: {
-                    Text("搜索")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color(red: 0.0, green: 0.75, blue: 0.95), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(height: 52)
-            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26))
-            .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
-            .padding(.horizontal, 14)
-            if !model.routeChoices.isEmpty {
-                Button {
-                    haptic()
-                    model.toggleNavigation()
-                } label: {
-                    Text("开始导航")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
-                        .padding(.horizontal, 14)
-                }
-            }
-        }
-        .frame(maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 22)
-    }
-
     /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
         // v1.81.2 底部每张卡均可自由拖动，位置持久化（默认贴底序列）
         // v1.81.3 地点卡/路线规划卡出现时隐藏搜索主卡；两卡左滑关闭后恢复
         // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
-            BodyProbe("bo-enter")
             if !model.navigating && !model.cruiseMode {
-                BodyProbe("bo-branch")
                 if let tp = tapPlace {
                     // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
                     DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
@@ -1373,11 +1355,8 @@ struct ContentView: View {
                     // 地图上再挂一条既挡视线又重复
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
-                BodyProbe("bo-cat")
                 if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
-                    BodyProbe("bo-main")
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { AnyView(bottomMainCard) }
-                    BodyProbe("bo-main-after")
                 }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
@@ -1989,7 +1968,6 @@ struct ContentView: View {
 
     /// 类别搜索结果横条（学校/医院/加油站，点击直接规划路线）
     private var categoryBar: some View {
-        let _ = StartupLog.markOnce("cat-enter")
         return Group {
             if !model.categoryResults.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -3120,7 +3098,6 @@ struct ContentView: View {
 
     /// v1.80 首页底部主卡片：搜索框 + 导航/我的 合并为一个整体卡片
     private var bottomMainCard: some View {
-        let _ = StartupLog.markOnce("bmc-enter")
         return VStack(spacing: 6) {
             // v1.99 快捷词：未聚焦时一行"回家 / 去公司"，省一次输入
             if !searchFocused, model.homePlace != nil || model.workPlace != nil {
@@ -3367,7 +3344,6 @@ struct ContentView: View {
 
     /// 搜索输入行：高德样式白底大圆角（放大镜 + 输入 + ✕ + 搜索按钮为一体）
     private var searchInputRow: some View {
-        let _ = StartupLog.markOnce("sic-enter")
         return HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.subheadline)
@@ -4060,11 +4036,7 @@ private struct DraggableFloat<Content: View>: View {
         self.lockX = lockX
         self.deleteLabel = deleteLabel
         self.onSwipeLeft = onSwipeLeft
-        // v2.10 探针：浮层外壳构造 / 内部卡片构造完成，各打一笔，
-        // 崩溃时就能区分"壳子有问题"还是"卡片内容有问题"
-        StartupLog.markOnce("df-\(key)-shell")
         self.content = content()
-        StartupLog.markOnce("df-\(key)-ok")
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
         // v1.99 缩放/定位按钮默认位置改到"搜索框右上方"：一次性作废旧坐标，

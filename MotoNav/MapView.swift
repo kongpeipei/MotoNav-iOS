@@ -29,6 +29,8 @@ enum MapGeo {
 
 /// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
+    /// v2.12 外观跟随：手动浅色/深色时地图底图一起切（导航中始终深色）
+    @Environment(\.colorScheme) private var colorScheme
     let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
     let route: [CLLocationCoordinate2D]
@@ -105,9 +107,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     var hotCameraId: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
-        StartupLog.markSync("map-make")
         let map = MKMapView()
-        StartupLog.markSync("map-init-done")
         map.showsUserLocation = true
         map.showsCompass = false // 使用自绘指南针（左上角）
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
@@ -117,11 +117,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 路线折线/点位标注都叠在瓦片之上（v1.62 灰罩+盖路线问题已修复：
         // ①层级由 aboveLabels 改 aboveRoads ②未加载瓦片透明露出苹果底图兜底 ③多子域轮询防限流)
         // v1.78：黑屏回归苹果 MapKit 引擎（3D Metal 渲染与设备不兼容），高德瓦片视觉保留
-        StartupLog.markSync("tile-overlay-before")
         let amapOverlay = AmapTileOverlay()
-        StartupLog.markSync("tile-overlay-inited")
         map.insertOverlay(amapOverlay, at: 0, level: .aboveRoads)
-        StartupLog.markSync("tile-overlay-added")
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         longPress.minimumPressDuration = 0.6
@@ -137,7 +134,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         doubleTap.delegate = context.coordinator
         map.addGestureRecognizer(doubleTap)
         tap.require(toFail: doubleTap)
-        StartupLog.markSync("map-make-done")
         return map
     }
 
@@ -155,7 +151,6 @@ struct MapViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
-        StartupLog.markOnce("map-update")
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
         context.coordinator.onPoiMoved = onPoiMoved
@@ -232,58 +227,103 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
             }
         }
-        // 点位标注增删
-        let ids = Set(pois.map(\.id))
-        map.annotations
-            .compactMap { $0 as? PoiAnnotation }
-            .filter { !ids.contains($0.poi.id) }
-            .forEach { map.removeAnnotation($0) }
+        // 【v2.12 性能】标注同步：内容键 + 一次性索引
+        // 旧写法是 `for p in pois { map.annotations.contains { ... } }` —— O(点位 × 全部标注)。
+        // 内置点位 300+、地名标签最多 600、电警 56，一帧就是几十万次比较；
+        // 而 updateUIView 每秒会被定位/状态变化触发多次，这是地图页卡顿的主因。
+        // 现在先算内容键，没变直接跳过；变了才遍历一次 annotations 建索引。
+        var poiHasher = Hasher()
+        poiHasher.combine(pois.count)
+        poiHasher.combine(minimal)
         for p in pois {
-            if !map.annotations.contains(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) {
-                map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
-            } else if let a = map.annotations.first(where: { ($0 as? PoiAnnotation)?.poi.id == p.id }) as? PoiAnnotation {
-                if a.poi.coordinate != p.coordinate || a.poi.isCustom != p.isCustom {
-                    // 坐标/自定义标记变化（拖动或编辑后）：移除重建以刷新 marker 视图（新位置 + 橙色描边）
-                    map.removeAnnotation(a)
-                    map.addAnnotation(PoiAnnotation(poi: p, onRoute: routePois.contains { $0.id == p.id }))
+            poiHasher.combine(p.id); poiHasher.combine(p.enabled); poiHasher.combine(p.lat)
+            poiHasher.combine(p.lon); poiHasher.combine(p.type.rawValue); poiHasher.combine(p.isCustom)
+        }
+        for p in routePois { poiHasher.combine(p.id) }
+        let poiKey = poiHasher.finalize()
+
+        if poiKey != context.coordinator.lastPoiKey {
+            context.coordinator.lastPoiKey = poiKey
+            var index: [Int64: PoiAnnotation] = [:]
+            for a in map.annotations {
+                if let x = a as? PoiAnnotation { index[x.poi.id] = x }
+            }
+            let ids = Set(pois.map(\.id))
+            let onRouteIds = Set(routePois.map(\.id))
+            for (id, a) in index where !ids.contains(id) {
+                map.removeAnnotation(a)
+                index[id] = nil
+            }
+            for p in pois {
+                let onRoute = onRouteIds.contains(p.id)
+                if let a = index[p.id] {
+                    if a.poi.coordinate != p.coordinate || a.poi.isCustom != p.isCustom {
+                        // 坐标/自定义标记变化（拖动或编辑后）：移除重建以刷新 marker 视图
+                        map.removeAnnotation(a)
+                        let na = PoiAnnotation(poi: p, onRoute: onRoute)
+                        map.addAnnotation(na)
+                        index[p.id] = na
+                    } else {
+                        a.poi = p
+                        a.onRoute = onRoute
+                    }
                 } else {
-                    a.poi = p
-                    a.onRoute = routePois.contains { $0.id == p.id }
+                    let na = PoiAnnotation(poi: p, onRoute: onRoute)
+                    map.addAnnotation(na)
+                    index[p.id] = na
                 }
             }
         }
-        // v2.04 官方电警点位图层（按 id 增量同步，避免每次重建几十个 annotation）
-        let camIds = Set(cameraMarks.map(\.id))
-        map.annotations
-            .compactMap { $0 as? CameraAnnotation }
-            .filter { !camIds.contains($0.cameraId) }
-            .forEach { map.removeAnnotation($0) }
-        let existingCam = Set(map.annotations.compactMap { ($0 as? CameraAnnotation)?.cameraId })
-        for c in cameraMarks where !existingCam.contains(c.id) {
-            map.addAnnotation(CameraAnnotation(camera: c, hot: 0))
+
+        // v2.04 官方电警点位图层（按 id 增量同步）
+        var camHasher = Hasher()
+        camHasher.combine(cameraMarks.count)
+        for c in cameraMarks { camHasher.combine(c.id); camHasher.combine(c.lat); camHasher.combine(c.lon) }
+        let camKey = camHasher.finalize()
+        if camKey != context.coordinator.lastCamKey {
+            context.coordinator.lastCamKey = camKey
+            let camIds = Set(cameraMarks.map(\.id))
+            var existing: [Int: CameraAnnotation] = [:]
+            for a in map.annotations {
+                if let x = a as? CameraAnnotation { existing[x.cameraId] = x }
+            }
+            for (id, a) in existing where !camIds.contains(id) {
+                map.removeAnnotation(a)
+                existing[id] = nil
+            }
+            for c in cameraMarks where existing[c.id] == nil {
+                let na = CameraAnnotation(camera: c, hot: 0)
+                map.addAnnotation(na)
+                existing[c.id] = na
+            }
         }
         // 刚播报的点位：外圈加粗 + 放大，让"听到的"和"看到的"是同一个点
-        for a in map.annotations.compactMap({ $0 as? CameraAnnotation }) {
-            let want = (a.cameraId == hotCameraId && hotCameraId != 0)
-            if a.isHot != want {
-                a.isHot = want
-                (map.view(for: a) as? CameraPinView)?.setHot(want)
+        // v2.12：只在 hotCameraId 变化时扫一遍，不再每帧遍历全部标注
+        if hotCameraId != context.coordinator.lastHotCameraId {
+            context.coordinator.lastHotCameraId = hotCameraId
+            for a in map.annotations.compactMap({ $0 as? CameraAnnotation }) {
+                let want = (a.cameraId == hotCameraId && hotCameraId != 0)
+                if a.isHot != want {
+                    a.isHot = want
+                    (map.view(for: a) as? CameraPinView)?.setHot(want)
+                }
             }
         }
         // 终点标记（高德式：起点=当前定位蓝箭头，不再画"起"标记；终点保留"终"）
-        map.annotations
-            .compactMap { $0 as? RouteEndAnnotation }
-            .filter { $0.kind == "start" }
-            .forEach { map.removeAnnotation($0) }
-        let ends = Set(map.annotations.compactMap { ($0 as? RouteEndAnnotation)?.kind })
-        let endPresent = ends.contains("end")
-        if let last = route.last, !endPresent {
-            map.addAnnotation(RouteEndAnnotation(kind: "end", coordinate: last))
-        }
-        if route.count < 2 {
-            map.annotations
-                .compactMap { $0 as? RouteEndAnnotation }
-                .forEach { map.removeAnnotation($0) }
+        // v2.12：路线没变就跳过（原来每帧都要遍历全部标注找终点标记）
+        let endKey = route.count < 2 ? "none"
+            : "end|\(route.last!.latitude),\(route.last!.longitude)"
+        if endKey != context.coordinator.lastEndKey {
+            context.coordinator.lastEndKey = endKey
+            let existingEnds = map.annotations.compactMap { $0 as? RouteEndAnnotation }
+            if route.count < 2 {
+                existingEnds.forEach { map.removeAnnotation($0) }
+            } else {
+                existingEnds.filter { $0.kind == "start" }.forEach { map.removeAnnotation($0) }
+                if !existingEnds.contains(where: { $0.kind == "end" }) {
+                    map.addAnnotation(RouteEndAnnotation(kind: "end", coordinate: route.last!))
+                }
+            }
         }
         // 搜索预览点（绿色高亮）+ 跳转到搜索结果
         let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
@@ -308,39 +348,80 @@ struct MapViewRepresentable: UIViewRepresentable {
         } else {
             previews.forEach { map.removeAnnotation($0) }
         }
-        // 加油站标注
-        let gasIds = Set(map.annotations.compactMap { ($0 as? GasAnnotation)?.id })
-        let wantGas = Set(gasStations.map { "\($0.latitude),\($0.longitude)" })
-        map.annotations
-            .compactMap { $0 as? GasAnnotation }
-            .filter { !wantGas.contains($0.wgsKey) }
-            .forEach { map.removeAnnotation($0) }
-        for c in gasStations {
-            let key = "\(c.latitude),\(c.longitude)"
-            if !gasIds.contains(key) {
-                map.addAnnotation(GasAnnotation(id: key, coordinate: c))
+        // 加油站标注（v2.12：内容键相同直接跳过）
+        var gasHasher = Hasher()
+        gasHasher.combine(gasStations.count)
+        for c in gasStations { gasHasher.combine(c.latitude); gasHasher.combine(c.longitude) }
+        let gasKey = gasHasher.finalize()
+        if gasKey != context.coordinator.lastGasKey {
+            context.coordinator.lastGasKey = gasKey
+            var existing: [String: GasAnnotation] = [:]
+            for a in map.annotations {
+                if let g = a as? GasAnnotation { existing[g.wgsKey] = g }
+            }
+            let want = Set(gasStations.map { "\($0.latitude),\($0.longitude)" })
+            for (k, a) in existing where !want.contains(k) {
+                map.removeAnnotation(a)
+                existing[k] = nil
+            }
+            for c in gasStations {
+                let k = "\(c.latitude),\(c.longitude)"
+                if existing[k] == nil {
+                    let na = GasAnnotation(id: k, coordinate: c)
+                    map.addAnnotation(na)
+                    existing[k] = na
+                }
             }
         }
-        // 小区/商铺名称标签
-        let wantPlaces = Set(placeLabels.map(\.id))
-        map.annotations
-            .compactMap { $0 as? PlaceAnnotation }
-            .filter { !wantPlaces.contains($0.place.id) }
-            .forEach { map.removeAnnotation($0) }
-        if !minimal {
-            for pl in placeLabels where !map.annotations.contains(where: { ($0 as? PlaceAnnotation)?.place.id == pl.id }) {
-                map.addAnnotation(PlaceAnnotation(place: pl))
+        // 小区/商铺名称标签（v2.12：内容键 + 极简开关共同决定）
+        var placeHasher = Hasher()
+        placeHasher.combine(minimal)
+        placeHasher.combine(placeLabels.count)
+        for pl in placeLabels { placeHasher.combine(pl.id); placeHasher.combine(pl.lat); placeHasher.combine(pl.lon) }
+        let placeKey = placeHasher.finalize()
+        if placeKey != context.coordinator.lastPlaceKey {
+            context.coordinator.lastPlaceKey = placeKey
+            var existing: [String: PlaceAnnotation] = [:]
+            for a in map.annotations {
+                if let x = a as? PlaceAnnotation { existing[x.place.id] = x }
+            }
+            // 极简模式：一个都不留（旧版只不再添加，已显示的仍挂在图上）
+            let want = minimal ? Set<String>() : Set(placeLabels.map(\.id))
+            for (k, a) in existing where !want.contains(k) {
+                map.removeAnnotation(a)
+                existing[k] = nil
+            }
+            if !minimal {
+                for pl in placeLabels where existing[pl.id] == nil {
+                    let na = PlaceAnnotation(place: pl)
+                    map.addAnnotation(na)
+                    existing[pl.id] = na
+                }
             }
         }
         // 类别搜索结果（学校/医院/加油站）
-        let wantCats = Set(categoryResults.map(\.id))
-        map.annotations
-            .compactMap { $0 as? CategoryAnnotation }
-            .filter { !wantCats.contains($0.result.id) }
-            .forEach { map.removeAnnotation($0) }
-        if !minimal {
-            for r in categoryResults where !map.annotations.contains(where: { ($0 as? CategoryAnnotation)?.result.id == r.id }) {
-                map.addAnnotation(CategoryAnnotation(result: r))
+        var catHasher = Hasher()
+        catHasher.combine(minimal)
+        catHasher.combine(categoryResults.count)
+        for r in categoryResults { catHasher.combine(r.id) }
+        let catKey = catHasher.finalize()
+        if catKey != context.coordinator.lastCatKey {
+            context.coordinator.lastCatKey = catKey
+            var existing: [String: CategoryAnnotation] = [:]
+            for a in map.annotations {
+                if let x = a as? CategoryAnnotation { existing[x.result.id] = x }
+            }
+            let want = minimal ? Set<String>() : Set(categoryResults.map(\.id))
+            for (k, a) in existing where !want.contains(k) {
+                map.removeAnnotation(a)
+                existing[k] = nil
+            }
+            if !minimal {
+                for r in categoryResults where existing[r.id] == nil {
+                    let na = CategoryAnnotation(result: r)
+                    map.addAnnotation(na)
+                    existing[r.id] = na
+                }
             }
         }
         // v2.02 折线只在"真的变了"时重建
@@ -531,14 +612,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera = cam
             }
         }
-        let isNav = navigating
-        // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随系统深浅
-        if isNav != context.coordinator.lastDarkState {
-            context.coordinator.lastDarkState = isNav
-            map.overrideUserInterfaceStyle = isNav ? .dark : .unspecified
-            // v1.67 高德瓦片随导航切换夜间样式（style=8 深色 / style=7 浅色）
-            context.coordinator.amapDark = isNav
-            context.coordinator.amapRenderer?.dark = isNav
+        // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随外观设置
+        // v2.12：外观可手动切换（自动/浅色/深色），这里跟随 SwiftUI 的 colorScheme，
+        // 导航中仍然强制深色，保证路口和电子眼看得到
+        let wantDark = navigating || colorScheme == .dark
+        if wantDark != context.coordinator.lastDarkState {
+            context.coordinator.lastDarkState = wantDark
+            map.overrideUserInterfaceStyle = wantDark ? .dark : .light
+            // v1.67 高德瓦片随深色切换夜间样式（style=8 深色 / style=7 浅色）
+            context.coordinator.amapDark = wantDark
+            context.coordinator.amapRenderer?.dark = wantDark
         }
         // 缩放按钮（+/-）：以地图中心缩放 0.5x / 2x
         // v1.98 修复"点 +/- 没反应"：跟随模式（.follow/.followWithHeading）下 MapKit 会
@@ -557,7 +640,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.zoom(map, by: 2.0, center: reg.center)
             }
         }
-        StartupLog.markOnce("map-update-done")
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -642,6 +724,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastScaleText = ""
         /// v2.02 折线重建键（内容不变就不重建，避免闪烁/卡顿）
         var lastRouteKey = ""
+        /// v2.12 标注同步键：点位/电警/加油站/地名/类别内容不变就整段跳过，
+        /// 避免每秒多次全表扫描（原来一帧要几十万次比较，是地图页卡顿的主因）
+        var lastPoiKey: Int?
+        var lastCamKey: Int?
+        var lastGasKey: Int?
+        var lastPlaceKey: Int?
+        var lastCatKey: Int?
+        var lastHotCameraId: Int?
+        var lastEndKey = ""
         /// v1.84 巡航模式状态记忆（巡航开关切换/跟随 tick/上次相机中心节流）
         var lastCruise: Bool?
         var lastCruiseTick = 0
