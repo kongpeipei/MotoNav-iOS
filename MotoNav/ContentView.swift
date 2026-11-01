@@ -94,9 +94,11 @@ struct ContentView: View {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
                 }
-                // 导航中悬浮退出按钮（可上下移动）
+                // 导航中悬浮退出按钮（可上下移动；左拉删除=退出导航）
                 if model.navigating {
-                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true) { exitNavOverlay }
+                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true,
+                                   deleteLabel: "左拉删除",
+                                   onSwipeLeft: { haptic(); model.toggleNavigation() }) { exitNavOverlay }
                 }
                 // v1.63 导航态左侧竖排：刷新 / 极简（可拖动）
                 if model.navigating {
@@ -111,6 +113,7 @@ struct ContentView: View {
                 // v1.81.4 本次行程卡：结束导航后显示（白底卡，字号同退出导航卡，可上下移动/左滑关闭）
                 if let s = model.tripSummary {
                     DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
+                                   deleteLabel: "左拉删除",
                                    onSwipeLeft: { model.tripSummary = nil }) { tripSummaryCard(s) }
                 }
                 // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
@@ -787,10 +790,12 @@ struct ContentView: View {
             if !model.navigating {
                 if let t = tipCard {
                     DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+                                   deleteLabel: "左拉删除",
                                    onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
                 } else if !model.routeChoices.isEmpty {
                     // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
                     DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90),
+                                   deleteLabel: "左拉删除",
                                    onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
                 } else {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
@@ -2535,20 +2540,25 @@ struct VoiceSettingsSheet: View {
 /// v1.80 可拖动悬浮控件：位置以 0-1 归一化持久化到 UserDefaults，下次打开还原
 /// v1.81.2 支持 onSwipeLeft：向左大幅滑动（>80pt 且横向为主）触发回调关闭，否则正常拖动记忆
 /// v1.81.4 支持 lockX：仅上下移动（横向锁定在初始 x）
+/// v1.81.4 支持 deleteLabel：左滑时卡片后跟红色"左拉删除"卡（大小同卡片），滑过一半触发删除回调
 private struct DraggableFloat<Content: View>: View {
     let key: String
     var lockX: Bool = false
+    var deleteLabel: String? = nil
     var onSwipeLeft: (() -> Void)? = nil
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
     @State private var dragging = false
+    @State private var deleting = false
+    @State private var dragOffset: CGFloat = 0
 
-    init(key: String, defaultPos: CGPoint, lockX: Bool = false,
+    init(key: String, defaultPos: CGPoint, lockX: Bool = false, deleteLabel: String? = nil,
          onSwipeLeft: (() -> Void)? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
+        self.deleteLabel = deleteLabel
         self.onSwipeLeft = onSwipeLeft
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
@@ -2561,31 +2571,63 @@ private struct DraggableFloat<Content: View>: View {
 
     var body: some View {
         GeometryReader { geo in
-            content
-                .position(x: pos.x * geo.size.width, y: pos.y * geo.size.height)
-                .shadow(color: .black.opacity(dragging ? 0.3 : 0.12), radius: 8, y: 3)
-                .scaleEffect(dragging ? 1.08 : 1.0)
-                .animation(.easeOut(duration: 0.12), value: dragging)
-                .gesture(
-                    DragGesture(minimumDistance: 4)
-                        .onChanged { v in
+            ZStack(alignment: .trailing) {
+                // v1.81.4 红色删除卡：大小与卡片相同，卡片左移后从右侧露出
+                if let lbl = deleteLabel {
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(Color.red)
+                        .overlay(
+                            Text(lbl)
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
+                                .padding(.trailing, 24),
+                            alignment: .trailing)
+                }
+                content
+                    .offset(x: dragOffset)
+            }
+            .position(x: pos.x * geo.size.width, y: pos.y * geo.size.height)
+            .shadow(color: .black.opacity(dragging ? 0.3 : 0.12), radius: 8, y: 3)
+            .scaleEffect(dragging ? 1.08 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: dragging)
+            .gesture(
+                DragGesture(minimumDistance: 4)
+                    .onChanged { v in
+                        if deleteLabel != nil, v.translation.width < -8,
+                           abs(v.translation.width) > abs(v.translation.height) {
+                            // 左滑删除模式：卡片跟随左移，露出红色删除卡
+                            deleting = true
+                            dragOffset = v.translation.width
+                        } else {
+                            // 正常拖动（lockX 时仅上下移动）
+                            deleting = false
+                            dragOffset = 0
                             dragging = true
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, v.location.x / geo.size.width)),
                                 y: min(0.96, max(0.04, v.location.y / geo.size.height)))
                         }
-                        .onEnded { v in
-                            dragging = false
-                            if let onSwipeLeft = onSwipeLeft,
-                               v.translation.width < -80,
-                               abs(v.translation.width) > abs(v.translation.height) {
-                                onSwipeLeft()
+                    }
+                    .onEnded { v in
+                        dragging = false
+                        if deleting {
+                            // 左拉过卡片一半宽度即完成删除
+                            let cardW = geo.size.width - 28
+                            if dragOffset < -cardW * 0.5 {
+                                onSwipeLeft?()
                             } else {
-                                UserDefaults.standard.set(pos.x, forKey: "\(key).x")
-                                UserDefaults.standard.set(pos.y, forKey: "\(key).y")
+                                withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
                             }
+                        } else if let onSwipeLeft = onSwipeLeft,
+                                  v.translation.width < -80,
+                                  abs(v.translation.width) > abs(v.translation.height) {
+                            onSwipeLeft()
+                        } else {
+                            UserDefaults.standard.set(pos.x, forKey: "\(key).x")
+                            UserDefaults.standard.set(pos.y, forKey: "\(key).y")
                         }
-                )
+                    }
+            )
         }
     }
 }
