@@ -60,6 +60,11 @@ struct ContentView: View {
     @State private var selectedTab = 0
     /// v1.82 "我的-收藏"搜索过滤
     @State private var favSearch = ""
+    /// v1.86 启动闪屏（全屏黑+白色楷体"骑士地图"，1 秒后淡出）
+    @State private var showSplash = true
+    @State private var splashTask: Task<Void, Never>?
+    /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
+    @State private var tripAutoDismissTask: Task<Void, Never>?
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
@@ -84,18 +89,23 @@ struct ContentView: View {
             if selectedTab == 0 {
                 mapLayer
                 // v1.81.4 全屏天气动画（高德同款）：下雨雨丝/下雪飘雪，透明覆盖不拦截手势
-                weatherFX
+                // v1.86 仅初始地图页/导航态渲染：沉浸模式与巡航模式暂停（省电、不挡视野）
+                if !uiHidden && !model.cruiseMode {
+                    weatherFX
+                }
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
                 if !uiHidden {
-                    // v1.81.2 指南针/路线胶囊/缩放/GPS/图层交通 均可自由拖动，位置持久化（天气条已移除，改为全屏动画）
-                    compassOverlay
-                    // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-                    DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
-                    // 地图缩放 + / - 按钮（含当前定位按钮）
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.06)) { zoomOverlay }
                     // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
-                    // 右上角 GPS 信号按钮（内部已可拖动）
-                    layerTrafficButtons
+                    // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
+                    if !showRouteOverview {
+                        compassOverlay
+                        // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
+                        DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
+                        // 地图缩放 + / - 按钮（含当前定位按钮）
+                        DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.06)) { zoomOverlay }
+                        // 右上角 GPS 信号按钮（内部已可拖动）
+                        layerTrafficButtons
+                    }
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
@@ -148,6 +158,17 @@ struct ContentView: View {
             // v1.80 底部选项卡：仅"我的"页保留（导航主页已合并进底部主卡片，导航/我的按钮在卡片内）
             if !model.navigating && !uiHidden && selectedTab == 1 {
                 bottomTabBar
+            }
+            // v1.86 启动闪屏：全屏黑色 + 白色楷体"骑士地图"，1 秒后淡出进入首页
+            if showSplash {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    Text("骑士地图")
+                        .font(.custom("Kaiti SC", size: 48).weight(.bold))
+                        .foregroundStyle(.white)
+                }
+                .transition(.opacity)
+                .zIndex(999)
             }
         }
         // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
@@ -262,12 +283,33 @@ struct ContentView: View {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
+            // v1.86 启动闪屏 1 秒后自动跳转首页（淡出）
+            splashTask = Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await MainActor.run {
+                    withAnimation(.easeOut(duration: 0.4)) { showSplash = false }
+                }
+            }
             // v1.85 指南针/GPS 默认位置上移到最高处：仅一次重置旧拖动记忆（之后用户拖动仍会持久化）
             if !UserDefaults.standard.bool(forKey: "uiPosV185Applied") {
                 for k in ["compass.x", "compass.y", "zoom.x", "zoom.y"] {
                     UserDefaults.standard.removeObject(forKey: k)
                 }
                 UserDefaults.standard.set(true, forKey: "uiPosV185Applied")
+            }
+        }
+        // v1.86 行程卡出现 5 秒后自动收起回首页（高德式；用户已操作则取消）
+        .onChange(of: model.tripSummary != nil) { _, showing in
+            tripAutoDismissTask?.cancel()
+            if showing {
+                tripAutoDismissTask = Task {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    await MainActor.run {
+                        if model.tripSummary != nil {
+                            dismissTripAndReset()
+                        }
+                    }
+                }
             }
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
@@ -801,7 +843,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.85")
+                        Text("v1.86")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -868,8 +910,9 @@ struct ContentView: View {
     private var bottomOverlay: some View {
         // v1.81.2 底部每张卡均可自由拖动，位置持久化（默认贴底序列）
         // v1.81.3 地点卡/路线规划卡出现时隐藏搜索主卡；两卡左滑关闭后恢复
+        // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
-            if !model.navigating {
+            if !model.navigating && !model.cruiseMode {
                 if let t = tipCard {
                     DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                                    deleteLabel: "删除",
@@ -1965,11 +2008,11 @@ struct ContentView: View {
             if searchFocused && searchText.isEmpty {
                 quickAccessPanel
             }
-            if showSuggestions && !suggestions.isEmpty {
+            if showSuggestions && !suggestions.isEmpty && !model.navigating {
                 suggestionsList
             }
-            // 高德 POI 联想候选（填写高德 Key 后显示，点击直接定位）
-            if showSuggestions && !onlineTips.isEmpty {
+            // 高德 POI 联想候选（填写高德 Key 后显示，点击直接定位；v1.86 导航中不弹出避免挡导航）
+            if showSuggestions && !onlineTips.isEmpty && !model.navigating {
                 onlineTipsList
             }
             tabButtonsRow
