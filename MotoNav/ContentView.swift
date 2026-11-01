@@ -789,8 +789,8 @@ struct ContentView: View {
                     DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                                    onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
                 } else if !model.routeChoices.isEmpty {
-                    // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡）
-                    DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.60),
+                    // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
+                    DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90),
                                    onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
                 } else {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
