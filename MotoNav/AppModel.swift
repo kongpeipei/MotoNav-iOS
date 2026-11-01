@@ -1778,6 +1778,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             navigating = false
             UIApplication.shared.isIdleTimerDisabled = false // 恢复自动锁屏
             navigateFollowTick += 1
+            routeChoices = [] // v1.85 结束导航隐藏路线推荐卡，只保留行程卡（轻点卡片外任意处回首页）
+            selectedRouteIdx = 0
             finishTrip()
             endLiveActivity()
             speak("导航结束")

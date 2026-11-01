@@ -92,18 +92,17 @@ struct ContentView: View {
                     // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
                     DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
                     // 地图缩放 + / - 按钮（含当前定位按钮）
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.34)) { zoomOverlay }
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.06)) { zoomOverlay }
+                    // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
                     // 右上角 GPS 信号按钮（内部已可拖动）
                     layerTrafficButtons
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     locateButtonOnly
                 }
-                // 导航中悬浮退出按钮（可上下移动；左拉删除=退出导航；v1.84 全览时隐藏，取消全览恢复）
+                // 导航中悬浮退出按钮（仅上下移动；v1.85 取消左滑删除，全览时隐藏，取消全览恢复）
                 if model.navigating && !showRouteOverview {
-                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true,
-                                   deleteLabel: "删除",
-                                   onSwipeLeft: { haptic(); model.toggleNavigation() }) { exitNavOverlay }
+                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true) { exitNavOverlay }
                 }
                 // v1.81.4 导航全览操作条（高德同款：固定全览 / 取消全览(13s)）
                 if model.navigating && showRouteOverview {
@@ -126,7 +125,14 @@ struct ContentView: View {
                 if !uiHidden || model.navigating {
                     bottomOverlay
                 }
-                // v1.81.4 本次行程卡：结束导航后显示（白底卡，字号同退出导航卡，可上下移动/左滑关闭）
+                // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
+                if model.tripSummary != nil {
+                    Color.black.opacity(0.001)
+                        .contentShape(Rectangle())
+                        .ignoresSafeArea()
+                        .onTapGesture { haptic(); dismissTripAndReset() }
+                }
+                // v1.81.4 本次行程卡：结束导航后显示（白底卡，可上下移动；v1.85 保留左滑关闭，另支持轻点卡片外回首页）
                 if let s = model.tripSummary {
                     DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
                                    deleteLabel: "删除",
@@ -256,6 +262,13 @@ struct ContentView: View {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
             model.checkClipboard()
+            // v1.85 指南针/GPS 默认位置上移到最高处：仅一次重置旧拖动记忆（之后用户拖动仍会持久化）
+            if !UserDefaults.standard.bool(forKey: "uiPosV185Applied") {
+                for k in ["compass.x", "compass.y", "zoom.x", "zoom.y"] {
+                    UserDefaults.standard.removeObject(forKey: k)
+                }
+                UserDefaults.standard.set(true, forKey: "uiPosV185Applied")
+            }
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
         .onChange(of: scenePhase) { phase in
@@ -788,7 +801,7 @@ struct ContentView: View {
                     HStack {
                         Label("版本", systemImage: "info.circle")
                         Spacer()
-                        Text("v1.84")
+                        Text("v1.85")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     }
@@ -1460,9 +1473,7 @@ struct ContentView: View {
                         exitCellDivider
                         exitStatusCell("\(snaps)", "抓拍")
                         exitCellDivider
-                        exitStatusCell(arriveTxt, "到达")
-                        exitCellDivider
-                        // v1.81.4 右侧全览图标（高德同款）：点击缩放显示全程路线
+                        // v1.85 到达时间改为浅灰色小字放卡片下方一行（原右侧"到达"格移除）
                         Button {
                             haptic()
                             startRouteOverview()
@@ -1474,6 +1485,15 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    // v1.85 预计到达：浅灰色小字，显示在卡片下方整行
+                    HStack {
+                        Text("预计 \(arriveTxt) 到达")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
                     .padding(.vertical, 12)
                     .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
                     .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
@@ -1558,9 +1578,9 @@ struct ContentView: View {
         model.clearRoute()
     }
 
-    /// 退出导航状态卡分格（v1.81.4 放大，对齐高德底部卡）
+    /// 退出导航状态卡分格（v1.85 高度扩大 1.5 倍，对齐高德底部大卡）
     private var exitCellDivider: some View {
-        Divider().frame(height: 46)
+        Divider().frame(height: 69)
     }
 
     /// v1.81.4 本次行程卡（结束导航后显示）：目的地 + 里程/用时/平均速度，字号同退出导航卡
@@ -1594,11 +1614,11 @@ struct ContentView: View {
         .padding(.horizontal, 14)
     }
 
-    /// 退出导航状态卡单格（大字+小标签，白底黑字；v1.81.4 字号放大）
+    /// 退出导航状态卡单格（大字+小标签，白底黑字；v1.85 字号随卡片放大）
     private func exitStatusCell(_ big: String, _ small: String) -> some View {
         VStack(spacing: 2) {
             Text(big)
-                .font(.system(size: 24, weight: .heavy))
+                .font(.system(size: 28, weight: .heavy))
                 .foregroundStyle(.black)
             Text(small)
                 .font(.caption)
@@ -1676,7 +1696,8 @@ struct ContentView: View {
     /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
     private var compassOverlay: some View {
         // v1.80 指南针可自由拖动，位置持久化（下次打开保持）
-        DraggableFloat(key: "compass", defaultPos: CGPoint(x: 0.10, y: 0.24)) {
+        // v1.85 默认位置移到最高处（屏幕顶部）
+        DraggableFloat(key: "compass", defaultPos: CGPoint(x: 0.10, y: 0.05)) {
             ZStack {
                 Circle().fill(.ultraThinMaterial)
                 Circle().strokeBorder(.white.opacity(0.5), lineWidth: 1.5)
