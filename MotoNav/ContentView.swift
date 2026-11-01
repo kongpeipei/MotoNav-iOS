@@ -437,9 +437,6 @@ struct ContentView: View {
             cruiseTick: model.cruiseTick,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
-            trafficSpans: model.trafficSpans,
-            footprint: model.footprintPreview,
-            teamMembers: team.others,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -520,6 +517,9 @@ struct ContentView: View {
             northUpTick: northUpTick,
             tipPolygon: tipPolygon,
             tipFit: tipCard.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
+            trafficSpans: model.trafficSpans,
+            footprint: model.footprintPreview,
+            teamMembers: team.others,
             onMapLoad: { ok, err in
                 if ok {
                     mapLoadFailed = false

@@ -178,7 +178,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var speechLevel: Int = UserDefaults.standard.object(forKey: "speechLevel") as? Int ?? 1 {
         didSet { UserDefaults.standard.set(speechLevel, forKey: "speechLevel") }
     }
-    var speech: SpeechLevel { SpeechLevel(rawValue: speechLevel) ?? .standard }
+    /// v2.00 命名避开 AVSpeechSynthesizer 实例（speech），否则同名冲突
+    var speechMode: SpeechLevel { SpeechLevel(rawValue: speechLevel) ?? .standard }
     /// 规划时优先避开高速/高架（摩托友好）
     @Published var avoidHighway: Bool = UserDefaults.standard.object(forKey: "avoidHighway") as? Bool ?? false {
         didSet { UserDefaults.standard.set(avoidHighway, forKey: "avoidHighway") }
@@ -2238,7 +2239,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 导航中：向前 500 米内出现禁摩/隧道/高架等风险段时播报（每段只报一次）
     private func checkRiderRisks(at coord: CLLocationCoordinate2D) {
-        guard navigating, !riderRisks.isEmpty, speech != .simple else { return }
+        guard navigating, !riderRisks.isEmpty, speechMode != .simple else { return }
         let remain = route.last.map { distanceM(coord, $0) } ?? 0
         let traveled = max(0, routeDistanceM - Int(remain))
         for r in riderRisks where r.ahead(of: traveled) {
@@ -2364,14 +2365,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let text = turnText(t)
             // 高德式两段播报：远提示（800 米级，含路名）→ 近提示（150 米内）
             // v1.99 播报分级：简洁只报近点；标准/详细保留 800 米远提示，详细再加剩余里程
-            if speech.farPrompt && best < 900 && !farAnnounced.contains(idx) {
+            if speechMode.farPrompt && best < 900 && !farAnnounced.contains(idx) {
                 farAnnounced.insert(idx)
                 let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
                 speak("前方\(Int(best))米\(text)\(road)")
                 status = "导航：前方\(Int(best))米\(text)\(road) · 余\(Int(toDest / 1000))公里"
             } else if best < 150 {
                 lastTurnSpoken = idx
-                if speech.verbose {
+                if speechMode.verbose {
                     let tail = toDest > 1000 ? "，剩余\(Int(toDest / 1000))公里" : ""
                     speak("\(text)，距您\(Int(best))米\(tail)")
                 } else {
