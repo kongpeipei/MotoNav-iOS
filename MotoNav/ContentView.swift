@@ -4845,7 +4845,7 @@ private struct DraggableFloat<Content: View>: View {
                         GeometryReader { cg in
                             Color.clear
                                 .onAppear { contentSize = cg.size }
-                                .onChange(of: cg.size) { _, s in contentSize = s }
+                                .onChange(of: cg.size) { _, newSize in contentSize = newSize }
                         }
                     )
             }

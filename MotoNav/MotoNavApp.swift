@@ -42,7 +42,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     /// 那个 Task 需要主线程空闲才能跑；一旦视图树在重算，它永远排不上队，
     /// 表现就是「黑底 + 骑士地图四个字，一直不进主界面」。
     /// 现在改成盖在 window 上的一个 UIView，用 UIView.animate 淡出：
-    /// 动画由 CoreAnimation 驱动，不依赖 SwiftUI 的任何状态更新，1 秒后必定消失。
+    /// 动画由 CoreAnimation 驱动，不依赖 SwiftUI 的任何状态更新，2.25 秒后必定消失（v2.24）。
     private func installSplash(on win: UIWindow) {
         let splash = UIView(frame: win.bounds)
         splash.backgroundColor = .black
@@ -50,21 +50,43 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // 不拦截触摸：底下的主界面可以先加载、可以先点
         splash.isUserInteractionEnabled = false
 
+        // v2.24 标题字号 48 → 64（更醒目），仍用同一套楷体
+        let titleSize: CGFloat = 64
         let label = UILabel()
         label.text = "骑士地图"
         label.textColor = .white
         // 楷体：不同系统版本 PostScript 名不一样，逐个兜底，最后用系统粗体
-        label.font = UIFont(name: "STKaitiSC-Regular", size: 48)
-            ?? UIFont(name: "Kaiti SC", size: 48)
-            ?? UIFont.systemFont(ofSize: 48, weight: .bold)
+        label.font = UIFont(name: "STKaitiSC-Regular", size: titleSize)
+            ?? UIFont(name: "Kaiti SC", size: titleSize)
+            ?? UIFont.systemFont(ofSize: titleSize, weight: .bold)
         label.sizeToFit()
         label.center = CGPoint(x: splash.bounds.midX, y: splash.bounds.midY)
         label.autoresizingMask = [.flexibleTopMargin, .flexibleBottomMargin,
                                  .flexibleLeftMargin, .flexibleRightMargin]
         splash.addSubview(label)
+
+        // v2.24 右下角版本号：与标题同字体（楷体），字号按标题的比例取小一号，
+        // 颜色略淡（不抢标题），位置离屏幕右下角各留 24pt 安全边
+        let versionLabel = UILabel()
+        versionLabel.text = "v" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.24")
+        versionLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        versionLabel.font = UIFont(name: "STKaitiSC-Regular", size: titleSize * 0.42)
+            ?? UIFont(name: "Kaiti SC", size: titleSize * 0.42)
+            ?? UIFont.systemFont(ofSize: titleSize * 0.42, weight: .medium)
+        versionLabel.sizeToFit()
+        versionLabel.textAlignment = .right
+        versionLabel.frame.origin = CGPoint(
+            x: splash.bounds.width - versionLabel.bounds.width - 24,
+            y: splash.bounds.height - versionLabel.bounds.height - 24)
+        versionLabel.autoresizingMask = [.flexibleLeftMargin, .flexibleTopMargin]
+        splash.addSubview(versionLabel)
+
         win.addSubview(splash)
 
-        UIView.animate(withDuration: 0.35, delay: 0.9, options: [.curveEaseOut]) {
+        // v2.24 启动动画延长 1 秒：原来 delay 0.9 + 淡出 0.35 ≈ 1.25 秒，
+        // 现在 delay 1.9 + 淡出 0.35 ≈ 2.25 秒。
+        // 淡出仍由 CoreAnimation 驱动，不依赖 SwiftUI 状态更新，到点必定消失。
+        UIView.animate(withDuration: 0.35, delay: 1.9, options: [.curveEaseOut]) {
             splash.alpha = 0
         } completion: { _ in
             splash.removeFromSuperview()
