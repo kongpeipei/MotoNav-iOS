@@ -40,6 +40,17 @@ enum StartupLog {
         mark(stage, "ERROR: \(err.localizedDescription)")
     }
 
+    /// 只记第一次（用于 body / updateUIView 这类每次刷新都会跑的位置，避免刷屏）
+    private static var onceKeys = Set<String>()
+    private static let onceLock = NSLock()
+    static func markOnce(_ stage: String, _ detail: String = "") {
+        onceLock.lock()
+        let first = onceKeys.insert(stage).inserted
+        onceLock.unlock()
+        guard first else { return }
+        mark(stage, detail)
+    }
+
     private static func timestamp() -> String {
         let f = DateFormatter()
         f.dateFormat = "MM-dd HH:mm:ss.SSS"

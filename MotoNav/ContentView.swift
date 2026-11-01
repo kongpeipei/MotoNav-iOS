@@ -104,6 +104,8 @@ struct ContentView: View {
     @State private var mapRetried = false
 
     var body: some View {
+        // v2.05 诊断：body 求值到了没（只记第一次，避免每秒刷屏）
+        let _ = StartupLog.markOnce("body-enter")
         ZStack {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
@@ -972,7 +974,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.05")
+                Text("v2.06")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }

@@ -105,6 +105,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     var hotCameraId: Int = 0
 
     func makeUIView(context: Context) -> MKMapView {
+        StartupLog.mark("map-make")
         let map = MKMapView()
         map.showsUserLocation = true
         map.showsCompass = false // 使用自绘指南针（左上角）
@@ -149,6 +150,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        StartupLog.markOnce("map-update")
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
         context.coordinator.onPoiMoved = onPoiMoved
@@ -550,6 +552,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.zoom(map, by: 2.0, center: reg.center)
             }
         }
+        StartupLog.markOnce("map-update-done")
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }

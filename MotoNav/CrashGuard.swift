@@ -87,4 +87,37 @@ enum CrashGuard {
             signal(s, motonavSignalHandler)
         }
     }
+
+    // MARK: - v2.05 启动心跳 + 主线程探针
+
+    /// 后台线程定期打点，并在第 8 秒探测主线程是否还在跑。
+    ///
+    /// 用途：如果 startup.log 里停在某一步、又没有任何 [崩溃] 行，只有两种可能 ——
+    ///   · 进程还活着，但主线程被死循环/死锁占住（心跳有、探针报 BLOCKED）
+    ///   · 进程被系统静默杀掉（心跳到某一秒就断了，且没有 BLOCKED）
+    /// 这一条能把"卡死"和"被杀"彻底分开，不用再猜。
+    static func startHeartbeat() {
+        for (delay, name) in [(1.0, "alive-1s"), (3.0, "alive-3s"), (8.0, "alive-8s"), (16.0, "alive-16s")] {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
+                StartupLog.mark(name)
+            }
+        }
+        // 主线程探针：往主队列投一个任务，1.2 秒内没被执行 → 主线程卡死
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 8) {
+            let flag = ProbeFlag()
+            DispatchQueue.main.async {
+                flag.ran = true
+                StartupLog.mark("main-loop-alive", "8 秒时主线程仍在跑消息循环")
+            }
+            Thread.sleep(forTimeInterval: 1.2)
+            if !flag.ran {
+                StartupLog.mark("main-BLOCKED", "8 秒后主线程仍未执行排队任务，首屏卡死")
+            }
+        }
+    }
+}
+
+/// 跨线程传一个 bool（只为诊断，不需要严格同步）
+private final class ProbeFlag {
+    var ran = false
 }
