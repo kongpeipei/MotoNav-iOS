@@ -1386,8 +1386,13 @@ final class AmapTileRenderer: MKOverlayRenderer {
             .appendingPathComponent("Tiles/offline", isDirectory: true)
         return u
     }()
-    private let ioQueue = DispatchQueue(label: "amap.tile.io")
+    /// v2.16 并发队列：旧版是串行队列，一屏 200 块瓦片要排队做 200 次"查磁盘缓存"，
+    /// 排在后面的瓦片要等前面全部 stat/read 完才开始发请求，放大时白白多等几百毫秒。
+    private let ioQueue = DispatchQueue(label: "amap.tile.io", qos: .userInitiated,
+                                       attributes: .concurrent)
     private static let diskMaxFiles = 1200
+    /// v2.16 并发上限 12 → 24：4 个子域各 6 个并发，正好吃满 URLSession 单域默认连接数
+    private static let maxInflight = 24
 
     /// v2.00 瓦片直铺（关键修复）
     ///
@@ -1408,9 +1413,11 @@ final class AmapTileRenderer: MKOverlayRenderer {
 
         // v2.14 上限保护：极端缩放或初始 mapRect 抖动时，可见范围可能大到离谱。
         // 旧实现在这里会展开成上万次循环（每块拼字符串 + 两次加锁），
-        // 渲染线程和主线程一起被拖死。超过 400 块就这一帧不画，等下次回调。
+        // 渲染线程和主线程一起被拖死。
+        // v2.16 阈值 400 → 600：3D 俯视/全览时 400 很容易被打到，整帧直接不画，
+        // 表现出来就是"一放大/一倾斜就白屏好几秒"。
         let total = (x1 - x0 + 1) * (y1 - y0 + 1)
-        guard total <= 400 else { return }
+        guard total <= 600 else { return }
 
         // v2.14 一次加锁收集整帧需求。
         //
@@ -1420,6 +1427,10 @@ final class AmapTileRenderer: MKOverlayRenderer {
         // 说明主线程的绝大部分时间耗在锁和同步 IO 上，首帧始终出不来。
         var drawList: [(CGImage, CGRect)] = []
         drawList.reserveCapacity(total)
+        /// v2.16 父级兜底：本层瓦片没到之前，用已缓存的上一级（最多上溯 3 级）放大铺上
+        var upscaleList: [(CGImage, CGRect)] = []
+        var upscaleSeen = Set<Int>()
+        upscaleList.reserveCapacity(64)
         var fetchList: [(x: Int, y: Int, key: String, rect: MKMapRect)] = []
         lock.lock()
         let night = dark
@@ -1430,7 +1441,21 @@ final class AmapTileRenderer: MKOverlayRenderer {
                                       width: per, height: per)
                 if let img = cache[key], let cg = img.cgImage {
                     drawList.append((cg, rect(for: mrect)))
-                } else if !pending.contains(key) && !failedCooling.contains(key) {
+                    continue
+                }
+                // 放大时新一层的瓦片全都要重新下载，网络往返期间屏幕上就是一片空白。
+                // 这里退一步用上一层的图放大顶住（同一张父瓦片只画一次，4 个子块共用），
+                // 清图一到就被本层瓦片盖回去 —— 用户看到的是"先糊后清"，而不是"先白后清"。
+                if let a = ancestorLocked(z: z, x: x, y: y, night: night) {
+                    let id = (a.z << 42) ^ (a.y << 21) ^ a.x
+                    if upscaleSeen.insert(id).inserted {
+                        let aper = per * Double(1 << a.depth)
+                        let arect = MKMapRect(x: Double(a.x) * aper, y: Double(a.y) * aper,
+                                              width: aper, height: aper)
+                        upscaleList.append((a.image, rect(for: arect)))
+                    }
+                }
+                if !pending.contains(key) && !failedCooling.contains(key) {
                     pending.insert(key)
                     fetchList.append((x, y, key, mrect))
                 }
@@ -1438,20 +1463,50 @@ final class AmapTileRenderer: MKOverlayRenderer {
         }
         lock.unlock()
 
+        // 顺序：先父级放大图打底，再盖本层已缓存的清晰瓦片
+        if !upscaleList.isEmpty {
+            ctx.interpolationQuality = .low
+            for (cg, r) in upscaleList { ctx.draw(cg, in: r) }
+        }
         for (cg, r) in drawList { ctx.draw(cg, in: r) }
         guard !fetchList.isEmpty else { return }
 
-        // 先请求靠近屏幕中心的瓦片：旧实现按行列顺序，中心往往最后才到，
-        // 3D 俯视时表现为中间一片空白（"雪花点"）
+        // v2.16 由近及远：中心一圈立即发（旧版只发中心 5×5，其余全部压 0.15s 延迟，
+        // 放大后必然先看到中心一小块、四周长时间空白），剩下的才排延迟队列。
         let cx = Double(x0 + x1) / 2, cy = Double(y0 + y1) / 2
-        for f in fetchList {
+        func dist(_ f: (x: Int, y: Int, key: String, rect: MKMapRect)) -> Double {
             let dx = Double(f.x) - cx, dy = Double(f.y) - cy
-            if dx * dx + dy * dy < 25 {
+            return dx * dx + dy * dy
+        }
+        let ordered = fetchList.sorted { dist($0) < dist($1) }
+        let immediateCap = 48
+        for (i, f) in ordered.enumerated() {
+            if i < immediateCap {
                 fetchTile(f.x, f.y, z, f.key, f.rect)
             } else {
                 queueTile(f.x, f.y, z, f.key, f.rect)
             }
         }
+    }
+
+    /// v2.16 往上找最近一层已缓存的瓦片（z-1 / z-2 / z-3），用于放大时的低清兜底。
+    /// 调用方必须已持锁。
+    private func ancestorLocked(z: Int, x: Int, y: Int, night: Bool) -> AncestorTile? {
+        var cz = z, cx = x, cy = y, depth = 0
+        while depth < 3, cz > Self.zMin {
+            cz -= 1; cx /= 2; cy /= 2; depth += 1
+            if let cg = cache["\(night ? "n" : "d")-\(cz)-\(cx)-\(cy)"]?.cgImage {
+                return AncestorTile(image: cg, x: cx, y: cy, z: cz, depth: depth)
+            }
+        }
+        return nil
+    }
+
+    private struct AncestorTile {
+        let image: CGImage
+        let x: Int, y: Int, z: Int
+        /// 与当前层的层数差（1 = 父级，2 = 祖父级…），用于把父瓦片画到正确的 mapRect
+        let depth: Int
     }
 
     /// v2.14 重绘合并：一帧内最多触发一次，并且只重绘变化的那一小块。
@@ -1497,7 +1552,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
         if queuedTiles.contains(key) { lock.unlock(); return }
         queuedTiles.insert(key)
         lock.unlock()
-        ioQueue.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        ioQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             self.queuedTiles.remove(key)
@@ -1541,7 +1596,8 @@ final class AmapTileRenderer: MKOverlayRenderer {
 
             // 2) 网络
             self.lock.lock()
-            if self.inflight >= 12 {
+            if self.inflight >= Self.maxInflight {
+                // 并发满了：撤掉 pending 让下一帧重投（不发定时器，避免一屏几百个定时块）
                 self.pending.remove(key)
                 self.lock.unlock()
                 return

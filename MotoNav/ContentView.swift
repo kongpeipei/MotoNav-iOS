@@ -84,6 +84,12 @@ struct ContentView: View {
     @State private var pendingCoord: CLLocationCoordinate2D?
     @State private var showTypePicker = false
     @State private var poiManagePoi: Poi?
+    /// v2.15 长按「违法拍照点」弹出的专用卡片：只做删除 / 更改类型 / 分享
+    @State private var cameraPoiCard: Poi?
+    /// 更改拍照类型的选择框
+    @State private var showCameraKindPicker = false
+    /// 删除拍照点前的二次确认
+    @State private var showCameraPoiDeleteConfirm = false
     @State private var headingNeedleTick = 0
     /// 待导航目标（搜索预览 / 点击地图地点）
     @State private var goHereName: String?
@@ -207,6 +213,10 @@ struct ContentView: View {
                 // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
                 if !uiHidden {
                     AnyView(bottomOverlay)
+                } else if !model.navigating {
+                    // v2.16 沉浸态长按：整套 UI 继续隐藏，只把"长按出来的那张卡"亮出来
+                    // （旧版沉浸态把 bottomOverlay 整块藏了，长按后卡片被一起藏掉，看起来像没反应）
+                    AnyView(immersiveCardLayer)
                 }
                 // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
                 if model.tripSummary != nil {
@@ -245,7 +255,16 @@ struct ContentView: View {
         }
         // v1.97 开始规划路线（点卡片"路线"）时也退出常用地点设置态
         .onChange(of: model.routeChoices.isEmpty) { _, empty in
-            if !empty { slotTarget = nil }
+            if !empty {
+                slotTarget = nil
+                // v2.16 沉浸态下点了"导航"：路线卡不在沉浸层里渲染，
+                // 必须先把整套 UI 恢复，否则点完像没反应
+                if uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
+            }
+        }
+        // v2.16 同理：沉浸态下点了"搜周边"，类别结果条要能看到
+        .onChange(of: model.categoryResults.isEmpty) { _, empty in
+            if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
@@ -308,6 +327,22 @@ struct ContentView: View {
                 Button(t.label) { addPoiAtPending(type: t) }
             }
             Button("取消", role: .cancel) {}
+        }
+        // v2.15 长按拍照点 →「更改」：四种类型（顺序按骑手最常被拍的来排）
+        .confirmationDialog("更改拍照类型", isPresented: $showCameraKindPicker) {
+            ForEach(cameraKindsForPicker, id: \.self) { t in
+                Button(cameraKindTitle(t)) { changeCameraPoiType(t) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(cameraPoiCard.map { "当前：\(cameraKindTitle($0.type))" } ?? "")
+        }
+        // v2.15 长按拍照点 →「删除」：不可撤销，先确认一次
+        .confirmationDialog("删除这个拍照点？", isPresented: $showCameraPoiDeleteConfirm) {
+            Button("删除", role: .destructive) { deleteCameraPoi() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除后不再提醒，且无法恢复")
         }
         // v1.69 搜索面板"+"选点命名弹窗
         .alert("命名快捷卡片", isPresented: $showQuickNameAlert) {
@@ -452,7 +487,14 @@ struct ContentView: View {
                 showTapPlace(coord)
             },
             onPoiLongPress: { p in
-                poiManagePoi = p
+                // v2.15：长按「违法拍照点」走专用卡片（删除 / 更改类型 / 分享），
+                // 其它点位仍用原来的「点位操作」菜单（导航 / 收藏 / 编辑 / 删除）
+                if p.type.isCamera {
+                    haptic()
+                    cameraPoiCard = p
+                } else {
+                    poiManagePoi = p
+                }
             },
             onPoiMoved: { p, nLat, nLon in
                 model.updatePoi(id: p.id, type: p.type, name: p.name, lat: nLat, lon: nLon, radiusM: p.radiusM)
@@ -464,9 +506,7 @@ struct ContentView: View {
             },
             onPlaceSelect: { pl in
                 // v1.96 轻点地点名文字 → 直接弹地点介绍卡（原先是只设"去这里"预览，点了几乎没反应）
-                if uiHidden {
-                    withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
-                }
+                // v2.16 沉浸态下不再强制退出沉浸：卡片单独渲染，其余 UI 保持隐藏
                 showTapPlace(CLLocationCoordinate2D(latitude: pl.lat, longitude: pl.lon), seed: pl.name)
             },
             onPlaceLongPress: { pl in
@@ -495,7 +535,14 @@ struct ContentView: View {
                     return
                 }
                 // 沉浸态下轻点＝恢复界面（否则隐藏 UI 后没有出口）
+                // v2.16：若此时正亮着长按卡，先把卡收掉（沉浸保持），再点一次才恢复整套 UI
                 if uiHidden {
+                    if tapPlace != nil || cameraPoiCard != nil || tipCard != nil {
+                        cameraPoiCard = nil
+                        closeTapPlace()
+                        closeTipCard()
+                        return
+                    }
                     withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
                     return
                 }
@@ -1314,15 +1361,8 @@ struct ContentView: View {
         // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
             if !model.navigating && !model.cruiseMode {
-                if let tp = tapPlace {
-                    // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
-                    DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
-                                   deleteLabel: "关闭",
-                                   onSwipeLeft: { closeTapPlace() }) { AnyView(tapPlaceCard(tp)) }
-                } else if let t = tipCard {
-                    DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
-                                   deleteLabel: "删除",
-                                   onSwipeLeft: { closeTipCard() }) { AnyView(tipInfoCard(t)) }
+                if cameraPoiCard != nil || tapPlace != nil || tipCard != nil {
+                    AnyView(poiCardStack)
                 } else if !model.routeChoices.isEmpty {
                     // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
                     // v1.84 仅上下移动，除非左拉删除（左拉时允许左右移动触发删除）
@@ -1335,7 +1375,7 @@ struct ContentView: View {
                     // 地图上再挂一条既挡视线又重复
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
-                if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
+                if tapPlace == nil && tipCard == nil && cameraPoiCard == nil && model.routeChoices.isEmpty {
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { AnyView(bottomMainCard) }
                 }
             } else {
@@ -1343,6 +1383,34 @@ struct ContentView: View {
                 DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.70)) { AnyView(turnAheadCard) }
                 DraggableFloat(key: "snapalert", defaultPos: CGPoint(x: 0.5, y: 0.80)) { AnyView(snapAlertCard) }
             }
+        }
+    }
+
+    /// 长按/轻点出来的卡（拍照点卡 / 地点卡 / 提示点卡）——三者互斥，只出一张。
+    /// v2.16 抽成独立视图，好让「沉浸态」也能单独把这张卡亮出来而不带其它 UI。
+    @ViewBuilder private var poiCardStack: some View {
+        if let cp = cameraPoiCard {
+            // v2.15 长按违法拍照点：专用卡（分享在右上角，下面只有「更改类型」「删除」）
+            DraggableFloat(key: "campoicard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+                           deleteLabel: "关闭",
+                           onSwipeLeft: { cameraPoiCard = nil }) { AnyView(cameraPoiCardView(cp)) }
+        } else if let tp = tapPlace {
+            // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
+            DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+                           deleteLabel: "关闭",
+                           onSwipeLeft: { closeTapPlace() }) { AnyView(tapPlaceCard(tp)) }
+        } else if let t = tipCard {
+            DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+                           deleteLabel: "删除",
+                           onSwipeLeft: { closeTipCard() }) { AnyView(tipInfoCard(t)) }
+        }
+    }
+
+    /// v2.16 沉浸态卡片层：沉浸模式下长按地图（或点地点名）依然要出完整卡片，
+    /// 但搜索卡、类别条、底部导航按钮一律不恢复——骑手不被打断视野。
+    @ViewBuilder private var immersiveCardLayer: some View {
+        ZStack {
+            AnyView(poiCardStack)
         }
     }
 
@@ -1409,6 +1477,172 @@ struct ContentView: View {
     }
 
     /// 地点介绍卡：名称 / 类型 / 地址 / 距离 / 收藏·搜周边·标记·分享 / 导航
+    /// v2.15 更改类型时的候选，顺序按骑手最常被拍的来排：闯红灯 → 超速 → 压线 → 禁摩
+    private var cameraKindsForPicker: [PoiType] { [.RED_LIGHT, .SPEED, .LANE, .RESTRICTION] }
+
+    /// v2.15 四个短标签（"限行/禁摩"在骑手语境里就是"禁摩"，列表和卡片统一用短词）
+    private func cameraKindTitle(_ t: PoiType) -> String {
+        switch t {
+        case .RED_LIGHT: return "闯红灯"
+        case .SPEED: return "超速"
+        case .LANE: return "压线"
+        case .RESTRICTION: return "禁摩"
+        default: return t.label
+        }
+    }
+
+    /// v2.15 长按「违法拍照点」专用卡。
+    ///
+    /// 与地点卡分开做的原因：地点卡是"去看看/去那里"的语义（收藏、导航、设为家/公司），
+    /// 而自己新增的拍照点只关心三件事 —— 这个点拍什么、改类型、删掉。
+    /// 分享按钮保留，按用户要求放在卡片右上角（关闭键左边）。
+    private func cameraPoiCardView(_ p: Poi) -> some View {
+        // 用 model.pois 里的最新值，改动类型后卡片能立刻反映出来
+        let live = model.pois.first(where: { $0.id == p.id }) ?? p
+        let tint = Color(live.type.color)
+        return VStack(spacing: 0) {
+            // ── 头部：类型图标 + 名称 + 右上角分享/关闭 ──
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(tint.opacity(0.14))
+                    Image(systemName: live.type.alertIcon)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+                .frame(width: 38, height: 38)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(live.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(cameraKindTitle(live.type))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(tint)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(tint.opacity(0.12), in: Capsule())
+                        if let d = distText(live.lat, live.lon) {
+                            Text(d)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Spacer(minLength: 4)
+
+                // 分享（保留原功能，位置按用户要求放到卡片右上方）
+                Button {
+                    haptic()
+                    PlaceShare.present(PlaceShare.payload(name: live.name,
+                                                          address: "",
+                                                          type: live.type.label,
+                                                          road: "",
+                                                          lat: live.lat, lon: live.lon))
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    haptic()
+                    cameraPoiCard = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 19))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
+            Divider()
+
+            // ── 操作：更改类型 / 删除 ──
+            HStack(spacing: 10) {
+                Button {
+                    haptic()
+                    showCameraKindPicker = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("更改类型")
+                            .font(.subheadline.bold())
+                    }
+                    .foregroundStyle(tint)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    haptic()
+                    showCameraPoiDeleteConfirm = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "trash.fill")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("删除")
+                            .font(.subheadline.bold())
+                    }
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+        }
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.black.opacity(0.06))
+        )
+        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .padding(.horizontal, 16)
+    }
+
+    /// v2.15 改类型：写回模型后卡片跟着刷新（Poi 是值类型，重新赋一次）
+    private func changeCameraPoiType(_ t: PoiType) {
+        guard let p = cameraPoiCard else { return }
+        guard p.type != t else { return }
+        let newName = autoRenameForType(p.name, to: t)
+        model.updatePoi(id: p.id, type: t, name: newName, lat: p.lat, lon: p.lon, radiusM: p.radiusM)
+        var updated = p
+        updated.type = t
+        updated.name = newName
+        cameraPoiCard = updated
+        model.status = "已改为「\(cameraKindTitle(t))」拍照"
+    }
+
+    /// 点位如果是「添加违法拍照」时自动命名的（地图新增闯红灯拍照点），
+    /// 改类型时把名字里的类型一起换掉，否则会出现标题写"闯红灯"、标签标"超速"的矛盾。
+    /// 用户自己改过名字的（不以"地图新增"开头）一律不动。
+    private func autoRenameForType(_ name: String, to t: PoiType) -> String {
+        guard name.hasPrefix("地图新增") else { return name }
+        return "地图新增\(t.label)点"
+    }
+
+    /// v2.15 删除拍照点
+    private func deleteCameraPoi() {
+        guard let p = cameraPoiCard else { return }
+        model.deletePoi(id: p.id)
+        cameraPoiCard = nil
+        model.status = "已删除拍照点「\(p.name)」"
+    }
+
     private func tapPlaceCard(_ p: TapPlaceInfo) -> some View {
         // v2.02 重排：信息（名称/地址/距离）在上，操作按"次要图标 → 主按钮 → 上报"三层，
         // 「添加违法拍照」固定放在卡片最下方（原来藏在地图长按菜单里，几乎没人发现）
