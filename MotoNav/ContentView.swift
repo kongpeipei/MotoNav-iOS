@@ -164,23 +164,10 @@ struct ContentView: View {
                 }
                 // v1.66：沉浸模式（uiHidden）下隐藏全部 UI，只留当前定位按钮
                 if !uiHidden {
-                    // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部，与导航/巡航/初始各界面一致）
-                    // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
-                    if !showRouteOverview {
-                        AnyView(compassOverlay)
-                        // v1.90 顶部居中道路名胶囊（高德式：导航中显示当前道路名，一目了然）
-                        if model.navigating { AnyView(roadNamePill) }
-                        // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-                        DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { AnyView(routeBarOverlay) }
-                        // 地图缩放 + / - 按钮（含当前定位按钮）
-                        // v1.99 默认位置改为搜索框右上方（底部搜索卡上沿右侧），符合常见地图习惯；
-                        // 地点卡出现时暂时收起，避免整组压在卡片上
-                        if tapPlace == nil && tipCard == nil {
-                            DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
-                        }
-                        // v2.01 右上角比例尺（随缩放实时变化；原 GPS 按钮已移除）
-                        AnyView(scaleOverlay)
-                    }
+                    // v2.25 抽出为子视图：body 表达式过大时 Swift 编译器会
+                    // "unable to type-check this expression in reasonable time"，
+                    // 拆成独立 ViewBuilder 属性可显著降低单次推断的复杂度。
+                    AnyView(mapTopOverlayGroup)
                     // v1.97 常用地点设置提示条（从"我的"点铅笔后回到地图时显示）
                     if slotTarget != nil && !model.navigating {
                         AnyView(slotEditBanner)
@@ -201,33 +188,8 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                         .zIndex(20)
                 }
-                // v2.22 导航中：顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
-                if model.navigating && !showRouteOverview {
-                    AnyView(navTopHintBar)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-                // v2.22 导航中：右侧竖直绿色路程进度条
-                if model.navigating && !showRouteOverview {
-                    AnyView(navProgressBar)
-                        .frame(maxHeight: .infinity, alignment: .trailing)
-                        .padding(.trailing, 6)
-                        .padding(.vertical, 130)
-                }
-                // 导航中悬浮退出按钮（仅上下移动；v1.85 取消左滑删除，全览时隐藏，取消全览恢复）
-                if model.navigating && !showRouteOverview {
-                    // v2.02 贴底摆放（高德导航卡片位置）；key 变更以清掉旧版记住的偏高位置
-                    DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.925), lockX: true) { AnyView(exitNavOverlay) }
-                }
-                // v1.81.4 导航全览操作条（高德同款：固定全览 / 取消全览(13s)）
-                if model.navigating && showRouteOverview {
-                    DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { AnyView(routeOverviewBar) }
-                }
-                // v1.63 导航态左侧竖排：刷新 / 极简（可拖动；v1.84 全览时隐藏）
-                if model.navigating && !showRouteOverview {
-                    DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { AnyView(navSideOverlay) }
-                }
+                // v2.25 抽出为子视图（见 mapTopOverlayGroup 的说明：降低 body 推断复杂度）
+                AnyView(navOverlayGroup)
                 // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/抓拍/速度/道路/预计到达），
                 // 移除顶部重复的大数字条 navTopBar，避免信息分散（高德同款单卡片式导航状态）
                 // v1.84 巡航模式顶部卡片（白底：速度 + 最近拍照点）
@@ -235,39 +197,8 @@ struct ContentView: View {
                     AnyView(cruiseCard)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
-                if !model.navigating && model.waypointCandidate != nil {
-                    AnyView(waypointCandidateCard)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 96)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .zIndex(15)
-                }
-                // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
-                if !uiHidden {
-                    AnyView(bottomOverlay)
-                } else if !model.navigating {
-                    // v2.16 沉浸态长按：整套 UI 继续隐藏，只把"长按出来的那张卡"亮出来
-                    // （旧版沉浸态把 bottomOverlay 整块藏了，长按后卡片被一起藏掉，看起来像没反应）
-                    AnyView(immersiveCardLayer)
-                }
-                // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
-                if model.tripSummary != nil {
-                    Color.black.opacity(0.001)
-                        .contentShape(Rectangle())
-                        .ignoresSafeArea()
-                        .onTapGesture { haptic(); dismissTripAndReset() }
-                }
-                // v1.81.4 本次行程卡：结束导航后显示（白底卡，可上下移动；v1.85 保留左滑关闭，另支持轻点卡片外回首页）
-                if let s = model.tripSummary {
-                    DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
-                                   deleteLabel: "删除",
-                                   onSwipeLeft: { dismissTripAndReset() }) { AnyView(tripSummaryCard(s)) }
-                }
-                // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
-                if mapLoadFailed {
-                    AnyView(mapLoadBanner)
-                }
+                // v2.25 抽出为子视图（降低 body 推断复杂度，见 mapTopOverlayGroup 说明）
+                AnyView(bottomLayerGroup)
             } else {
                 AnyView(settingsPage)
             }
@@ -277,6 +208,7 @@ struct ContentView: View {
             }
         }
         // v2.25 我的位置移动时，黑线起点跟着更新（线始终连着当前定位点）
+        // 顺带兜底：搜索时如果定位还没出来（nil），定位一有值就补上黑线起点
         .onChange(of: model.currentLocation?.latitude ?? 0) { _, _ in
             if searchHitCoord != nil {
                 searchLinkFrom = model.currentLocation
@@ -2995,6 +2927,101 @@ struct ContentView: View {
         }
     }
 
+    /// v2.25 底部浮层组（候选途经点卡 / 底部overlay / 沉浸卡层 / 行程卡 / 地图错误条）
+    @ViewBuilder
+    private var bottomLayerGroup: some View {
+        // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
+        if !model.navigating && model.waypointCandidate != nil {
+            AnyView(waypointCandidateCard)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 96)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(15)
+        }
+        // v1.66：沉浸模式下底部内容隐藏（导航中同样可收起，导航卡单独渲染不受影响）
+        if !uiHidden {
+            AnyView(bottomOverlay)
+        } else if !model.navigating {
+            // v2.16 沉浸态长按：整套 UI 继续隐藏，只把"长按出来的那张卡"亮出来
+            AnyView(immersiveCardLayer)
+        }
+        // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层）
+        if model.tripSummary != nil {
+            Color.black.opacity(0.001)
+                .contentShape(Rectangle())
+                .ignoresSafeArea()
+                .onTapGesture { haptic(); dismissTripAndReset() }
+        }
+        // v1.81.4 本次行程卡：结束导航后显示
+        if let s = model.tripSummary {
+            DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
+                           deleteLabel: "删除",
+                           onSwipeLeft: { dismissTripAndReset() }) { AnyView(tripSummaryCard(s)) }
+        }
+        // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
+        if mapLoadFailed {
+            AnyView(mapLoadBanner)
+        }
+    }
+
+    /// v2.25 地图页顶部浮层组（指南针 / 路名胶囊 / 路线胶囊 / 缩放 / 比例尺）
+    ///
+    /// 抽出来的原因：body 里的 ZStack 分支太多（导航 + 巡航 + 沉浸 + 规划 + 我的），
+    /// Swift 编译器在单次表达式里推断不出类型，会报
+    /// "the compiler is unable to type-check this expression in reasonable time"。
+    /// 拆成独立 ViewBuilder 属性后，每段单独推断，问题消失。
+    @ViewBuilder
+    private var mapTopOverlayGroup: some View {
+        // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部）
+        // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
+        if !showRouteOverview {
+            AnyView(compassOverlay)
+            // v1.90 顶部居中道路名胶囊（导航中显示当前道路名）
+            if model.navigating { AnyView(roadNamePill) }
+            // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
+            DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { AnyView(routeBarOverlay) }
+            // 地图缩放 + / - 按钮（含当前定位按钮）
+            // 地点卡出现时暂时收起，避免整组压在卡片上
+            if tapPlace == nil && tipCard == nil {
+                DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
+            }
+            // v2.01 右上角比例尺（随缩放实时变化）
+            AnyView(scaleOverlay)
+        }
+    }
+
+    /// v2.25 导航浮层组（顶部提示卡 / 右侧进度条 / 退出按钮 / 全览条 / 左侧竖排）
+    @ViewBuilder
+    private var navOverlayGroup: some View {
+        // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
+        if model.navigating && !showRouteOverview {
+            AnyView(navTopHintBar)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        }
+        // v2.22 右侧竖直绿色路程进度条
+        if model.navigating && !showRouteOverview {
+            AnyView(navProgressBar)
+                .frame(maxHeight: .infinity, alignment: .trailing)
+                .padding(.trailing, 6)
+                .padding(.vertical, 130)
+        }
+        // 导航中悬浮退出按钮（仅上下移动；全览时隐藏）
+        if model.navigating && !showRouteOverview {
+            // v2.02 贴底摆放（高德导航卡片位置）
+            DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.925), lockX: true) { AnyView(exitNavOverlay) }
+        }
+        // v1.81.4 导航全览操作条（固定全览 / 取消全览）
+        if model.navigating && showRouteOverview {
+            DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { AnyView(routeOverviewBar) }
+        }
+        // v1.63 导航态左侧竖排：刷新 / 极简
+        if model.navigating && !showRouteOverview {
+            DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { AnyView(navSideOverlay) }
+        }
+    }
+
     /// v2.22 导航顶部路线提示卡（高德式）
     ///
     /// 文案规则（自定义刷新）：
@@ -4823,10 +4850,11 @@ private struct DraggableFloat<Content: View>: View {
     /// - 底部锚定：pos.y 是底边位置 → 中心 = 底边 - 半个高度
     /// - 顶部锁定：pos.y 是顶部位置 → 中心 = 顶部 + 半个高度
     /// - 其余：pos.y 直接是中心，但会被钳制到"卡片完整可见"的范围内
-    private func clampedY(_ geo: CGSize) -> CGFloat {
+    private func clampedY(_ geoSize: CGSize) -> CGFloat {
         let margin: CGFloat = 8
         let h = contentSize.height
-        let screenH = geo.size.height
+        // 注意：入参已经是 CGSize（不是装着 CGSize 的 geo），不能再取 .size
+        let screenH = geoSize.height
         guard h > 0, screenH > 0 else { return pos.y * screenH }
 
         var center: CGFloat
