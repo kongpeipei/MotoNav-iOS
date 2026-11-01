@@ -107,6 +107,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var hotCameraId: Int = 0
     /// v2.19 路线途经点（WGS-84，橙色"途"标注，随卡片增删同步）
     var waypointMarks: [CLLocationCoordinate2D] = []
+    /// v2.20 电警点被手动拖动后的新坐标（WGS-84，id + lat + lon）
+    var onCameraMoved: ((Int, Double, Double) -> Void)?
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -179,6 +181,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
         context.coordinator.onPoiMoved = onPoiMoved
+        context.coordinator.onCameraMoved = onCameraMoved
         context.coordinator.onPoiSelect = onPoiSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onPlaceLongPress = onPlaceLongPress
@@ -319,10 +322,22 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.removeAnnotation(a)
                 existing[id] = nil
             }
-            for c in cameraMarks where existing[c.id] == nil {
-                let na = CameraAnnotation(camera: c, hot: 0)
-                map.addAnnotation(na)
-                existing[c.id] = na
+            for c in cameraMarks {
+                if let a = existing[c.id] {
+                    // v2.20 人工校准/恢复官方坐标后，把标注挪到新位置
+                    // （拖动中的那个点跳过，否则会被拉回旧坐标）
+                    if context.coordinator.draggingCameraId != c.id {
+                        let want = MapGeo.toGCJ(c.coordinate)
+                        if abs(a.coordinate.latitude - want.latitude) > 1e-7
+                            || abs(a.coordinate.longitude - want.longitude) > 1e-7 {
+                            a.setCoordinate(want)
+                        }
+                    }
+                } else {
+                    let na = CameraAnnotation(camera: c, hot: 0)
+                    map.addAnnotation(na)
+                    existing[c.id] = na
+                }
             }
         }
         // 刚播报的点位：外圈加粗 + 放大，让"听到的"和"看到的"是同一个点
@@ -701,6 +716,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
         var onPoiLongPress: ((Poi) -> Void)?
         var onPoiMoved: ((Poi, Double, Double) -> Void)?
+        /// v2.20 电警点拖动落点回调（id, lat, lon —— WGS）
+        var onCameraMoved: ((Int, Double, Double) -> Void)?
+        /// v2.20 正在被拖动的电警点 id（拖动中不覆盖坐标）
+        var draggingCameraId: Int = 0
         /// 长按拖动校准状态
         private var dragAnnotation: PoiAnnotation?
         private var dragStartPt: CGPoint = .zero
@@ -861,6 +880,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             let pt = gesture.location(in: map)
             switch gesture.state {
             case .began:
+                // v2.20 电警点用 MapKit 原生拖拽（跟手），长按别去抢它：
+                // 命中电警标注时直接放行，避免拖动时又弹出地点卡
+                for a in map.annotations {
+                    if let ca = a as? CameraAnnotation {
+                        let ap = map.convert(ca.coordinate, toPointTo: map)
+                        if hypot(pt.x - ap.x, pt.y - ap.y) < 34 { return }
+                    }
+                }
                 // 命中已有点位标注 → 进入拖动校准；否则空白长按菜单
                 var best: Poi?
                 var bestDist = CGFloat.greatestFiniteMagnitude
@@ -1053,6 +1080,45 @@ struct MapViewRepresentable: UIViewRepresentable {
             onMapLoad?(false, error.localizedDescription)
         }
 
+        /// v2.20 电警点拖动：跟手移动 → 松手落点 → 回写坐标（持久化）
+        func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView,
+                     didChange newState: MKAnnotationView.DragState,
+                     fromOldState oldState: MKAnnotationView.DragState) {
+            guard let cam = view.annotation as? CameraAnnotation else { return }
+            switch newState {
+            case .starting:
+                cam.beginDrag()
+                draggingCameraId = cam.cameraId
+            case .dragging:
+                // MapKit 已把 annotation.coordinate 更新为新位置（GCJ）
+                // v2.20 拖到屏幕边缘时地图跟着走，避免标注被拖出可视区找不回来
+                let p = mapView.convert(cam.coordinate, toPointTo: mapView)
+                let b = mapView.bounds
+                let margin: CGFloat = 90
+                var dx: CGFloat = 0, dy: CGFloat = 0
+                if p.x < b.minX + margin { dx = p.x - (b.minX + margin) }
+                else if p.x > b.maxX - margin { dx = p.x - (b.maxX - margin) }
+                if p.y < b.minY + margin { dy = p.y - (b.minY + margin) }
+                else if p.y > b.maxY - margin { dy = p.y - (b.maxY - margin) }
+                if dx != 0 || dy != 0 {
+                    let center = mapView.convert(CGPoint(x: b.midX + dx, y: b.midY + dy),
+                                                toCoordinateFrom: mapView)
+                    mapView.setCenter(center, animated: false)
+                }
+            case .ending:
+                draggingCameraId = 0
+                let wgs = MapGeo.toWGS(cam.coordinate)
+                onCameraMoved?(cam.cameraId, wgs.latitude, wgs.longitude)
+            case .canceling:
+                draggingCameraId = 0
+                cam.cancelDrag()
+            case .none:
+                draggingCameraId = 0
+            @unknown default:
+                draggingCameraId = 0
+            }
+        }
+
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             // 点击地点：高亮显示名称并回调（取消系统选中态，避免遮挡）
             if let pa = view.annotation as? PoiAnnotation {
@@ -1156,6 +1222,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.annotation = cam
                 v.configure(kind: cam.kind)
                 v.setHot(cam.isHot)
+                // v2.20 电警点可跟手拖动：MapKit 原生拖拽，手指点哪落到哪
+                v.isDraggable = true
                 return v
             }
             guard let pa = annotation as? PoiAnnotation else { return nil }
@@ -1774,16 +1842,32 @@ final class CameraAnnotation: NSObject, MKAnnotation {
     var isHot = false
 
     @objc dynamic var coordinate: CLLocationCoordinate2D
+    /// v2.20 拖动前的坐标（取消拖动时回滚）
+    private var originCoordinate: CLLocationCoordinate2D
 
     init(camera: PoliceCamera, hot: Int) {
         self.cameraId = camera.id
         self.kind = camera.type
         self.cameraName = camera.name
         self.dirs = camera.dirs
-        self.coordinate = MapGeo.toGCJ(camera.coordinate)
+        let gcj = MapGeo.toGCJ(camera.coordinate)
+        self.coordinate = gcj
+        self.originCoordinate = gcj
         self.isHot = (hot == camera.id && hot != 0)
         super.init()
     }
+
+    /// v2.20 更新坐标（MapKit 拖拽或人工校准后调用）
+    /// coordinate 是 @objc dynamic 属性，赋值自带 KVO 通知，MapKit 会自动移动大头针
+    func setCoordinate(_ gcj: CLLocationCoordinate2D) {
+        coordinate = gcj
+    }
+
+    /// v2.20 拖动开始：记录原坐标
+    func beginDrag() { originCoordinate = coordinate }
+
+    /// v2.20 拖动取消：回到原坐标
+    func cancelDrag() { setCoordinate(originCoordinate) }
 
     var title: String? { "\(kind.title) · \(cameraName)" }
     var subtitle: String? { dirs.isEmpty ? "" : "抓拍方向：\(dirs)" }

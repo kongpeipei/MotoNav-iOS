@@ -602,6 +602,13 @@ struct ContentView: View {
             // v2.04 官方电警点位图层（关闭时传空数组，地图上立即消失）
             cameraMarks: camStore.layerOn ? camStore.all : [],
             hotCameraId: model.hotCameraId,
+            onCameraMoved: { id, lat, lon in
+                // v2.20 电警点手动拖动 → 落点写回仓库（持久化，重启仍生效）
+                camStore.adjust(id: id, lat: lat, lon: lon)
+                if let c = camStore.all.first(where: { $0.id == id }) {
+                    model.status = "已校准「\(c.name)」位置"
+                }
+            },
             waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         )
         .ignoresSafeArea()
@@ -2519,7 +2526,18 @@ struct ContentView: View {
                             Label("看离我最近的拍照点", systemImage: "location.circle")
                         }
                         Divider()
+                        Button {
+                            camStore.restoreAll()
+                            model.status = "已恢复全部电警点的官方公示坐标"
+                        } label: {
+                            Label("恢复全部官方坐标", systemImage: "arrow.uturn.backward.circle")
+                        }
+                        .disabled(camStore.adjustedCount == 0)
+                        Divider()
                         Text("已收录 \(camStore.all.count) 个点位")
+                        if camStore.adjustedCount > 0 {
+                            Text("已人工校准 \(camStore.adjustedCount) 个（可长按拖动修正）")
+                        }
                         Text("来源：合肥市公安局交警支队公示")
                     } label: {
                         ZStack {

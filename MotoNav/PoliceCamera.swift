@@ -74,8 +74,9 @@ struct PoliceCamera: Codable, Identifiable, Equatable {
     let name: String
     let district: String
     let type: CameraKind
-    let lat: Double
-    let lon: Double
+    /// v2.20 改为可变：支持用户手动拖动校准（原始公示坐标会被覆盖值替换）
+    var lat: Double
+    var lon: Double
     /// 抓拍方向（官方公示原样，如「东、西、北」）
     var dirs: String = ""
     /// 坐标精度：路口POI（±30m）/ 地理编码（±300m）
@@ -108,8 +109,15 @@ struct PoliceCamera: Codable, Identifiable, Equatable {
 final class PoliceCameraStore: ObservableObject {
     static let shared = PoliceCameraStore()
 
-    /// 全部官方点位（内置库）
+    /// 全部官方点位（内置库 + 用户手动校准后的坐标）
     @Published private(set) var all: [PoliceCamera] = []
+    /// v2.20 已被用户手动校准过的点位数
+    @Published private(set) var adjustedCount = 0
+    /// 内置库原始点位（不被校准覆盖污染）
+    private var raw: [PoliceCamera] = []
+    /// 人工校准覆盖表：id → [lat, lon]（WGS）
+    private var overrides: [Int: [Double]] = [:]
+    private let overrideKey = "pcCoordOverrides"
     /// 地图图层开关（默认开：打开就能看到红点）
     @Published var layerOn: Bool {
         didSet { UserDefaults.standard.set(layerOn, forKey: "pcLayerOn") }
@@ -126,12 +134,59 @@ final class PoliceCameraStore: ObservableObject {
     }
 
     private func load() {
+        // v2.20 先读人工校准覆盖表，再套到内置库上
+        if let saved = UserDefaults.standard.dictionary(forKey: overrideKey) as? [String: [Double]] {
+            for (k, v) in saved {
+                if let id = Int(k), v.count == 2 { overrides[id] = v }
+            }
+        }
         guard let url = Bundle.main.url(forResource: "hefei_cameras", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let list = try? JSONDecoder().decode([PoliceCamera].self, from: data) else {
+            applyOverrides()
             return
         }
-        all = list
+        raw = list
+        applyOverrides()
+    }
+
+    /// 把人工校准坐标套到内置库上（每次改动后重算 all）
+    private func applyOverrides() {
+        all = raw.map { c in
+            guard let o = overrides[c.id], o.count == 2 else { return c }
+            var n = c
+            n.lat = o[0]
+            n.lon = o[1]
+            return n
+        }
+        adjustedCount = overrides.count
+    }
+
+    /// v2.20 手动拖动校准：记录新坐标并持久化（下次启动仍然生效）
+    func adjust(id: Int, lat: Double, lon: Double) {
+        overrides[id] = [lat, lon]
+        saveOverrides()
+        applyOverrides()
+    }
+
+    /// 恢复某个点的官方公示坐标
+    func restore(id: Int) {
+        overrides.removeValue(forKey: id)
+        saveOverrides()
+        applyOverrides()
+    }
+
+    /// 清除全部人工校准
+    func restoreAll() {
+        overrides.removeAll()
+        saveOverrides()
+        applyOverrides()
+    }
+
+    private func saveOverrides() {
+        var d: [String: [Double]] = [:]
+        for (k, v) in overrides { d[String(k)] = v }
+        UserDefaults.standard.set(d, forKey: overrideKey)
     }
 
     /// 地图要显示的点位（关掉图层就是空数组）
