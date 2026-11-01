@@ -6,6 +6,12 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    /// v1.99 组队骑行（地图队友点 + 我的页队伍面板）
+    @StateObject private var team = TeamRide.shared
+    /// v1.99 足迹（我的-足迹）
+    @StateObject private var footprints = FootprintStore.shared
+    /// v1.99 离线地图包
+    @StateObject private var offline = OfflineMapManager.shared
     /// v1.90 省电模式总开关（"我的"页可关；关闭后低电量也不再降频/调暗）
     @AppStorage("powerSaveEnabled") private var powerSaveEnabled = true
     @State private var searchText = ""
@@ -75,6 +81,12 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
     @State private var showVoiceSettings = false
+    /// v1.99 足迹 / 离线地图 / 组队 面板
+    @State private var showFootprints = false
+    @State private var showOfflineMaps = false
+    @State private var showTeamRide = false
+    /// v1.99 搜索结果排序（0 距离 / 1 名称）
+    @State private var tipSort = 0
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
     @State private var minimalMap = false
     /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
@@ -119,7 +131,11 @@ struct ContentView: View {
                         // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
                         DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
                         // 地图缩放 + / - 按钮（含当前定位按钮）
-                        DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.16)) { zoomOverlay }
+                        // v1.99 默认位置改为搜索框右上方（底部搜索卡上沿右侧），符合常见地图习惯；
+                        // 地点卡出现时暂时收起，避免整组压在卡片上
+                        if tapPlace == nil && tipCard == nil {
+                            DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { zoomOverlay }
+                        }
                         // 右上角 GPS 信号按钮（内部已可拖动）
                         layerTrafficButtons
                     }
@@ -214,6 +230,21 @@ struct ContentView: View {
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         .sheet(isPresented: $showVoiceSettings) {
             VoiceSettingsSheet(model: model)
+        }
+        // v1.99 足迹 / 离线地图 / 组队
+        .sheet(isPresented: $showFootprints) {
+            FootprintSheet(store: footprints) { f in
+                showFootprints = false
+                selectedTab = 0
+                model.footprintPreview = f.coordinateList
+                model.status = "足迹回放：\(f.destName) · \(f.distanceText)"
+            }
+        }
+        .sheet(isPresented: $showOfflineMaps) {
+            OfflineMapSheet(manager: offline, model: model)
+        }
+        .sheet(isPresented: $showTeamRide) {
+            TeamRideSheet(team: team)
         }
         .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
@@ -406,6 +437,9 @@ struct ContentView: View {
             cruiseTick: model.cruiseTick,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
+            trafficSpans: model.trafficSpans,
+            footprint: model.footprintPreview,
+            teamMembers: team.others,
             onLongPress: { coord in
                 longPressCoord = coord
                 showLongPressMenu = true
@@ -442,6 +476,12 @@ struct ContentView: View {
                 //   命中地点名文字 → 地点介绍卡（在 MapView 里已派发 onPlaceSelect）
                 //   点到非地点区域 → 收起所有卡片并隐藏全部界面（再轻点一次恢复）
                 guard !model.navigating else { return }
+                // v1.99 足迹回放中：轻点地图先退出回放
+                if !model.footprintPreview.isEmpty {
+                    model.footprintPreview = []
+                    model.status = "已退出足迹回放"
+                    return
+                }
                 if quickPickMode {
                     pendingQuickCoord = coord
                     quickName = placeNameNear(coord)
@@ -700,6 +740,8 @@ struct ContentView: View {
             List {
                 powerSection
                 commonPlacesSection
+                rideSection
+                dataSection
                 searchKeySection
                 aboutSection
             }
@@ -791,6 +833,97 @@ struct ContentView: View {
         }
     }
 
+    /// v1.99 骑行偏好：播报分级 + 摩托车优先（避开高速/高架）
+    private var rideSection: some View {
+        Section {
+            Picker(selection: Binding(
+                get: { model.speechLevel },
+                set: { model.speechLevel = $0 })) {
+                ForEach(SpeechLevel.allCases) { lv in
+                    Text(lv.title).tag(lv.rawValue)
+                }
+            } label: {
+                Label("语音播报", systemImage: "speaker.wave.2.fill")
+            }
+            .pickerStyle(.segmented)
+
+            Toggle(isOn: Binding(
+                get: { model.avoidHighway },
+                set: { model.avoidHighway = $0 }
+            )) {
+                Label("避开高速/高架", systemImage: "road.lanes")
+            }
+
+            if !model.riderRisks.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(model.riderRisks.prefix(3)) { r in
+                        HStack(spacing: 6) {
+                            Image(systemName: r.kind.icon)
+                                .foregroundStyle(r.kind.motoBlocked ? .red : .orange)
+                            Text("\(r.kind.title)·\(r.roadName)")
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(r.fromM / 1000)km 起")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("骑行偏好")
+        } footer: {
+            Text("播报：简洁只报转弯；标准加电子眼；详细再加路名与剩余里程。开启「避开高速/高架」后，规划会优先选择禁摩风险更少的方案，导航到风险路段前会语音提醒。")
+        }
+    }
+
+    /// v1.99 足迹 / 离线地图 / 组队
+    private var dataSection: some View {
+        Section("骑行数据") {
+            Button {
+                haptic()
+                showFootprints = true
+            } label: {
+                HStack {
+                    Label("足迹", systemImage: "figure.run.circle")
+                    Spacer()
+                    Text("\(footprints.items.count) 条 · \(distanceText(footprints.totalDistanceM))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Button {
+                haptic()
+                showOfflineMaps = true
+            } label: {
+                HStack {
+                    Label("离线地图", systemImage: "square.and.arrow.down")
+                    Spacer()
+                    Text(offline.packs.isEmpty ? "未下载" : offline.totalText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Button {
+                haptic()
+                showTeamRide = true
+            } label: {
+                HStack {
+                    Label("组队骑行", systemImage: "person.2.wave.2")
+                    Spacer()
+                    Text(team.active ? "队伍 \(team.code) · \(team.members.count) 人" : "未组队")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func distanceText(_ m: Int) -> String {
+        m >= 1000 ? String(format: "%.1f km", Double(m) / 1000) : "\(m) m"
+    }
+
     /// 搜索 Key 设置
     private var searchKeySection: some View {
         Section("搜索设置") {
@@ -834,7 +967,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v1.98")
+                Text("v2.00")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -1151,10 +1284,8 @@ struct ContentView: View {
                                    onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
                 } else {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
-                    // v1.69：搜索框聚焦空输入时由面板内高德样式历史列表替代（避免重复显示）
-                    if !(searchFocused && searchText.isEmpty) {
-                        DraggableFloat(key: "historybar", defaultPos: CGPoint(x: 0.5, y: 0.30)) { historyBar }
-                    }
+                    // v1.99 移除地图上浮动的"历史搜索"横条：搜索框聚焦时面板内已有历史列表，
+                    // 地图上再挂一条既挡视线又重复
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
                 if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
@@ -1436,6 +1567,53 @@ struct ContentView: View {
         VStack(spacing: 10) {
             routeChoiceHeader
             routeChoiceCards
+            // v1.99 骑行风险 + 路况摘要（骑士专属）
+            if !model.riderRisks.isEmpty || !model.trafficSpans.isEmpty {
+                HStack(spacing: 6) {
+                    if let worst = model.riderRisks.first(where: { $0.kind.motoBlocked }) ?? model.riderRisks.first {
+                        Image(systemName: worst.kind.icon)
+                            .font(.caption2.bold())
+                            .foregroundStyle(worst.kind.motoBlocked ? .red : .orange)
+                        Text(RiderAnalyzer.summary(model.riderRisks))
+                            .font(.caption2)
+                            .foregroundStyle(worst.kind.motoBlocked ? .red : .secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    if jamCount + slowCount > 0 {
+                        HStack(spacing: 3) {
+                            Circle().fill(Color.red).frame(width: 6, height: 6)
+                            Text("拥堵\(jamCount)").font(.caption2).foregroundStyle(.secondary)
+                            if slowCount > 0 {
+                                Circle().fill(Color.yellow).frame(width: 6, height: 6)
+                                Text("缓行\(slowCount)").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+            }
+            // v1.99 途经点（顺路加一站）
+            if !model.waypointName.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                        .font(.caption2).foregroundStyle(.blue)
+                    Text("途经：\(model.waypointName)").font(.caption2).lineLimit(1)
+                    Spacer()
+                    Button {
+                        haptic()
+                        model.clearWaypoint()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            // v1.99 沿途服务：点一个类别 → 搜路线附近，点结果即"顺路加一站"
+            serviceChipsRow
             Button {
                 haptic()
                 model.toggleNavigation()
@@ -1454,6 +1632,80 @@ struct ContentView: View {
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
+    }
+
+    /// 拥堵段 / 缓行段数量（规划卡摘要）
+    private var jamCount: Int { model.trafficSpans.filter { $0.level >= 2 }.count }
+    private var slowCount: Int { model.trafficSpans.filter { $0.level == 1 }.count }
+
+    /// v1.99 沿途服务设施快捷条：点类别搜路线附近，结果点一下即"顺路加一站"
+    private var serviceChipsRow: some View {
+        VStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(ServiceKind.allCases) { k in
+                        Button {
+                            haptic()
+                            if model.serviceKindActive == k {
+                                model.clearServices()
+                            } else {
+                                Task { await model.loadServices(k) }
+                            }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: k.icon).font(.caption2)
+                                Text(k.title).font(.caption2)
+                            }
+                            .foregroundStyle(model.serviceKindActive == k ? .white : k.tint)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(model.serviceKindActive == k ? k.tint : k.tint.opacity(0.12),
+                                        in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            if model.serviceKindLoading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("正在搜索沿途\(model.serviceKindActive?.title ?? "设施")…")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            } else if !model.serviceTips.isEmpty {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(model.serviceTips.prefix(6)) { tip in
+                            Button {
+                                haptic()
+                                model.setWaypoint(name: tip.name, lat: tip.lat, lon: tip.lon)
+                                model.clearServices()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.blue)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(tip.name).font(.caption).lineLimit(1)
+                                            .foregroundStyle(.primary)
+                                        Text(tip.sub).font(.caption2).lineLimit(1)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            if tip.id != model.serviceTips.prefix(6).last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 130)
+            }
+        }
     }
 
     /// v1.65：原底部转向大卡 navInfoCard 已合并进顶部 navTopBar（道路指示/速度/距离时间三合一）
@@ -2550,7 +2802,19 @@ struct ContentView: View {
 
     /// v1.80 首页底部主卡片：搜索框 + 导航/我的 合并为一个整体卡片
     private var bottomMainCard: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
+            // v1.99 快捷词：未聚焦时一行"回家 / 去公司"，省一次输入
+            if !searchFocused, model.homePlace != nil || model.workPlace != nil {
+                HStack(spacing: 6) {
+                    if let h = model.homePlace {
+                        quickWordChip("回家", icon: "house.fill", name: h.name, lat: h.lat, lon: h.lon)
+                    }
+                    if let w = model.workPlace {
+                        quickWordChip("去公司", icon: "briefcase.fill", name: w.name, lat: w.lat, lon: w.lon)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
             searchInputRow
             // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
             // v1.97 常用地点设置态不弹快捷卡片（避免误点跳到导航）
@@ -2567,12 +2831,33 @@ struct ContentView: View {
             tabButtonsRow
         }
         .padding(.horizontal, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 22))
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
+    }
+
+    /// v1.99 搜索框快捷词（回家 / 去公司）
+    private func quickWordChip(_ title: String, icon: String,
+                               name: String, lat: Double, lon: Double) -> some View {
+        Button {
+            haptic()
+            searchFocused = false
+            dismissKeyboard()
+            model.fetchRouteChoices(to: name, lat: lat, lon: lon)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: icon).font(.caption2)
+                Text(title).font(.caption2)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(.secondarySystemBackground), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     /// v1.80 导航/我的 选项卡按钮行（合并进底部主卡片；"我的"页仍保留独立选项卡可切回）
@@ -2591,7 +2876,7 @@ struct ContentView: View {
                 }
                 .foregroundStyle(selectedTab == 0 ? .white : .secondary)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
                 .background(selectedTab == 0 ? Color.blue : .clear, in: Capsule())
             }
             .buttonStyle(.plain)
@@ -2857,10 +3142,47 @@ struct ContentView: View {
     }
 
     /// v1.81 高德联想候选列表：点主体→高亮+北向上+地点信息卡；点箭头→直接导航规划
+    /// v1.99 联想结果排序：距离最近 / 名称
+    private var sortedTips: [AppModel.AmapTip] {
+        guard tipSort == 0 else {
+            return onlineTips.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        }
+        guard let loc = model.currentLocation else { return onlineTips }
+        return onlineTips.sorted {
+            CLLocation(latitude: $0.lat, longitude: $0.lon)
+                .distance(from: CLLocation(latitude: loc.latitude, longitude: loc.longitude))
+                < CLLocation(latitude: $1.lat, longitude: $1.lon)
+                .distance(from: CLLocation(latitude: loc.latitude, longitude: loc.longitude))
+        }
+    }
+
     private var onlineTipsList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(onlineTips) { tip in
+                // v1.99 搜索结果排序（距离 / 名称）
+                HStack(spacing: 8) {
+                    Text("结果 \(onlineTips.count)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    ForEach([0, 1], id: \.self) { idx in
+                        Button {
+                            tipSort = idx
+                        } label: {
+                            Text(idx == 0 ? "距离最近" : "名称")
+                                .font(.caption2)
+                                .foregroundStyle(tipSort == idx ? .white : .secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(tipSort == idx ? Color.blue : Color(.secondarySystemBackground),
+                                            in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                ForEach(sortedTips) { tip in
                     // v1.82 常搜项（历史搜索记录）左拉单个删除，其余项正常
                     let row = VStack(spacing: 0) {
                         HStack {
@@ -2973,45 +3295,6 @@ struct ContentView: View {
     private func suggestionIconColor(_ s: String) -> Color {
         if s.hasPrefix("🔍") { return .orange }
         return .secondary
-    }
-
-    /// 历史搜索记录（横滑标签，带清空按钮）
-    private var historyBar: some View {
-        Group {
-            if !model.searchHistory.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(model.searchHistory, id: \.self) { item in
-                            Button(displayName(item)) {
-                                searchText = item
-                                showSuggestions = false
-                                dismissKeyboard()
-                                doSearch()
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.white)
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                            .controlSize(.small)
-                        }
-                        // 清空按钮
-                        Button {
-                            model.clearHistory()
-                            model.status = "搜索历史已清空"
-                        } label: {
-                            Text("清空")
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.gray)
-                        .controlSize(.small)
-                    }
-                    .padding(.horizontal)
-                }
-                .padding(.bottom, 4)
-            }
-        }
     }
 
     /// 联想展示简化：去掉"与XX路交口"，只显示地址名称（导航目标不变）
@@ -3446,6 +3729,9 @@ private struct DraggableFloat<Content: View>: View {
     @State private var dragging = false
     @State private var deleting = false
     @State private var dragOffset: CGFloat = 0
+    /// v1.99 拖动起点（手指按下时的中心点）：旧版直接把中心设为手指位置，
+    /// 一按下去整块就"跳"到手指下，滑动时始终慢半拍、像甩不动的橡皮筋
+    @State private var dragStartPos: CGPoint? = nil
 
     init(key: String, defaultPos: CGPoint, lockX: Bool = false, deleteLabel: String? = nil,
          onSwipeLeft: (() -> Void)? = nil,
@@ -3457,9 +3743,16 @@ private struct DraggableFloat<Content: View>: View {
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
+        // v1.99 缩放/定位按钮默认位置改到"搜索框右上方"：一次性作废旧坐标，
+        // 否则装过旧版的手机会继续用存储在 UserDefaults 里的右上角位置
+        let posVersion = UserDefaults.standard.integer(forKey: "\(key).posV")
+        let stale = key == "zoom" && posVersion < 2
+        if stale { UserDefaults.standard.set(2, forKey: "\(key).posV") }
+        let savedX = stale ? nil : x
+        let savedY = stale ? nil : y
         // v1.97 兜底钳制：历史拖动位置可能落在屏幕外（如旧版缩放键 6%），这里拉回可视区
-        let px = min(0.96, max(0.04, x ?? defaultPos.x))
-        let py = min(0.93, max(0.10, y ?? defaultPos.y))
+        let px = min(0.96, max(0.04, savedX ?? defaultPos.x))
+        let py = min(0.93, max(0.10, savedY ?? defaultPos.y))
         _pos = State(initialValue: CGPoint(x: px, y: py))
         _initialX = State(initialValue: px)
     }
@@ -3497,17 +3790,22 @@ private struct DraggableFloat<Content: View>: View {
                             deleting = true
                             dragOffset = v.translation.width
                         } else {
-                            // 正常拖动（lockX 时仅上下移动）
+                            // 正常拖动：按位移增量移动，手指与卡片严格同步（不再跳到手指中心）
                             deleting = false
                             dragOffset = 0
                             dragging = true
+                            let base = dragStartPos ?? pos
+                            if dragStartPos == nil { dragStartPos = base }
+                            let w = max(1, geo.size.width)
+                            let h = max(1, geo.size.height)
                             pos = CGPoint(
-                                x: lockX ? initialX : min(0.96, max(0.04, v.location.x / geo.size.width)),
-                                y: min(0.96, max(0.04, v.location.y / geo.size.height)))
+                                x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
+                                y: min(0.96, max(0.04, base.y + v.translation.height / h)))
                         }
                     }
                     .onEnded { v in
                         dragging = false
+                        dragStartPos = nil
                         if deleting {
                             // 左拉过卡片一半宽度即完成删除
                             let cardW = geo.size.width - 28
@@ -3526,6 +3824,273 @@ private struct DraggableFloat<Content: View>: View {
                         }
                     }
             )
+        }
+    }
+}
+
+// =============================================================================
+// v1.99 三个数据面板：足迹 / 离线地图 / 组队骑行
+// =============================================================================
+
+/// 足迹列表：里程、时长、均速/最高速，支持回放、导出 GPX、删除
+private struct FootprintSheet: View {
+    @ObservedObject var store: FootprintStore
+    var onReplay: (Footprint) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var exporting: Footprint?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if store.items.isEmpty {
+                    Section {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("还没有足迹").font(.headline)
+                            Text("每次结束导航会自动存档：里程、时长、均速、最高速和轨迹。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 6)
+                    }
+                } else {
+                    Section {
+                        HStack {
+                            statBlock("总里程", String(format: "%.1f km", Double(store.totalDistanceM) / 1000))
+                            Divider()
+                            statBlock("总时长", "\(store.totalDurationS / 3600) 小时")
+                            Divider()
+                            statBlock("记录", "\(store.items.count) 次")
+                        }
+                    }
+                    Section("行程") {
+                        ForEach(store.items) { f in
+                            Button {
+                                onReplay(f)
+                                dismiss()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(f.destName)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text(f.dateText)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text("\(f.distanceText) · \(f.durationText) · 均速 \(String(format: "%.0f", f.avgSpeed)) · 最高 \(String(format: "%.0f", f.maxSpeed)) km/h")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    store.remove(f.id)
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
+                                Button {
+                                    exporting = f
+                                } label: {
+                                    Label("导出", systemImage: "square.and.arrow.up")
+                                }
+                                .tint(.blue)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("足迹")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if !store.items.isEmpty {
+                        Button("清空", role: .destructive) { store.clear() }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .sheet(item: $exporting) { f in
+                GPXShareSheet(items: [store.gpx(for: f)])
+            }
+        }
+    }
+
+    private func statBlock(_ title: String, _ value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.subheadline.weight(.bold))
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// 离线地图：按当前位置下载指定半径的瓦片包
+private struct OfflineMapSheet: View {
+    @ObservedObject var manager: OfflineMapManager
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var radius: Double = 10
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Picker("范围", selection: $radius) {
+                        Text("5 km").tag(5.0)
+                        Text("10 km").tag(10.0)
+                        Text("20 km").tag(20.0)
+                        Text("40 km").tag(40.0)
+                    }
+                    .pickerStyle(.segmented)
+
+                    Button {
+                        guard let c = model.currentLocation else {
+                            model.status = "请先定位再下载离线地图"
+                            return
+                        }
+                        Task {
+                            await manager.download(name: "当前位置 \(Int(radius))km",
+                                                   lat: c.latitude, lon: c.longitude,
+                                                   radiusKm: radius)
+                        }
+                    } label: {
+                        HStack {
+                            Label("下载当前位置周边", systemImage: "arrow.down.circle")
+                            Spacer()
+                            Text(manager.busy ? "下载中…" : "约 \(OfflineMapManager.estimateTileCount(radiusKm: radius)) 张")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(manager.busy)
+
+                    if manager.busy {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: manager.progress)
+                            Text(manager.progressText)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Button("取消下载", role: .destructive) { manager.cancel() }
+                                .font(.caption)
+                        }
+                    }
+                    if let e = manager.lastError {
+                        Text(e).font(.caption).foregroundStyle(.red)
+                    }
+                } footer: {
+                    Text("离线包会把该范围内的地图瓦片存到本机，进山没信号时仍有底图；下载后在线缓存也会复用这些瓦片，更省流量。")
+                }
+
+                Section("已下载") {
+                    if manager.packs.isEmpty {
+                        Text("暂无离线包").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(manager.packs) { p in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.name).font(.subheadline)
+                                Text(p.subtitle).font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                manager.delete(p)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("离线地图")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+/// 组队骑行：队伍码 + 昵称，实时显示队友距离
+private struct TeamRideSheet: View {
+    @ObservedObject var team: TeamRide
+    @Environment(\.dismiss) private var dismiss
+    @State private var code = ""
+    @State private var nickname = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    TextField("昵称（如：老王）", text: $nickname)
+                    TextField("队伍码（4-6 位，同伴输入同一个）", text: $code)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                    HStack {
+                        Button {
+                            code = TeamRide.randomCode()
+                        } label: {
+                            Label("随机生成", systemImage: "dice")
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                        if team.active {
+                            Button("退出队伍", role: .destructive) {
+                                team.stop()
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button("开始组队") {
+                                team.start(code: code, nickname: nickname)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(code.trimmingCharacters(in: .whitespaces).count < 4)
+                        }
+                    }
+                } footer: {
+                    Text("把队伍码发给同伴，各自输入同一个码即可互相看到位置（约 6 秒刷新一次）。仅共享位置与速度，不做长期存储。")
+                }
+
+                if team.active {
+                    Section("队伍 \(team.code)") {
+                        if let e = team.lastError {
+                            Text(e).font(.caption).foregroundStyle(.red)
+                        }
+                        ForEach(team.members) { m in
+                            HStack {
+                                Image(systemName: m.name == team.nickname ? "location.fill" : "person.fill")
+                                    .foregroundStyle(m.name == team.nickname ? .blue : .teal)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(m.name + (m.name == team.nickname ? "（我）" : ""))
+                                        .font(.subheadline)
+                                    Text("\(String(format: "%.0f", m.speedKph)) km/h · \(m.ageText)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                        }
+                        if team.members.count <= 1 {
+                            Text("等待同伴加入…").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("组队骑行")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
         }
     }
 }

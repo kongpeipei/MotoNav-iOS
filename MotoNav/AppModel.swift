@@ -172,6 +172,36 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 所选路线全程距离/用时（导航信息卡：剩余里程与时间按比例估算）
     @Published var routeDistanceM = 0
     @Published var routeDurationS = 0
+
+    // MARK: - v1.99 骑士增强：播报分级 / 限行风险 / 路况 / 途经点 / 足迹
+    /// 播报详细程度（0 简洁 / 1 标准 / 2 详细）
+    @Published var speechLevel: Int = UserDefaults.standard.object(forKey: "speechLevel") as? Int ?? 1 {
+        didSet { UserDefaults.standard.set(speechLevel, forKey: "speechLevel") }
+    }
+    var speech: SpeechLevel { SpeechLevel(rawValue: speechLevel) ?? .standard }
+    /// 规划时优先避开高速/高架（摩托友好）
+    @Published var avoidHighway: Bool = UserDefaults.standard.object(forKey: "avoidHighway") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(avoidHighway, forKey: "avoidHighway") }
+    }
+    /// 当前路线的骑行风险段（高速/高架/隧道/大桥/禁摩）
+    @Published var riderRisks: [RoadRisk] = []
+    /// 当前路线的拥堵分段（红黄）
+    @Published var trafficSpans: [TrafficSpan] = []
+    /// 途经点（"顺路加一站"）
+    @Published var waypoint: CLLocationCoordinate2D?
+    @Published var waypointName = ""
+    /// 足迹回放轨迹（我的-足迹 → 点一条记录）
+    @Published var footprintPreview: [CLLocationCoordinate2D] = []
+    /// 沿途服务设施搜索结果（"顺路加一站"）
+    @Published var serviceTips: [AmapTip] = []
+    @Published var serviceKindLoading = false
+    @Published var serviceKindActive: ServiceKind?
+    /// 导航轨迹缓冲（结束后存为足迹）
+    private var trackPoints: [CLLocationCoordinate2D] = []
+    private var maxSpeedKph: Double = 0
+    private var lastRiskSpoken = Set<String>()
+    private var lastCurveSpoken = Date.distantPast
+
     /// 实时速度（m/s，来自定位，导航卡显示 km/h）
     @Published var currentSpeed = 0.0
 
@@ -1127,6 +1157,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             currentLocation = coord
             locationAccuracy = loc.horizontalAccuracy
             currentSpeed = loc.speed > 0 ? loc.speed : 0
+            // v1.99 足迹轨迹 + 最高速（仅导航中记录，避免无意义点位）
+            if navigating {
+                trackPoints.append(coord)
+                if loc.speed > 0 { maxSpeedKph = max(maxSpeedKph, loc.speed * 3.6) }
+                checkRiderRisks(at: coord)
+            }
+            // v1.99 组队位置上报（未组队时是空操作）
+            TeamRide.shared.update(lat: coord.latitude, lon: coord.longitude,
+                                   speedKph: max(0, loc.speed) * 3.6)
             // v1.92 后台/前台都靠定位回调复查电量（通知在挂起时收不到）
             throttledPowerSavingCheck()
             if weatherText == nil { fetchWeather() }
@@ -1854,12 +1893,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         Task {
             // v1.98 与 fetchRouteChoices 对齐：直接用高德多方案（不再走 OSRM 吸附），
             // 取推荐方案作为当前路线，方案列表一并保留供切换
-            let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey)
+            let rawChoices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey,
+                                                          via: self.waypoint)
+            let choices = self.preferMotoRoutes(rawChoices)
             if let r = choices.first {
                 if choices.count > 1 {
                     routeChoices = choices.map { c -> RouteChoice in
                         RouteChoice(points: c.points, distanceM: c.distanceM, durationS: c.durationS,
-                                    turns: c.turns, label: c.label, poiCount: nearbyPoisOnRoute(c.points).count)
+                                    turns: c.turns, label: c.label,
+                                    poiCount: nearbyPoisOnRoute(c.points).count, traffic: c.traffic)
                     }
                     selectedRouteIdx = 0
                 }
@@ -1872,6 +1914,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let near = nearbyPoisOnRoute(r.points)
                 routePois = near
                 fitTick += 1
+                riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
+                trafficSpans = r.traffic
                 status = routeSummary(name, distanceM: r.distanceM, durationS: r.durationS, poiCount: near.count)
             } else {
                 fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon)
@@ -1894,13 +1938,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             // 目的地未变才替换（用户可能已改目标）
             guard self.destName == name, self.destLat == lat, self.destLon == lon else { return }
-            let retry = await RouteFetcher.fetchAll(from: from, to: to, amapKey: amapKey)
+            let retry = await RouteFetcher.fetchAll(from: from, to: to, amapKey: amapKey,
+                                                    via: self.waypoint)
             if retry.isEmpty { return }
             let list = retry.map { c -> RouteChoice in
                 let n = nearbyPoisOnRoute(c.points).count
                 return RouteChoice(points: c.points, distanceM: c.distanceM,
                                    durationS: c.durationS, turns: c.turns,
-                                   label: c.label, poiCount: n)
+                                   label: c.label, poiCount: n, traffic: c.traffic)
             }
             routeChoices = list
             selectedRouteIdx = 0
@@ -1948,16 +1993,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.98 不再用 OSRM 做起点吸附/步行连接：OSM 路网与高德底图不同源，
             // 吸附点常落到高德认不出的路上，表现为"路线起点悬空、整条线压不到路"。
             // 高德规划接口本身会把起终点吸附到可通行道路，直接传原始坐标最稳。
-            let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey)
+            let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey,
+                                                      via: self.waypoint)
             if choices.isEmpty {
                 fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon, walkLeg: [])
             } else {
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
-                let list = choices.map { c -> RouteChoice in
+                let list = self.preferMotoRoutes(choices).map { c -> RouteChoice in
                     let n = nearbyPoisOnRoute(c.points).count
                     return RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
-                                       label: c.label, poiCount: n)
+                                       label: c.label, poiCount: n, traffic: c.traffic)
                 }
                 routeChoices = list
                 selectedRouteIdx = 0
@@ -1999,7 +2045,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let near = nearbyPoisOnRoute(c.points)
         routePois = near
         fitTick += 1
+        // v1.99 骑行风险 + 路况（切方案时同步刷新）
+        riderRisks = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
+        trafficSpans = c.traffic
+        lastRiskSpoken.removeAll()
         status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
+        if !riderRisks.isEmpty {
+            let blocked = riderRisks.contains { $0.kind.motoBlocked }
+            status += "；" + (blocked ? "⚠️ 含禁摩风险路段：" : "注意：") + RiderAnalyzer.summary(riderRisks)
+        }
     }
 
     /// 筛选距路线折线 130 米内的点位
@@ -2050,6 +2104,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             navigateFollowTick += 1
             tripSummary = nil // v1.81.4 新导航开始时清除上次行程卡
             navStart = Date()
+            // v1.99 轨迹重新开始
+            trackPoints.removeAll()
+            maxSpeedKph = 0
+            lastRiskSpoken.removeAll()
             alertStage = [:]
             offRouteCount = 0
             arriveAnnounced = false
@@ -2097,13 +2155,25 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func finishTrip() {
         guard let start = navStart else { return }
         let dur = Int(Date().timeIntervalSince(start))
+        let avg = dur > 0 ? (Double(routeDistanceM) / 1000.0) / (Double(dur) / 3600.0) : 0
         tripSummary = TripSummary(
             destName: destName,
             distanceM: routeDistanceM,
             durationS: dur,
             snapCount: routePois.count,
-            avgSpeedKmh: dur > 0 ? (Double(routeDistanceM) / 1000.0) / (Double(dur) / 3600.0) : 0)
+            avgSpeedKmh: avg)
+        // v1.99 足迹存档：轨迹抽稀后写入本地（里程过短不记）
+        let pts = trackPoints.count >= 2 ? trackPoints : route
+        FootprintStore.shared.add(Footprint(
+            destName: destName,
+            startedAt: start,
+            distanceM: routeDistanceM,
+            durationS: dur,
+            avgSpeed: avg,
+            maxSpeed: maxSpeedKph,
+            points: TrackSimplifier.simplify(pts)))
         navStart = nil
+        trackPoints.removeAll()
     }
 
     /// 偏离路线检测：距路线折线 >80m 连续 3 次且距上次重规划 >25s → 自动重规划并播报
@@ -2124,7 +2194,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         Task {
             // v1.98 偏航重规划也走高德（与规划同源），不再用 OSRM 吸附终点
             let dest = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
-            let choices = await RouteFetcher.fetchAll(from: start, to: dest, amapKey: amapKey)
+            let choices = await RouteFetcher.fetchAll(from: start, to: dest, amapKey: amapKey,
+                                                      via: self.waypoint)
             if let r = choices.first {
                 route = r.points
                 routeTurns = r.turns
@@ -2135,7 +2206,117 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 farAnnounced.removeAll()
                 alertStage = [:]
                 fitTick += 1
+                // v1.99 偏航重规划后风险/路况同步刷新
+                riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
+                trafficSpans = r.traffic
             }
+        }
+    }
+
+    // MARK: - v1.99 摩托优先 / 风险播报 / 途经点 / 沿途服务
+
+    /// 方案排序：开启"避开高速/高架"时按禁摩风险排序，并把首条标为"推荐"
+    func preferMotoRoutes(_ list: [RouteChoice]) -> [RouteChoice] {
+        guard !list.isEmpty else { return [] }
+        var ordered = list
+        if avoidHighway, list.count > 1 {
+            let scored = list.enumerated().map { (idx, c) -> (Int, Int, RouteChoice) in
+                let risk = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
+                    .filter { $0.kind.motoBlocked }
+                    .reduce(0) { $0 + max(1, $1.lengthM / 800) }
+                return (risk, idx, c)
+            }
+            ordered = scored.sorted { a, b in
+                a.0 == b.0 ? a.1 < b.1 : a.0 < b.0
+            }.map { $0.2 }
+        }
+        let f = ordered[0]
+        ordered[0] = RouteChoice(points: f.points, distanceM: f.distanceM, durationS: f.durationS,
+                                 turns: f.turns, label: "推荐", poiCount: f.poiCount, traffic: f.traffic)
+        return ordered
+    }
+
+    /// 导航中：向前 500 米内出现禁摩/隧道/高架等风险段时播报（每段只报一次）
+    private func checkRiderRisks(at coord: CLLocationCoordinate2D) {
+        guard navigating, !riderRisks.isEmpty, speech != .simple else { return }
+        let remain = route.last.map { distanceM(coord, $0) } ?? 0
+        let traveled = max(0, routeDistanceM - Int(remain))
+        for r in riderRisks where r.ahead(of: traveled) {
+            guard !lastRiskSpoken.contains(r.id) else { continue }
+            let d = Double(r.fromM - traveled)
+            guard d >= 0, d < 500 else { continue }
+            lastRiskSpoken.insert(r.id)
+            let road = r.roadName.isEmpty ? "" : "（\(r.roadName)）"
+            speak("前方\(Int(d))米进入\(r.kind.title)\(road)，\(r.kind.advice)", priority: 2)
+            status = "⚠️ 前方\(Int(d))米\(r.kind.title)"
+        }
+    }
+
+    /// 顺路加一站：设置途经点并重新规划（保留原终点）
+    func setWaypoint(name: String, lat: Double, lon: Double) {
+        waypoint = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        waypointName = name
+        status = "已顺路添加「\(name)」，正在重新规划…"
+        guard destLat != 0 || destLon != 0 else { return }
+        fetchRouteChoices(to: destName, lat: destLat, lon: destLon, autoStart: false)
+    }
+
+    func clearWaypoint() {
+        waypoint = nil
+        waypointName = ""
+    }
+
+    /// 沿途服务设施：以路线中点（无路线时用当前定位）为中心按关键词搜索
+    func loadServices(_ kind: ServiceKind) async {
+        serviceKindActive = kind
+        serviceTips = []
+        serviceKindLoading = true
+        let anchor: CLLocationCoordinate2D?
+        if route.count > 2 {
+            anchor = route[route.count / 2]
+        } else {
+            anchor = currentLocation
+        }
+        defer { serviceKindLoading = false }
+        guard let a = anchor else { return }
+        serviceTips = await amapKeywordSearch(kind.keyword, lat: a.latitude, lon: a.longitude, radius: 8000)
+    }
+
+    func clearServices() {
+        serviceTips = []
+        serviceKindActive = nil
+    }
+
+    /// 高德关键词周边搜索（返回按距离升序）
+    func amapKeywordSearch(_ keyword: String, lat: Double, lon: Double, radius: Int = 8000) async -> [AmapTip] {
+        guard !amapKey.isEmpty else { return [] }
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
+        let loc = String(format: "%.6f,%.6f", glon, glat)
+        let enc = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlStr = "https://restapi.amap.com/v3/place/around?key=\(amapKey)&location=\(loc)&keywords=\(enc)&radius=\(radius)&offset=20&page=1&sortrule=distance"
+        guard let url = URL(string: urlStr) else { return [] }
+        do {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 8
+            let (data, _) = try await URLSession.shared.data(for: req)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pois = obj["pois"] as? [[String: Any]] else { return [] }
+            var out: [AmapTip] = []
+            for p in pois {
+                guard let name = p["name"] as? String, !name.isEmpty,
+                      let loc2 = p["location"] as? String, !loc2.isEmpty else { continue }
+                let parts = loc2.split(separator: ",").compactMap { Double($0) }
+                guard parts.count == 2 else { continue }
+                let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+                let addr = p["address"] as? String ?? ""
+                let dist = p["distance"] as? String ?? ""
+                var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
+                if !dist.isEmpty { sub += " · 距路线\(Int(Double(dist) ?? 0))米" }
+                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
+            }
+            return out
+        } catch {
+            return []
         }
     }
 
@@ -2182,14 +2363,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let t = routeTurns[idx]
             let text = turnText(t)
             // 高德式两段播报：远提示（800 米级，含路名）→ 近提示（150 米内）
-            if best < 900 && !farAnnounced.contains(idx) {
+            // v1.99 播报分级：简洁只报近点；标准/详细保留 800 米远提示，详细再加剩余里程
+            if speech.farPrompt && best < 900 && !farAnnounced.contains(idx) {
                 farAnnounced.insert(idx)
                 let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
                 speak("前方\(Int(best))米\(text)\(road)")
                 status = "导航：前方\(Int(best))米\(text)\(road) · 余\(Int(toDest / 1000))公里"
             } else if best < 150 {
                 lastTurnSpoken = idx
-                speak("\(text)，距您\(Int(best))米")
+                if speech.verbose {
+                    let tail = toDest > 1000 ? "，剩余\(Int(toDest / 1000))公里" : ""
+                    speak("\(text)，距您\(Int(best))米\(tail)")
+                } else {
+                    speak("\(text)，距您\(Int(best))米")
+                }
                 status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
             }
         }

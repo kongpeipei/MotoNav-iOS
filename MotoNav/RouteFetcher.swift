@@ -77,6 +77,8 @@ struct RouteChoice {
     let turns: [RouteTurn]
     let label: String
     let poiCount: Int
+    /// v1.99 路况分段（高德 tmc），只在拥堵/缓行段有值
+    var traffic: [TrafficSpan] = []
 }
 
 /// 免费骑行/驾车路径规划（OSRM 公共服务，无需 API Key），
@@ -154,11 +156,12 @@ enum RouteFetcher {
     static func fetchAll(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
-        amapKey: String = ""
+        amapKey: String = "",
+        via: CLLocationCoordinate2D? = nil
     ) async -> [RouteChoice] {
         var result: [RouteChoice] = []
         if !amapKey.isEmpty {
-            result = await fetchAmapDriving(from: start, to: end, key: amapKey)
+            result = await fetchAmapDriving(from: start, to: end, key: amapKey, via: via)
         }
         // 高德不可用（无 Key / 配额用尽 / 网络异常）时兜底 OSRM
         if result.isEmpty {
@@ -184,7 +187,7 @@ enum RouteFetcher {
                 used.insert(label)
                 out.append(RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
-                                       label: label, poiCount: c.poiCount))
+                                       label: label, poiCount: c.poiCount, traffic: c.traffic))
             }
             result = out
         }
@@ -266,7 +269,8 @@ enum RouteFetcher {
     private static func fetchAmapDriving(
         from start: CLLocationCoordinate2D,
         to end: CLLocationCoordinate2D,
-        key: String
+        key: String,
+        via: CLLocationCoordinate2D? = nil
     ) async -> [RouteChoice] {
         // v1.98 坐标系：app 内地图/标注/OSM 数据都是 WGS-84（屏幕网格为 WGS 墨卡托），
         // 高德接口收发都需要 GCJ-02 → 请求前 WGS→GCJ，返回后再 GCJ→WGS 绘制
@@ -279,12 +283,18 @@ enum RouteFetcher {
             ("0", "推荐"), ("1", "少收费"), ("2", "距离优先"),
             ("4", "躲避拥堵"), ("6", "不走高速"),
         ]
+        // v1.99 途经点（"顺路加一站"）：高德 waypoints 参数，多个用 ; 分隔
+        var waypoints: String? = nil
+        if let v = via {
+            let (vlat, vlon) = CoordConv.wgs2gcj(v.latitude, v.longitude)
+            waypoints = String(format: "%.6f,%.6f", vlon, vlat)
+        }
         var all: [RouteChoice] = []
         await withTaskGroup(of: [RouteChoice].self) { group in
             for (st, label) in strategies {
                 group.addTask {
                     await requestStrategy(origin: origin, destination: destination,
-                                          key: key, st: st, label: label)
+                                          key: key, st: st, label: label, waypoints: waypoints)
                 }
             }
             for await list in group { all.append(contentsOf: list) }
@@ -317,9 +327,12 @@ enum RouteFetcher {
     /// 单个 strategy 请求（返回该策略下所有候选 path）
     private static func requestStrategy(
         origin: String, destination: String, key: String,
-        st: String, label: String
+        st: String, label: String, waypoints: String? = nil
     ) async -> [RouteChoice] {
-        let urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=\(st)"
+        var urlStr = "https://restapi.amap.com/v3/direction/driving?key=\(key)&origin=\(origin)&destination=\(destination)&extensions=all&strategy=\(st)"
+        if let w = waypoints, !w.isEmpty {
+            urlStr += "&waypoints=\(w)"
+        }
         guard let url = URL(string: urlStr) else { return [] }
         var req = URLRequest(url: url)
         req.timeoutInterval = 12
@@ -330,7 +343,7 @@ enum RouteFetcher {
         return paths.compactMap { parseAmapPath($0, label: label) }
     }
 
-    /// 解析高德 v3 单条 path 为 RouteChoice（折线点 + 转向步骤）
+    /// 解析高德 v3 单条 path 为 RouteChoice（折线点 + 转向步骤 + 路况分段）
     private static func parseAmapPath(_ p: [String: Any], label: String) -> RouteChoice? {
         guard let distStr = p["distance"] as? String,
               let distanceM = Int(distStr),
@@ -339,10 +352,12 @@ enum RouteFetcher {
               let steps = p["steps"] as? [[String: Any]] else { return nil }
         var points: [CLLocationCoordinate2D] = []
         var turns: [RouteTurn] = []
+        var traffic: [TrafficSpan] = []
         var acc = 0
         for step in steps {
             guard let polyline = step["polyline"] as? String else { continue }
             // v1.98 高德返回 GCJ-02 → 转 WGS-84 再绘制（屏幕网格为 WGS 墨卡托）
+            var stepPts: [CLLocationCoordinate2D] = []
             for seg in polyline.split(separator: ";") {
                 let parts = seg.split(separator: ",").compactMap { Double($0) }
                 guard parts.count >= 2 else { continue }
@@ -353,6 +368,20 @@ enum RouteFetcher {
                    abs(last.latitude - c.latitude) < 1e-7,
                    abs(last.longitude - c.longitude) < 1e-7 { continue }
                 points.append(c)
+                stepPts.append(c)
+            }
+            // v1.99 路况：v3 的 step.tmc（dict）或 v5 的 step.tmcs（数组）
+            if let tmc = step["tmc"] as? [String: Any],
+               let lv = statusLevel(tmc["status"] as? String), lv >= 1,
+               stepPts.count >= 2 {
+                traffic.append(TrafficSpan(level: lv, points: stepPts))
+            } else if let tmcs = step["tmcs"] as? [[String: Any]] {
+                for t in tmcs {
+                    guard let poly = t["polyline"] as? String,
+                          let lv = statusLevel(t["status"] as? String), lv >= 1 else { continue }
+                    let pts = parsePolyline(poly)
+                    if pts.count >= 2 { traffic.append(TrafficSpan(level: lv, points: pts)) }
+                }
             }
             if let roadName = step["road"] as? String,
                let action = step["action"] as? String,
@@ -373,7 +402,29 @@ enum RouteFetcher {
             }
         }
         return RouteChoice(points: points, distanceM: distanceM, durationS: durationS,
-                           turns: turns, label: label, poiCount: 0)
+                           turns: turns, label: label, poiCount: 0, traffic: traffic)
+    }
+
+    /// 高德折线字符串 → 坐标数组（GCJ → WGS）
+    private static func parsePolyline(_ s: String) -> [CLLocationCoordinate2D] {
+        var out: [CLLocationCoordinate2D] = []
+        for seg in s.split(separator: ";") {
+            let parts = seg.split(separator: ",").compactMap { Double($0) }
+            guard parts.count >= 2 else { continue }
+            let (wlat, wlon) = CoordConv.gcj2wgs(parts[1], parts[0])
+            out.append(CLLocationCoordinate2D(latitude: wlat, longitude: wlon))
+        }
+        return out
+    }
+
+    /// 高德路况文字 → 等级（0 畅通 / 1 缓行 / 2 拥堵 / 3 严重拥堵）
+    private static func statusLevel(_ s: String?) -> Int? {
+        guard let s = s, !s.isEmpty else { return nil }
+        if s.contains("严重") { return 3 }
+        if s.contains("拥堵") { return 2 }
+        if s.contains("缓行") || s.contains("缓慢") { return 1 }
+        if s.contains("畅通") { return 0 }
+        return nil
     }
 
     private static func parseAll(_ data: Data) -> [RouteChoice] {

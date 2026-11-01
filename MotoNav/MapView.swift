@@ -2,6 +2,31 @@ import SwiftUI
 import MapKit
 import UIKit
 
+/// v2.00 地图坐标边界层（路线"贴不上路"的根因修复）
+///
+/// 事实：MKMapView 在中国大陆用的是高德底图（GCJ-02），`addAnnotation` / `addOverlay` /
+/// `setRegion` 传入的经纬度会**按 GCJ-02 原样铺在底图上**——系统只对 `CLLocation`
+/// 定位结果在内部做 WGS→GCJ 适配（所以系统蓝点是准的），API 传进来的坐标不会替你纠偏。
+///
+/// 本 App 内部（存储/GPX/组队/高德接口）统一使用 WGS-84，因此：
+/// ① 凡是"喂给地图"的坐标必须先转 GCJ；② 从地图取回的坐标（convert(pt,toCoordinateFrom:)）
+/// 必须转回 WGS。漏转一次就整体偏 300~600 米，表现为路线画在道路旁边、定位箭头与道路分离。
+enum MapGeo {
+    /// WGS-84 → GCJ-02（送给地图显示）
+    static func toGCJ(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        let (la, lo) = CoordConv.wgs2gcj(c.latitude, c.longitude)
+        return CLLocationCoordinate2D(latitude: la, longitude: lo)
+    }
+    static func toGCJ(_ pts: [CLLocationCoordinate2D]) -> [CLLocationCoordinate2D] {
+        pts.map { toGCJ($0) }
+    }
+    /// GCJ-02 → WGS-84（从地图取回，交给业务层）
+    static func toWGS(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        let (la, lo) = CoordConv.gcj2wgs(c.latitude, c.longitude)
+        return CLLocationCoordinate2D(latitude: la, longitude: lo)
+    }
+}
+
 /// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
     let pois: [Poi]
@@ -62,6 +87,12 @@ struct MapViewRepresentable: UIViewRepresentable {
     let tipPolygon: [CLLocationCoordinate2D]?
     /// v1.81.1 地点信息卡定位点（fitTick 变化时优先移到这里，不画高亮圈）
     let tipFit: CLLocationCoordinate2D?
+    /// v1.99 实时路况分段（高德 tmc：缓行黄 / 拥堵红，叠在选中方案之上）
+    var trafficSpans: [TrafficSpan] = []
+    /// v1.99 足迹回放轨迹（我的-足迹 → 点一条记录）
+    var footprint: [CLLocationCoordinate2D] = []
+    /// v1.99 组队队友位置
+    var teamMembers: [TeamMember] = []
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
 
@@ -135,7 +166,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.hasCentered = true
             context.coordinator.setRegionProgrammatically {
                 map.setRegion(
-                    MKCoordinateRegion(center: loc, latitudinalMeters: 3000, longitudinalMeters: 3000),
+                    MKCoordinateRegion(center: MapGeo.toGCJ(loc), latitudinalMeters: 3000, longitudinalMeters: 3000),
                     animated: false)
             }
         }
@@ -145,13 +176,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let tf = tipFit {
                 // v1.81.1 地点信息卡：地图定位到该点（不画黄圈，卡片沉底展示）
                 context.coordinator.setRegionProgrammatically {
-                    map.setRegion(MKCoordinateRegion(center: tf, latitudinalMeters: 3000, longitudinalMeters: 3000), animated: true)
+                    map.setRegion(MKCoordinateRegion(center: MapGeo.toGCJ(tf), latitudinalMeters: 3000, longitudinalMeters: 3000), animated: true)
                 }
             } else if route.count > 1 {
                 var rect = MKMapRect.null
                 var pts = route
                 for r in choiceRoutes { pts.append(contentsOf: r) }
-                for c in pts {
+                for c in MapGeo.toGCJ(pts) {
                     let p = MKMapPoint(c)
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
@@ -165,7 +196,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 var rect = MKMapRect.null
                 var pts = gasStations
                 if let u = userLocation { pts.append(u) }
-                for c in pts {
+                for c in MapGeo.toGCJ(pts) {
                     let p = MKMapPoint(c)
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
@@ -216,7 +247,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .none
                     map.setRegion(
-                        MKCoordinateRegion(center: p, latitudinalMeters: 3000, longitudinalMeters: 3000),
+                        MKCoordinateRegion(center: MapGeo.toGCJ(p), latitudinalMeters: 3000, longitudinalMeters: 3000),
                         animated: true)
                 }
             }
@@ -225,7 +256,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if previews.isEmpty {
                 map.addAnnotation(PreviewAnnotation(coordinate: p))
             } else if let a = previews.first {
-                a.coordinate = p
+                a.update(p)
             }
         } else {
             previews.forEach { map.removeAnnotation($0) }
@@ -235,7 +266,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         let wantGas = Set(gasStations.map { "\($0.latitude),\($0.longitude)" })
         map.annotations
             .compactMap { $0 as? GasAnnotation }
-            .filter { !wantGas.contains("\($0.coordinate.latitude),\($0.coordinate.longitude)") }
+            .filter { !wantGas.contains($0.wgsKey) }
             .forEach { map.removeAnnotation($0) }
         for c in gasStations {
             let key = "\(c.latitude),\(c.longitude)"
@@ -265,10 +296,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(CategoryAnnotation(result: r))
             }
         }
-        map.removeOverlays(map.overlays)
+        // v2.00 只移除折线/多边形，保留高德瓦片 overlay
+        // （旧写法 removeOverlays(map.overlays) 会把底图瓦片一起删掉，且再也没插回来，
+        //  结果整张底图退回苹果原生地图——这也是"路线压不到路"的观感来源之一）
+        map.removeOverlays(map.overlays.filter { !($0 is AmapTileOverlay) })
         context.coordinator.underPolyline = nil
         context.coordinator.mainPolyline = nil
         context.coordinator.alternatePolylines = []
+        context.coordinator.trafficPolylines = []
+        context.coordinator.trafficColors = []
+        context.coordinator.footprintPolyline = nil
         // v1.81 地点区域多边形（AOI 蓝色虚线框；随 tipPolygon 变化重建，每次重画路线后补加）
         let polyKey = tipPolygon.map { pts in
             pts.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ":")
@@ -276,7 +313,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         if polyKey != context.coordinator.lastTipPolygonKey {
             context.coordinator.lastTipPolygonKey = polyKey
             if let pts = tipPolygon, pts.count >= 3 {
-                context.coordinator.tipPolygonOverlay = MKPolygon(coordinates: pts, count: pts.count)
+                let gpts = MapGeo.toGCJ(pts)
+                context.coordinator.tipPolygonOverlay = MKPolygon(coordinates: gpts, count: gpts.count)
             } else {
                 context.coordinator.tipPolygonOverlay = nil
             }
@@ -285,27 +323,56 @@ struct MapViewRepresentable: UIViewRepresentable {
             map.addOverlay(pg)
         }
         if route.count > 1 {
+            let gRoute = MapGeo.toGCJ(route)
             if navigating {
                 // 导航中只画当前路线（草绿双层，高德导航推荐色）
-                let under = MKPolyline(coordinates: route, count: route.count)
+                let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
                 context.coordinator.underPolyline = under
-                let main = MKPolyline(coordinates: route, count: route.count)
+                let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
                 context.coordinator.mainPolyline = main
                 map.addOverlay(under)
                 map.addOverlay(main)
             } else {
                 // 规划态：备选方案浅绿虚线 + 当前方案草绿双层（高德式同屏多路线）
                 for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
-                    let alt = MKPolyline(coordinates: pts, count: pts.count)
+                    let gpts = MapGeo.toGCJ(pts)
+                    let alt = MKPolyline(coordinates: gpts, count: gpts.count)
                     context.coordinator.alternatePolylines.append(alt)
                     map.addOverlay(alt)
                 }
-                let under = MKPolyline(coordinates: route, count: route.count)
+                let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
                 context.coordinator.underPolyline = under
-                let main = MKPolyline(coordinates: route, count: route.count)
+                let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
                 context.coordinator.mainPolyline = main
                 map.addOverlay(under)
                 map.addOverlay(main)
+            }
+            // v1.99 路况：缓行黄 / 拥堵红，叠在当前方案之上（高德式）
+            for span in trafficSpans where span.points.count >= 2 {
+                let gpts = MapGeo.toGCJ(span.points)
+                let poly = MKPolyline(coordinates: gpts, count: gpts.count)
+                context.coordinator.trafficPolylines.append(poly)
+                context.coordinator.trafficColors.append(span.color)
+                map.addOverlay(poly)
+            }
+        }
+        // v1.99 足迹回放：蓝色虚线（不受路线清空影响）
+        if footprint.count >= 2 {
+            let gpts = MapGeo.toGCJ(footprint)
+            let poly = MKPolyline(coordinates: gpts, count: gpts.count)
+            context.coordinator.footprintPolyline = poly
+            map.addOverlay(poly)
+        }
+        // v1.99 组队队友标注：按 名称+坐标 做键，变化才重建
+        let teamKey = teamMembers.map { "\($0.name)@\(String(format: "%.5f", $0.lat)),\(String(format: "%.5f", $0.lon))" }
+            .sorted().joined(separator: "|")
+        if teamKey != context.coordinator.lastTeamKey {
+            context.coordinator.lastTeamKey = teamKey
+            map.annotations.compactMap { $0 as? TeamAnnotation }
+                .forEach { map.removeAnnotation($0) }
+            for m in teamMembers {
+                map.addAnnotation(TeamAnnotation(name: m.name, speedKph: m.speedKph,
+                                                 coordinate: m.coordinate))
             }
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
@@ -345,7 +412,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if overviewTick > 0, route.count > 1 {
                 context.coordinator.userMoved = true
                 var rect = MKMapRect.null
-                for c in route {
+                for c in MapGeo.toGCJ(route) {
                     let p = MKMapPoint(c)
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
@@ -376,7 +443,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.cruiseLastLoc = loc
                 context.coordinator.setRegionProgrammatically {
                     var cam = map.camera
-                    cam.centerCoordinate = loc
+                    cam.centerCoordinate = MapGeo.toGCJ(loc)
                     cam.altitude = 3000
                     cam.pitch = 0
                     map.camera = cam
@@ -392,7 +459,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     context.coordinator.cruiseLastLoc = loc
                     context.coordinator.setRegionProgrammatically {
                         var cam = map.camera
-                        cam.centerCoordinate = loc
+                        cam.centerCoordinate = MapGeo.toGCJ(loc)
                         map.camera = cam
                     }
                 }
@@ -487,6 +554,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var mainPolyline: MKPolyline?
         /// 备选方案折线（浅绿色虚线，renderer 区分）
         var alternatePolylines: [MKPolyline] = []
+        /// v1.99 路况分段折线与对应颜色（按下标一一对应）
+        var trafficPolylines: [MKPolyline] = []
+        var trafficColors: [UIColor] = []
+        var footprintPolyline: MKPolyline?
+        var lastTeamKey = ""
         /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
         var userMoved = false
         /// 导航跟随触发记忆
@@ -561,13 +633,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                     if let p = bestPlace {
                         onPlaceLongPress?(p)
                     } else {
-                        let coord = map.convert(pt, toCoordinateFrom: map)
+                        // v2.00 地图返回 GCJ，业务层要 WGS
+                        let coord = MapGeo.toWGS(map.convert(pt, toCoordinateFrom: map))
                         onLongPress?(coord)
                     }
                 }
             case .changed:
                 if let ann = dragAnnotation {
-                    let newCoord = map.convert(pt, toCoordinateFrom: map)
+                    // v2.00 dragCoordinate 存 WGS（coordinate 输出时会再转 GCJ）
+                    let newCoord = MapGeo.toWGS(map.convert(pt, toCoordinateFrom: map))
                     ann.dragCoordinate = newCoord
                     // 地图跟随平移（高德拖拽标记行为）：标注始终保持在手指下，可拖出屏幕范围继续移动
                     let ap = map.convert(ann.coordinate, toPointTo: map)
@@ -636,7 +710,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     return
                 }
             }
-            let coord = map.convert(pt, toCoordinateFrom: map)
+            let coord = MapGeo.toWGS(map.convert(pt, toCoordinateFrom: map))
             // v1.98 规划态：点地图任何位置（含地名标签）都退出规划回首页
             if planning {
                 onMapTap?(coord)
@@ -656,13 +730,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         /// 点到折线的最短屏幕距离（每 2 个点抽样，兼顾精度与开销）
+        /// v2.00 入参是业务层 WGS 坐标，转 GCJ 后再换算屏幕点
         static func pointDistance(_ pts: [CLLocationCoordinate2D], to p: CGPoint, in map: MKMapView) -> CGFloat {
             guard pts.count > 1 else { return .greatestFiniteMagnitude }
+            let g = MapGeo.toGCJ(pts)
             var best = CGFloat.greatestFiniteMagnitude
-            var prev = map.convert(pts[0], toPointTo: map)
+            var prev = map.convert(g[0], toPointTo: map)
             var i = 1
-            while i < pts.count {
-                let cur = map.convert(pts[i], toPointTo: map)
+            while i < g.count {
+                let cur = map.convert(g[i], toPointTo: map)
                 let d = segmentDistance(p, prev, cur)
                 if d < best { best = d }
                 prev = cur
@@ -741,6 +817,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.titleVisibility = .adaptive
                 return v
             }
+            if let ta = annotation as? TeamAnnotation {
+                let id = "team"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                    ?? MKMarkerAnnotationView(annotation: ta, reuseIdentifier: id)
+                v.markerTintColor = .systemTeal
+                v.glyphText = String(ta.name.prefix(1))
+                v.titleVisibility = .visible
+                v.canShowCallout = false
+                return v
+            }
             if let pa = annotation as? PreviewAnnotation {
                 let id = "preview"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
@@ -810,6 +896,18 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
+                // v1.99 路况分段优先着色（缓行黄 / 拥堵红）
+                if let ti = self.trafficPolylines.firstIndex(where: { $0 === poly }) {
+                    r.strokeColor = self.trafficColors[ti]
+                    r.lineWidth = 7
+                    return r
+                }
+                if poly === self.footprintPolyline {
+                    r.strokeColor = UIColor(red: 0.16, green: 0.45, blue: 0.98, alpha: 0.9)
+                    r.lineWidth = 5
+                    r.lineDashPattern = [8, 6]
+                    return r
+                }
                 if poly === self.underPolyline {
                     // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
                     r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
@@ -850,13 +948,32 @@ struct MapViewRepresentable: UIViewRepresentable {
     }
 }
 
+/// v1.99 组队队友标注（地图上的"骑手点"）
+/// v2.00 内部保存 WGS，`coordinate` 输出 GCJ（地图只认 GCJ）
+final class TeamAnnotation: NSObject, MKAnnotation {
+    let name: String
+    let speedKph: Double
+    private let wgs: CLLocationCoordinate2D
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
+
+    init(name: String, speedKph: Double, coordinate: CLLocationCoordinate2D) {
+        self.name = name
+        self.speedKph = speedKph
+        self.wgs = coordinate
+        super.init()
+    }
+    var title: String? { name }
+    var subtitle: String? { String(format: "%.0f km/h", speedKph) }
+}
+
 /// 路线起点/终点标记
 final class RouteEndAnnotation: NSObject, MKAnnotation {
     let kind: String
-    let coordinate: CLLocationCoordinate2D
+    private let wgs: CLLocationCoordinate2D
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
     init(kind: String, coordinate: CLLocationCoordinate2D) {
         self.kind = kind
-        self.coordinate = coordinate
+        self.wgs = coordinate
         super.init()
     }
     var title: String? { kind == "start" ? "起点" : "终点" }
@@ -865,24 +982,31 @@ final class RouteEndAnnotation: NSObject, MKAnnotation {
 final class PoiAnnotation: NSObject, MKAnnotation {
     var poi: Poi
     var onRoute: Bool
-    /// 拖动校准中的临时坐标（nil = 使用点位原始坐标）
+    /// 拖动校准中的临时坐标（nil = 使用点位原始坐标）；v2.00 起存 WGS
     var dragCoordinate: CLLocationCoordinate2D?
     init(poi: Poi, onRoute: Bool = false) {
         self.poi = poi
         self.onRoute = onRoute
         super.init()
     }
-    var coordinate: CLLocationCoordinate2D { dragCoordinate ?? poi.coordinate }
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(dragCoordinate ?? poi.coordinate) }
     var title: String? { poi.name }
     var subtitle: String? { poi.type.label }
 }
 
 /// 搜索预览点（绿色高亮）
 final class PreviewAnnotation: NSObject, MKAnnotation {
-    var coordinate: CLLocationCoordinate2D
+    private var wgs: CLLocationCoordinate2D
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
     init(coordinate: CLLocationCoordinate2D) {
-        self.coordinate = coordinate
+        self.wgs = coordinate
         super.init()
+    }
+    /// 坐标变化时手动发 KVO（计算属性不会自动通知，MapKit 靠 KVO 移动标注）
+    func update(_ c: CLLocationCoordinate2D) {
+        willChangeValue(forKey: "coordinate")
+        wgs = c
+        didChangeValue(forKey: "coordinate")
     }
     var title: String? { "搜索目标" }
 }
@@ -890,12 +1014,15 @@ final class PreviewAnnotation: NSObject, MKAnnotation {
 /// 加油站标注（橙色"油"）
 final class GasAnnotation: NSObject, MKAnnotation {
     let id: String
-    var coordinate: CLLocationCoordinate2D
+    private var wgs: CLLocationCoordinate2D
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
     init(id: String, coordinate: CLLocationCoordinate2D) {
         self.id = id
-        self.coordinate = coordinate
+        self.wgs = coordinate
         super.init()
     }
+    /// 业务层用的 WGS 键（coordinate 已转 GCJ，不能再用它比较）
+    var wgsKey: String { "\(wgs.latitude),\(wgs.longitude)" }
     var title: String? { "加油站" }
 }
 
@@ -907,7 +1034,7 @@ final class PlaceAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     var coordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: place.lat, longitude: place.lon)
+        MapGeo.toGCJ(CLLocationCoordinate2D(latitude: place.lat, longitude: place.lon))
     }
     var title: String? { place.name }
 }
@@ -920,7 +1047,7 @@ final class CategoryAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     var coordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: result.lat, longitude: result.lon)
+        MapGeo.toGCJ(CLLocationCoordinate2D(latitude: result.lat, longitude: result.lon))
     }
     var title: String? { result.name }
 }
@@ -983,8 +1110,6 @@ final class AmapTileRenderer: MKOverlayRenderer {
     private static let zMin = 3, zMax = 19
     private let lock = NSLock()
     private var cache: [String: UIImage] = [:]
-    /// v1.98 屏幕瓦片 → 高德瓦片索引与像素偏移缓存（每块瓦片恒定，避免每帧重算三角函数）
-    private var offsetCache: [String: (gx: Int, gy: Int, dx: Double, dy: Double)] = [:]
     private var pending: Set<String> = []
     private var inflight = 0
     /// 夜间瓦片（导航中 style=8）
@@ -996,9 +1121,22 @@ final class AmapTileRenderer: MKOverlayRenderer {
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }()
+    /// v1.99 离线包目录（OfflineMapManager 下载到这里）
+    private static let offlineDir: URL = {
+        let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Tiles/offline", isDirectory: true)
+        return u
+    }()
     private let ioQueue = DispatchQueue(label: "amap.tile.io")
     private static let diskMaxFiles = 1200
 
+    /// v2.00 瓦片直铺（关键修复）
+    ///
+    /// 高德瓦片本身就是 GCJ-02 网格，而 MKMapView 的 overlay 坐标 / 标注坐标在本 App 里
+    /// 已统一转成 GCJ（见 MapGeo），所以瓦片必须**按原索引原样铺回同一张 GCJ 网格**。
+    ///
+    /// v1.98 曾经反过来：把 GCJ 瓦片平移半个瓦片去"对齐"WGS 网格，不仅漏了半瓦片偏移，
+    /// 还与已转 GCJ 的折线形成了双重错位——这正是"路线永远压不到路上"的直接原因。
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in ctx: CGContext) {
         let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int((20.0 - log2(zoomScale)).rounded())))
         let n = 1 << z
@@ -1008,20 +1146,11 @@ final class AmapTileRenderer: MKOverlayRenderer {
         let y0 = max(0, Int(floor(mapRect.minY / per)))
         let y1 = min(n - 1, Int(floor(mapRect.maxY / per)))
         guard x1 >= x0, y1 >= y0 else { return }
-        // v1.98 瓦片重投影修正：
-        // 屏幕按 WGS-84 网格切瓦片，高德瓦片内容却是 GCJ-02，两者相差约 500 米。
-        // 旧版只把"取瓦片的索引"做了偏移，却把图像对齐到原矩形，没算"瓦片内偏移"，
-        // 结果底图整体错位（最多一个瓦片宽），叠加的路线/标注因此永远压不到路上。
-        // 这里按每块瓦片中心的 GCJ 坐标算出它在 GCJ 瓦片内的像素偏移量，反向平移绘制。
         for x in x0...x1 {
-            let lonC = (Double(x) + 0.5) / Double(n) * 360.0 - 180.0
             for y in y0...y1 {
-                let off = tileOffset(x: x, y: y, z: z, lonC: lonC)
-                let gx = off.gx, gy = off.gy
-                let key = "\(dark ? "n" : "d")-\(z)-\(gx)-\(gy)" // 深浅样式分开缓存，切换即时生效
+                let key = "\(dark ? "n" : "d")-\(z)-\(x)-\(y)" // 深浅样式分开缓存，切换即时生效
                 let rect = self.rect(for: MKMapRect(
-                    x: Double(x) * per - off.dx,
-                    y: Double(y) * per - off.dy,
+                    x: Double(x) * per, y: Double(y) * per,
                     width: per, height: per))
                 lock.lock()
                 let hit = cache[key]
@@ -1031,46 +1160,21 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 if let hit, let cg = hit.cgImage {
                     ctx.draw(cg, in: rect)
                 } else if needFetch {
-                    fetchTile(gx, gy, z, key)
+                    fetchTile(x, y, z, key)
                 }
             }
         }
     }
 
-    /// 单块屏幕瓦片 → 对应的高德 GCJ 瓦片索引 + 瓦片内像素偏移（世界坐标单位）
-    private func tileOffset(x: Int, y: Int, z: Int, lonC: Double) -> (gx: Int, gy: Int, dx: Double, dy: Double) {
-        let key = "\(z)-\(x)-\(y)"
-        lock.lock()
-        if let c = offsetCache[key] { lock.unlock(); return c }
-        lock.unlock()
-        let n = Double(1 << z)
-        let latC = tileLat(y, z)
-        let (gLat, gLon) = CoordConv.wgs2gcj(latC, lonC)
-        let gx = min(Int(n) - 1, max(0, Int(floor((gLon + 180.0) / 360.0 * n))))
-        let gy = min(Int(n) - 1, max(0, tileY(gLat, z)))
-        let wx = (gLon + 180.0) / 360.0 * MKMapRect.world.size.width
-        let wy = worldY(gLat) * MKMapRect.world.size.height
-        let res = (gx, gy, wx - Double(gx) * MKMapRect.world.size.width / n,
-                   wy - Double(gy) * MKMapRect.world.size.height / n)
-        lock.lock()
-        if offsetCache.count > 4000 { offsetCache.removeAll(keepingCapacity: true) }
-        offsetCache[key] = res
-        lock.unlock()
-        return res
-    }
-
-    /// 纬度 → 墨卡托归一化 y（0 顶部）
-    private func worldY(_ lat: Double) -> Double {
-        let r = lat / 180.0 * .pi
-        return (1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0
-    }
-
     private func fetchTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
         // v1.90 磁盘缓存命中直接使用（离线可用）：读盘 → 入内存缓存 → 触发重绘，不再发网络请求
         let diskURL = Self.diskDir.appendingPathComponent("\(key).png")
-        if FileManager.default.fileExists(atPath: diskURL.path) {
+        // v1.99 离线地图包优先（手动下载的区域，无网也能出图）
+        let offlineURL = Self.offlineDir.appendingPathComponent("\(key).png")
+        for url in [offlineURL, diskURL] {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
             lock.lock()
-            if cache[key] == nil, let img = UIImage(contentsOfFile: diskURL.path) {
+            if cache[key] == nil, let img = UIImage(contentsOfFile: url.path) {
                 cache[key] = img
                 pending.remove(key)
                 lock.unlock()
@@ -1165,18 +1269,6 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 try? fm.removeItem(at: f)
             }
         }
-    }
-
-    /// 瓦片 y → 中心纬度（Web Mercator）
-    private func tileLat(_ y: Int, _ z: Int) -> Double {
-        let n = Double(1 << z)
-        return atan(sinh(.pi * (1 - 2.0 * (Double(y) + 0.5) / n))) * 180.0 / .pi
-    }
-    /// 纬度 → 瓦片 y
-    private func tileY(_ lat: Double, _ z: Int) -> Int {
-        let n = Double(1 << z)
-        let r = lat / 180.0 * .pi
-        return Int(floor((1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0 * n))
     }
 }
 
