@@ -89,6 +89,38 @@ extension CLLocationCoordinate2D: Equatable {
     }
 }
 
+/// v1.97 "我的-常用地点"编辑目标：家 / 公司 / 已有自定义选项 / 新增选项
+enum CommonPlaceSlot: Equatable, Identifiable {
+    case home
+    case work
+    /// 收藏项（favorites 的 "lat,lon" key）
+    case favorite(String)
+    /// 自定义常用地点（QuickPoi.id）
+    case custom(String)
+    /// 点"+"新增一项
+    case newCustom
+
+    var id: String {
+        switch self {
+        case .home: return "home"
+        case .work: return "work"
+        case .favorite(let k): return "fav:\(k)"
+        case .custom(let i): return "custom:\(i)"
+        case .newCustom: return "new"
+        }
+    }
+
+    /// 卡片/提示条上的名称
+    var title: String {
+        switch self {
+        case .home: return "家"
+        case .work: return "公司"
+        case .favorite: return "收藏"
+        case .custom, .newCustom: return "常用地点"
+        }
+    }
+}
+
 /// 轻点地图后的地点介绍卡数据（高德逆地理编码结果）
 /// name/address/poiType 三个字段在解析完成前用本地标签兜底，loading 期间卡片显示骨架
 struct TapPlaceInfo: Identifiable, Equatable {

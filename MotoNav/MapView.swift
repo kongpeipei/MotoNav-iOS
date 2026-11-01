@@ -569,13 +569,36 @@ struct MapViewRepresentable: UIViewRepresentable {
             guard gesture.state == .ended,
                   let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
-            for a in map.annotations {
+            // v1.96 命中判断改为直接派发回调：didSelect 只在点中图标本身时触发，
+            // 而"地点名文字"渲染在图标下方，常落在图标 frame 之外，
+            // 只靠 didSelect 会出现"点了文字没反应"的死区。
+            var hit: MKAnnotation?
+            var hitDist = CGFloat.greatestFiniteMagnitude
+            for a in map.annotations where !(a is MKUserLocation) {
+                let isPlace = a is PlaceAnnotation
+                // 被碰撞隐藏的地点标签不参与命中：缩小时大量标签被 MapKit 隐藏，
+                // 若仍参与命中，点空地会弹出看不见的地名卡
+                if isPlace {
+                    guard let v = map.view(for: a), !v.isHidden, v.alpha > 0.05 else { continue }
+                }
                 let ap = map.convert(a.coordinate, toPointTo: map)
                 let d = hypot(pt.x - ap.x, pt.y - ap.y)
-                // 命中任何标注（点位/地点/类别/起点终点/用户位置）→ 交给 didSelect
-                if d < 40 && !(a is MKUserLocation) {
-                    return
+                // 地点名标签的文字范围更大，热区放宽到 46pt
+                let limit: CGFloat = isPlace ? 46 : 40
+                if d < limit && d < hitDist {
+                    hitDist = d
+                    hit = a
                 }
+            }
+            if let a = hit {
+                // 地点名文字 → 地点介绍卡；类别结果 → 直接规划路线
+                if let pla = a as? PlaceAnnotation {
+                    onPlaceSelect?(pla.place)
+                } else if let ca = a as? CategoryAnnotation {
+                    onCategorySelect?(ca.result)
+                }
+                // 其它标注（拍照点位/起终点/加油站）维持原样：吞掉点击，不当作空白
+                return
             }
             let coord = map.convert(pt, toCoordinateFrom: map)
             onMapTap?(coord)

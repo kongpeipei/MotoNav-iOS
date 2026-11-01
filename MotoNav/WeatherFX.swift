@@ -10,7 +10,7 @@
 //   2. 风：低频阵风缓慢改变倾角与横向漂移，避免"整屏匀速直线"的机械感。
 //   3. 每颗粒子独立相位（确定性哈希），不会出现行列同步下落的橡胶感。
 //   4. 强度分级：毛毛雨→暴雨→雷暴（雷暴带随机闪电曝光）、小雪→大雪。
-//   5. Canvas + 单层 drawLayer 模糊，粒子总数控制在 250 以内，保证 50fps。
+//   5. Canvas + 单层 drawLayer 模糊，粒子总数控制在 300 以内，保证 50fps。
 //
 
 import SwiftUI
@@ -114,16 +114,17 @@ enum WeatherFX {
         let gust = 0.14 + sin(t * 0.31) * 0.09 + sin(t * 1.7 + 1.3) * 0.02
 
         // 远层：细、淡、慢，模糊最多（空气透视）
-        rainLayer(ctx, size: size, t: t, count: Int(78 * s), salt: 100,
-                  speed: 300...430, length: 12...20, width: 0.7,
+        // v1.97 雨点改短、加密（贴近苹果天气的短雨丝、密集雨幕）
+        rainLayer(ctx, size: size, t: t, count: Int(110 * s), salt: 100,
+                  speed: 300...430, length: 6...10, width: 0.7,
                   opacity: 0.26, blur: 1.1, gust: gust, base: base)
         // 中层
-        rainLayer(ctx, size: size, t: t, count: Int(58 * s), salt: 400,
-                  speed: 470...640, length: 20...32, width: 1.15,
+        rainLayer(ctx, size: size, t: t, count: Int(80 * s), salt: 400,
+                  speed: 470...640, length: 10...16, width: 1.15,
                   opacity: 0.36, blur: 0.45, gust: gust, base: base)
         // 近层：长、粗、快，最实
-        rainLayer(ctx, size: size, t: t, count: Int(30 * s), salt: 700,
-                  speed: 700...960, length: 32...52, width: 1.75,
+        rainLayer(ctx, size: size, t: t, count: Int(42 * s), salt: 700,
+                  speed: 700...960, length: 16...24, width: 1.75,
                   opacity: 0.46, blur: 0.15, gust: gust, base: base)
 
         // 大地湿气：底部渐隐的冷色薄雾（雨越大越明显）

@@ -398,6 +398,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         UserDefaults.standard.set(favoriteTimes, forKey: favTimesKey)
     }
 
+    /// v1.97 "我的-常用地点"左滑删除收藏项（按坐标）
+    func removeFavorite(lat: Double, lon: Double) {
+        let key = "\(lat),\(lon)"
+        favorites.removeValue(forKey: key)
+        favoriteTimes.removeValue(forKey: key)
+        UserDefaults.standard.set(favorites, forKey: favKey)
+        UserDefaults.standard.set(favoriteTimes, forKey: favTimesKey)
+    }
+
     /// v1.81 高德周边搜索（信息卡"搜周边"）：以该点为中心返回附近 POI
     func placeAround(lat: Double, lon: Double) async -> [AmapTip] {
         guard !amapKey.isEmpty else { return [] }
@@ -448,6 +457,110 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         workPlace = SavedPlace(name: name, lat: coord.latitude, lon: coord.longitude)
         let ud = UserDefaults.standard
         if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
+    }
+
+    // MARK: - v1.97 常用地点统一编辑（家 / 公司 / 自定义选项 / 新增）
+
+    /// 读取某个常用地点选项当前保存的地点（未设置为 nil）
+    func commonPlace(for slot: CommonPlaceSlot) -> SavedPlace? {
+        switch slot {
+        case .home:
+            return homePlace
+        case .work:
+            return workPlace
+        case .favorite(let key):
+            guard let name = favorites[key] else { return nil }
+            let parts = key.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 2 else { return nil }
+            return SavedPlace(name: name, lat: parts[0], lon: parts[1])
+        case .custom(let id):
+            guard let q = quickPois.first(where: { $0.id == id }) else { return nil }
+            return SavedPlace(name: q.name, lat: q.lat, lon: q.lon)
+        case .newCustom:
+            return nil
+        }
+    }
+
+    /// 该坐标是否就是选项当前保存的地点（用于卡片收藏键的"已设置/取消"判断）
+    func commonPlaceMatches(_ slot: CommonPlaceSlot, lat: Double, lon: Double) -> Bool {
+        guard let p = commonPlace(for: slot) else { return false }
+        return abs(p.lat - lat) < 1e-6 && abs(p.lon - lon) < 1e-6
+    }
+
+    /// 把地点写入指定选项（覆盖家/公司，或更新/新增自定义选项）
+    func assignCommonPlace(_ slot: CommonPlaceSlot, name: String, lat: Double, lon: Double) {
+        switch slot {
+        case .home:
+            homePlace = SavedPlace(name: name, lat: lat, lon: lon)
+            saveHomeWork()
+        case .work:
+            workPlace = SavedPlace(name: name, lat: lat, lon: lon)
+            saveHomeWork()
+        case .favorite(let oldKey):
+            // 收藏项改点：删旧坐标、按新坐标重建（收藏时间刷新，列表回到最前）
+            favorites.removeValue(forKey: oldKey)
+            favoriteTimes.removeValue(forKey: oldKey)
+            let newKey = "\(lat),\(lon)"
+            favorites[newKey] = name
+            favoriteTimes[newKey] = Date().timeIntervalSince1970
+            UserDefaults.standard.set(favorites, forKey: favKey)
+            UserDefaults.standard.set(favoriteTimes, forKey: favTimesKey)
+        case .custom(let id):
+            let qp = QuickPoi(name: name, lat: lat, lon: lon)
+            if let i = quickPois.firstIndex(where: { $0.id == id }) {
+                quickPois.remove(at: i)
+                quickPois.removeAll { $0.id == qp.id }   // 改到已存在的同一地点时去重
+                quickPois.insert(qp, at: min(i, quickPois.count))
+            } else {
+                quickPois.removeAll { $0.id == qp.id }
+                quickPois.insert(qp, at: 0)
+            }
+            saveQuickPois()
+        case .newCustom:
+            // 新增选项排在最前（"+"下方、最新收藏地址下方），重复地点只保留一条
+            let qp = QuickPoi(name: name, lat: lat, lon: lon)
+            quickPois.removeAll { $0.id == qp.id }
+            quickPois.insert(qp, at: 0)
+            saveQuickPois()
+        }
+    }
+
+    /// 清空指定选项：家/公司置空，自定义选项直接删除；返回是否删掉了整条选项
+    @discardableResult
+    func clearCommonPlace(_ slot: CommonPlaceSlot) -> Bool {
+        switch slot {
+        case .home:
+            homePlace = nil
+            UserDefaults.standard.removeObject(forKey: homeKey)
+            return false
+        case .work:
+            workPlace = nil
+            UserDefaults.standard.removeObject(forKey: workKey)
+            return false
+        case .favorite(let key):
+            let parts = key.split(separator: ",").compactMap { Double($0) }
+            if parts.count == 2 { removeFavorite(lat: parts[0], lon: parts[1]) }
+            return true
+        case .custom(let id):
+            removeQuickPoi(id: id)
+            return true
+        case .newCustom:
+            return false
+        }
+    }
+
+    private func saveHomeWork() {
+        let ud = UserDefaults.standard
+        if let d = try? JSONEncoder().encode(homePlace) {
+            ud.set(d, forKey: homeKey)
+        } else {
+            ud.removeObject(forKey: homeKey)
+        }
+        if let d = try? JSONEncoder().encode(workPlace) {
+            ud.set(d, forKey: workKey)
+        } else {
+            ud.removeObject(forKey: workKey)
+        }
     }
 
     // MARK: - v1.69 搜索面板自定义快捷卡片（+ 选点生成，长按删除）
@@ -1665,7 +1778,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 与 amapRegeoInfo 的区别是在同一请求里额外解析 pois[]，用来给出"这是什么地方"而不是只给道路名
     func amapTapPlace(lat: Double, lon: Double) async -> (name: String, address: String, type: String, road: String)? {
         guard !amapKey.isEmpty else { return nil }
-        let loc = String(format: "%.6f,%.6f", lon, lat)
+        // v1.96 入参是系统定位/MKMapView 的 WGS-84，高德接口要 GCJ-02，
+        // 不转换会解析到偏 500 米外的另一个地点（名字和地址都会错）
+        let (glat, glon) = CoordConv.wgs2gcj(lat, lon)
+        let loc = String(format: "%.6f,%.6f", glon, glat)
         let urlStr = "https://restapi.amap.com/v3/geocode/regeo?key=\(amapKey)&location=\(loc)&extensions=all&radius=150&roadlevel=0"
         guard let url = URL(string: urlStr) else { return nil }
         do {

@@ -64,6 +64,8 @@ struct ContentView: View {
     @State private var selectedTab = 0
     /// v1.82 "我的-收藏"搜索过滤
     @State private var favSearch = ""
+    /// v1.97 "我的-常用地点"编辑目标（点铅笔后进入搜索选点，卡片收藏键确认）
+    @State private var slotTarget: CommonPlaceSlot?
     /// v1.86 启动闪屏（全屏黑+白色楷体"骑士地图"，1 秒后淡出）
     @State private var showSplash = true
     @State private var splashTask: Task<Void, Never>?
@@ -117,9 +119,15 @@ struct ContentView: View {
                         // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
                         DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
                         // 地图缩放 + / - 按钮（含当前定位按钮）
-                        DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.06)) { zoomOverlay }
+                        DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.90, y: 0.16)) { zoomOverlay }
                         // 右上角 GPS 信号按钮（内部已可拖动）
                         layerTrafficButtons
+                    }
+                    // v1.97 常用地点设置提示条（从"我的"点铅笔后回到地图时显示）
+                    if slotTarget != nil && !model.navigating {
+                        slotEditBanner
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.top, 6)
                     }
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
@@ -189,9 +197,14 @@ struct ContentView: View {
             if nv {
                 showExitConfirm = false
                 tapPlace = nil          // v1.95 进入导航时收起地点卡，避免和导航卡叠在一起
+                slotTarget = nil        // v1.97 开始导航即退出常用地点设置态
             } else {
                 endRouteOverview()
             }
+        }
+        // v1.97 开始规划路线（点卡片"路线"）时也退出常用地点设置态
+        .onChange(of: model.routeChoices.isEmpty) { _, empty in
+            if !empty { slotTarget = nil }
         }
         .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
@@ -409,11 +422,11 @@ struct ContentView: View {
                 poiDetail = p
             },
             onPlaceSelect: { pl in
-                goHereLabel = "导航去此处"
-                goHereName = pl.name
-                goHereLat = pl.lat
-                goHereLon = pl.lon
-                model.clearPreview()
+                // v1.96 轻点地点名文字 → 直接弹地点介绍卡（原先是只设"去这里"预览，点了几乎没反应）
+                if uiHidden {
+                    withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
+                }
+                showTapPlace(CLLocationCoordinate2D(latitude: pl.lat, longitude: pl.lon), seed: pl.name)
             },
             onPlaceLongPress: { pl in
                 // v1.81 长按地图地点名 → 高亮+北向上+地点信息卡（同搜索点击格式）
@@ -425,7 +438,9 @@ struct ContentView: View {
                 model.clearCategory()
             },
             onMapTap: { coord in
-                // v1.69："+"快捷卡片选点模式优先；否则 v1.95 轻点地图 → 地点介绍卡
+                // v1.96 轻点地图：
+                //   命中地点名文字 → 地点介绍卡（在 MapView 里已派发 onPlaceSelect）
+                //   点到非地点区域 → 收起所有卡片并隐藏全部界面（再轻点一次恢复）
                 guard !model.navigating else { return }
                 if quickPickMode {
                     pendingQuickCoord = coord
@@ -438,7 +453,13 @@ struct ContentView: View {
                     withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
                     return
                 }
-                showTapPlace(coord)
+                // 地点标签数据缺失（Overpass 拉取失败/离线）时退回 v1.95 行为：
+                // 轻点即出地点卡，否则"点哪里都只是隐藏界面"，地点卡功能等于不可用
+                if model.placeLabels.isEmpty {
+                    showTapPlace(coord)
+                    return
+                }
+                hideAllOnBlankTap()
             },
             minimal: minimalMap,
             reloadTick: reloadTick,
@@ -659,205 +680,397 @@ struct ContentView: View {
         }
     }
 
-    /// "我的"页面：导入/导出JSON、高德Key设置
-    /// v1.64 "我的"独立菜单页（底部选项卡切换进入，选项卡常驻下方）
+    /// v1.97 "我的"页：省电置顶 → 常用地点（家/公司/收藏/+/自定义 合并）→ 搜索设置 → 关于（语音包并入）
     private var settingsPage: some View {
         NavigationStack {
             List {
-                // v1.61：语音包选项卡（讯飞四川话/普通话女声，从旧版"语音"入口迁入"我的"）
-                Section {
-                    Button {
-                        showVoiceSettings = true
-                    } label: {
-                        HStack {
-                            Label("语音包", systemImage: "waveform")
-                            Spacer()
-                            Text(model.xfVcnName)
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        }
-                    }
-                } header: {
-                    Text("语音播报")
-                }
-                // v1.90 省电模式开关（电量≤20% 或系统低电量模式时自动降定位频率+调暗地图）
-                Section {
-                    Toggle("省电模式", isOn: $powerSaveEnabled)
-                        .onChange(of: powerSaveEnabled) { _, _ in
-                            model.applyPowerSaving()
-                        }
-                } header: {
-                    Text("省电")
-                } footer: {
-                    Text("电量低于 20% 或系统低电量模式时，自动降低定位频率并调暗地图节省电量；恢复后自动还原。")
-                }
-                // v1.63：常用地点分组（家/公司/收藏），主界面不再放快捷按钮
-                Section {
-                    Button {
-                        if let h = model.homePlace {
-                            goHereLabel = "导航去此处"
-                            goHereName = h.name
-                            goHereLat = h.lat
-                            goHereLon = h.lon
-                            selectedTab = 0
-                            model.planRoute(to: h.name, lat: h.lat, lon: h.lon)
-                        } else if let loc = model.currentLocation {
-                            // v1.65：未设置时用当前位置一键设置
-                            model.setHomeCoord(loc)
-                            model.status = "已用当前位置设为家"
-                        } else {
-                            model.status = "等待定位后再设置家"
-                        }
-                    } label: {
-                        HStack {
-                            Label("家", systemImage: "house.fill")
-                            Spacer()
-                            Text(model.homePlace?.name ?? "未设置（点此用当前位置设置）")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        }
-                    }
-                    Button {
-                        if let w = model.workPlace {
-                            goHereLabel = "导航去此处"
-                            goHereName = w.name
-                            goHereLat = w.lat
-                            goHereLon = w.lon
-                            selectedTab = 0
-                            model.planRoute(to: w.name, lat: w.lat, lon: w.lon)
-                        } else if let loc = model.currentLocation {
-                            model.setWorkCoord(loc)
-                            model.status = "已用当前位置设为公司"
-                        } else {
-                            model.status = "等待定位后再设置公司"
-                        }
-                    } label: {
-                        HStack {
-                            Label("公司", systemImage: "briefcase.fill")
-                            Spacer()
-                            Text(model.workPlace?.name ?? "未设置（点此用当前位置设置）")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        }
-                    }
-                } header: {
-                    Text("常用地点")
-                }
-                Section {
-                    // v1.81.1 收藏列表 = 内置点位收藏 + 联想地点收藏（共用同一收藏夹）
-                    // v1.82 按收藏时间倒序（最新在前）+ 搜索框过滤
-                    var favPois: [Poi] = {
-                        var ps = model.pois.filter { model.isFavorite($0) }
-                        for (key, name) in model.favorites {
-                            let parts = key.split(separator: ",").compactMap { Double($0) }
-                            guard parts.count == 2,
-                                  !ps.contains(where: { $0.lat == parts[0] && $0.lon == parts[1] }) else { continue }
-                            var h = 0
-                            for b in key.utf8 { h = (h &* 31 &+ Int(b)) }
-                            ps.append(Poi(id: Int64(9_000_000 + abs(h) % 900_000),
-                                          type: .CUSTOM, name: name, lat: parts[0], lon: parts[1],
-                                          radiusM: 0, enabled: true, note: "联想收藏"))
-                        }
-                        ps.sort {
-                            (model.favoriteTimes["\($0.lat),\($0.lon)"] ?? 0)
-                                > (model.favoriteTimes["\($1.lat),\($1.lon)"] ?? 0)
-                        }
-                        if !favSearch.isEmpty {
-                            ps = ps.filter { $0.name.localizedCaseInsensitiveContains(favSearch) }
-                        }
-                        return ps
-                    }()
-                    if favPois.isEmpty {
-                        Text("暂无收藏点位（点位详情里点⭐收藏）")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    } else {
-                        ForEach(favPois.prefix(8)) { p in
-                            Button {
-                                goHereLabel = "导航去此处"
-                                goHereName = p.name
-                                goHereLat = p.lat
-                                goHereLon = p.lon
-                                selectedTab = 0
-                                model.planRoute(to: p.name, lat: p.lat, lon: p.lon)
-                            } label: {
-                                HStack {
-                                    Label(p.name, systemImage: "star.fill")
-                                    Spacer()
-                                    Text(p.type.label)
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            }
-                        }
-                        .onDelete { idxs in
-                            for i in idxs where i < favPois.count {
-                                let p = favPois[i]
-                                model.toggleFavorite(p)
-                            }
-                            model.status = "已取消收藏"
-                        }
-                    }
-                } header: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("收藏")
-                        // v1.82 收藏搜索过滤（量多时按名称快速定位）
-                        TextField("搜索收藏", text: $favSearch)
-                            .font(.caption)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
-                            .textInputAutocapitalization(.never)
-                    }
-                }
-                Section("搜索设置") {
-                    Button {
-                        amapKeyInput = model.amapKey
-                        showAmapKeyInput = true
-                    } label: {
-                        HStack {
-                            Label("高德搜索 Key", systemImage: "key")
-                            Spacer()
-                            Text(model.amapKey.isEmpty ? "未设置" : "已启用")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        }
-                    }
-                }
-                Section("关于") {
-                    // v1.81：App 更名为「骑士地图」（图标名同步）
-                    HStack {
-                        Label("骑士地图", systemImage: "map.fill")
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Text("骑行导航")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                    HStack {
-                        Label("版本", systemImage: "info.circle")
-                        Spacer()
-                        Text("v1.95")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                    // v1.80：移除黑屏排障诊断项（地图诊断/瓦片网络/高德接口）——黑屏已根治闭环
-                    HStack {
-                        Label("高德Key", systemImage: "key.fill")
-                        Spacer()
-                        Text("6fd752…0066")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                }
+                powerSection
+                commonPlacesSection
+                searchKeySection
+                aboutSection
             }
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
-            // v1.64：底部选项卡常驻，列表底部留出空间不被遮挡
             .safeAreaInset(edge: .bottom) {
                 Color.clear.frame(height: 8)
             }
         }
+    }
+
+    // MARK: - 我的页分区（v1.97 顺序调整）
+
+    /// 省电模式（放到最上方）
+    private var powerSection: some View {
+        Section {
+            Toggle("省电模式", isOn: $powerSaveEnabled)
+                .onChange(of: powerSaveEnabled) { _, _ in
+                    model.applyPowerSaving()
+                }
+        } header: {
+            Text("省电")
+        } footer: {
+            Text("电量低于 20% 或系统低电量模式时，自动降低定位频率并调暗地图节省电量；恢复后自动还原。")
+        }
+    }
+
+    /// 常用地点：家 / 公司 / 收藏 / + / 自定义 合并为同一组
+    private var commonPlacesSection: some View {
+        Section {
+            commonPlaceRow(icon: "house.fill", title: "家",
+                           place: model.commonPlace(for: .home), slot: .home)
+            commonPlaceRow(icon: "briefcase.fill", title: "公司",
+                           place: model.commonPlace(for: .work), slot: .work)
+            ForEach(favoriteEntries, id: \.key) { f in
+                favoriteRow(f)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            model.removeFavorite(lat: f.lat, lon: f.lon)
+                            model.status = "已删除收藏「\(displayName(f.name))」"
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+            }
+            // "+"新增：走首页搜索联想选点，新选项排在收藏项与"+"下方
+            Button {
+                haptic()
+                beginSlotEdit(.newCustom)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.blue)
+                        .frame(width: 22)
+                    Text("添加常用地点")
+                        .foregroundStyle(.blue)
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            ForEach(model.quickPois) { qp in
+                customRow(qp)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            model.removeQuickPoi(id: qp.id)
+                            model.status = "已删除常用地点「\(displayName(qp.name))」"
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+            }
+        } header: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("常用地点")
+                // 收藏量多时才出搜索框，避免挤占列表
+                if model.favorites.count > 4 {
+                    TextField("搜索收藏", text: $favSearch)
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                        .textInputAutocapitalization(.never)
+                }
+            }
+        } footer: {
+            Text("点右侧铅笔可重新搜索选择地点；除「家」「公司」和「添加常用地点」外，其余选项左滑可删除。")
+        }
+    }
+
+    /// 搜索 Key 设置
+    private var searchKeySection: some View {
+        Section("搜索设置") {
+            Button {
+                amapKeyInput = model.amapKey
+                showAmapKeyInput = true
+            } label: {
+                HStack {
+                    Label("高德搜索 Key", systemImage: "key")
+                    Spacer()
+                    Text(model.amapKey.isEmpty ? "未设置" : "已启用")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+            }
+        }
+    }
+
+    /// 关于（v1.97 语音包并入）
+    private var aboutSection: some View {
+        Section("关于") {
+            Button {
+                showVoiceSettings = true
+            } label: {
+                HStack {
+                    Label("语音包", systemImage: "waveform")
+                    Spacer()
+                    Text(model.xfVcnName)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+            }
+            HStack {
+                Label("骑士地图", systemImage: "map.fill")
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("骑行导航")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            HStack {
+                Label("版本", systemImage: "info.circle")
+                Spacer()
+                Text("v1.97")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            HStack {
+                Label("高德Key", systemImage: "key.fill")
+                Spacer()
+                Text("6fd752…0066")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+        }
+    }
+
+    // MARK: - 常用地点行
+
+    /// 家 / 公司：点主体弹地点卡，点铅笔进入改点
+    private func commonPlaceRow(icon: String, title: String,
+                                place: AppModel.SavedPlace?, slot: CommonPlaceSlot) -> some View {
+        HStack(spacing: 2) {
+            Button {
+                haptic()
+                if let p = place {
+                    openCommonPlace(name: p.name, lat: p.lat, lon: p.lon)
+                } else {
+                    beginSlotEdit(slot)
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .foregroundStyle(.blue)
+                        .frame(width: 22)
+                    Text(title)
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    Text(place.map { displayName($0.name) } ?? "未设置")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            editSlotButton(slot)
+        }
+    }
+
+    /// 收藏行
+    private func favoriteRow(_ f: FavoriteEntry) -> some View {
+        HStack(spacing: 2) {
+            Button {
+                haptic()
+                openCommonPlace(name: f.name, lat: f.lat, lon: f.lon)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(.orange)
+                        .frame(width: 22)
+                    Text(displayName(f.name))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("收藏")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            editSlotButton(.favorite(f.key))
+        }
+    }
+
+    /// 自定义常用地点行
+    private func customRow(_ qp: AppModel.QuickPoi) -> some View {
+        HStack(spacing: 2) {
+            Button {
+                haptic()
+                openCommonPlace(name: qp.name, lat: qp.lat, lon: qp.lon)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundStyle(.orange)
+                        .frame(width: 22)
+                    Text(displayName(qp.name))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("常用")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            editSlotButton(.custom(qp.id))
+        }
+    }
+
+    /// 每行末尾的编辑铅笔
+    private func editSlotButton(_ slot: CommonPlaceSlot) -> some View {
+        Button {
+            haptic()
+            beginSlotEdit(slot)
+        } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.subheadline)
+                .foregroundStyle(.blue)
+                .frame(width: 34, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+    }
+
+    /// v1.97 收藏项（收藏时间倒序 + 搜索过滤）
+    private var favoriteEntries: [FavoriteEntry] {
+        model.favorites.compactMap { key, name -> FavoriteEntry? in
+            let parts = key.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 2 else { return nil }
+            return FavoriteEntry(key: key, name: name, lat: parts[0], lon: parts[1],
+                                 time: model.favoriteTimes[key] ?? 0)
+        }
+        .filter { favSearch.isEmpty || $0.name.localizedCaseInsensitiveContains(favSearch) }
+        .sorted { $0.time > $1.time }
+    }
+
+    /// 点常用地点选项：切回地图页，定位到该点并弹出地点卡（不直接开始导航）
+    private func openCommonPlace(name: String, lat: Double, lon: Double) {
+        selectedTab = 0
+        slotTarget = nil
+        searchFocused = false
+        searchExpanded = false
+        showSuggestions = false
+        uiHidden = false
+        showTipCard(name: name, lat: lat, lon: lon, sub: "常用地点")
+    }
+
+    /// 点铅笔：回到首页搜索（联想 + 地图选点），选定后在卡片收藏键确认
+    private func beginSlotEdit(_ slot: CommonPlaceSlot) {
+        haptic()
+        slotTarget = slot
+        selectedTab = 0
+        uiHidden = false
+        tapPlace = nil
+        tipCard = nil
+        closeRoutePlan()
+        model.clearPreview()
+        onlineTips = []
+        let cur = model.commonPlace(for: slot)
+        searchText = cur.map { displayName($0.name) } ?? ""
+        showSuggestions = !searchText.trimmingCharacters(in: .whitespaces).isEmpty
+        searchExpanded = false
+        showSearchField = true
+        model.status = "设置「\(slot.title)」：搜索或点地图地点，再点地点卡收藏键确认"
+        // 等搜索框挂载后再聚焦，键盘/联想才会弹出
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard slotTarget != nil else { return }
+            searchFocused = true
+            // 搜索框刚挂载时 onChange 不会补触发，这里手动拉一次联想
+            let q = searchText.trimmingCharacters(in: .whitespaces)
+            guard !q.isEmpty else { return }
+            showSuggestions = true
+            Task {
+                let tips = await model.amapInputTips(q)
+                if searchText.trimmingCharacters(in: .whitespaces) == q {
+                    onlineTips = sortedByDistance(tips)
+                }
+            }
+        }
+    }
+
+    /// 地点卡收藏键（编辑态）：把当前地点写入所点选项；再点一次则取消并删除该选项
+    private func toggleSlotAssignment(name: String, lat: Double, lon: Double) {
+        guard let slot = slotTarget else { return }
+        haptic()
+        if model.commonPlaceMatches(slot, lat: lat, lon: lon) {
+            let removed = model.clearCommonPlace(slot)
+            model.status = removed ? "已删除「\(slot.title)」选项" : "已取消「\(slot.title)」"
+        } else {
+            model.assignCommonPlace(slot, name: name, lat: lat, lon: lon)
+            model.status = "已将「\(displayName(name))」设为\(slot.title)"
+            // 收藏/自定义项改点后 key 会变，编辑目标跟随，便于再次点击取消
+            switch slot {
+            case .favorite:
+                slotTarget = .favorite("\(lat),\(lon)")
+            case .custom, .newCustom:
+                if let id = model.quickPois.first(where: { abs($0.lat - lat) < 1e-9 && abs($0.lon - lon) < 1e-9 })?.id {
+                    slotTarget = .custom(id)
+                }
+            case .home, .work:
+                break
+            }
+        }
+    }
+
+    /// 卡片收藏键文字（编辑态显示"设为家/设为公司/设为常用/取消"）
+    private func favoriteActionTitle(lat: Double, lon: Double) -> String {
+        guard let slot = slotTarget else { return "收藏" }
+        if model.commonPlaceMatches(slot, lat: lat, lon: lon) {
+            switch slot {
+            case .home: return "取消家"
+            case .work: return "取消公司"
+            default: return "取消"
+            }
+        }
+        switch slot {
+        case .home: return "设为家"
+        case .work: return "设为公司"
+        case .favorite: return "改到此地"
+        case .custom, .newCustom: return "设为常用"
+        }
+    }
+
+    /// 编辑态下该地点是否就是选项当前地点（星星实心）
+    private func slotStarOn(lat: Double, lon: Double) -> Bool {
+        guard let slot = slotTarget else { return false }
+        return model.commonPlaceMatches(slot, lat: lat, lon: lon)
+    }
+
+    /// v1.97 常用地点编辑提示条
+    private var slotEditBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "square.and.pencil")
+                .foregroundStyle(.blue)
+            Text("设置「\(slotTarget?.title ?? "")」：选点后点卡片收藏键")
+                .font(.caption.bold())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Button {
+                haptic()
+                slotTarget = nil
+                searchFocused = false
+                dismissKeyboard()
+                selectedTab = 1          // 完成后退回"我的"，直接看到更新后的常用地点列表
+                model.status = "已退出常用地点设置"
+            } label: {
+                Text("完成")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Color.blue, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color(.systemBackground).opacity(0.96), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.blue.opacity(0.35), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+        .fixedSize()
     }
 
     /// 规划态顶部路线胶囊：显示"我的位置 → 目的地"，点击重新搜索（高德规划态顶部搜索框）
@@ -956,18 +1169,22 @@ struct ContentView: View {
         tapPlace = nil
     }
 
-    /// 轻点地图：先用本地标签兜底出卡（不等网络），再异步替换为高德解析结果
-    private func showTapPlace(_ coord: CLLocationCoordinate2D) {
+    /// 轻点地点名文字：先用本地名称出卡（不等网络），再异步替换为高德解析结果
+    /// - Parameter seed: 已知名称（点地点标签时传入标签名）；为空时按坐标就近取本地标签兜底
+    private func showTapPlace(_ coord: CLLocationCoordinate2D, seed known: String? = nil) {
         haptic()
+        searchFocused = false      // 收起键盘，避免挡住地点卡
+        model.clearPreview()       // 清掉搜索预览点，只留当前这张卡的选点
         let lat = coord.latitude
         let lon = coord.longitude
-        let seed = placeNameNear(coord)
+        let seed = (known?.isEmpty == false ? known! : placeNameNear(coord))
         tapPlace = TapPlaceInfo(lat: lat, lon: lon, name: seed, loading: true)
         Task {
             let info = await model.amapTapPlace(lat: lat, lon: lon)
             guard var cur = tapPlace, cur.lat == lat, cur.lon == lon else { return }
             if let info = info {
-                cur.name = info.name.isEmpty ? seed : info.name
+                // 已有地点名（点标签得到的）就保留，避免高德返回的邻近 POI 把名字换掉
+                if known?.isEmpty != false, !info.name.isEmpty { cur.name = info.name }
                 cur.address = info.address
                 cur.poiType = info.type
                 cur.road = info.road
@@ -975,6 +1192,28 @@ struct ContentView: View {
             cur.loading = false
             tapPlace = cur
         }
+    }
+
+    /// v1.96 轻点非地点区域：收起全部卡片 + 隐藏所有浮层（只留右下角定位按钮），再轻点恢复
+    private func hideAllOnBlankTap() {
+        haptic()
+        // v1.97 常用地点设置中：只收卡片，不进入沉浸模式（否则设置提示条和搜索框都会消失）
+        if slotTarget != nil {
+            tapPlace = nil
+            tipCard = nil
+            tipRoad = nil
+            tipAoiName = nil
+            tipPolygon = nil
+            searchFocused = false
+            return
+        }
+        tapPlace = nil
+        tipCard = nil
+        tipRoad = nil
+        tipAoiName = nil
+        tipPolygon = nil
+        searchFocused = false
+        withAnimation(.easeOut(duration: 0.2)) { uiHidden = true }
     }
 
     /// 地点介绍卡：名称 / 类型 / 地址 / 距离 / 收藏·搜周边·标记·分享 / 导航
@@ -1052,14 +1291,19 @@ struct ContentView: View {
             HStack(spacing: 6) {
                 Button {
                     haptic()
-                    model.toggleTipFavorite(name: p.name, lat: p.lat, lon: p.lon)
+                    if slotTarget != nil {
+                        toggleSlotAssignment(name: p.name, lat: p.lat, lon: p.lon)
+                    } else {
+                        model.toggleTipFavorite(name: p.name, lat: p.lat, lon: p.lon)
+                    }
                 } label: {
                     VStack(spacing: 2) {
-                        Image(systemName: model.isTipFavorite(lat: p.lat, lon: p.lon) ? "star.fill" : "star")
+                        Image(systemName: (slotTarget != nil ? slotStarOn(lat: p.lat, lon: p.lon) : model.isTipFavorite(lat: p.lat, lon: p.lon)) ? "star.fill" : "star")
                             .font(.title3)
-                            .foregroundStyle(model.isTipFavorite(lat: p.lat, lon: p.lon) ? .orange : .primary)
-                        Text("收藏")
+                            .foregroundStyle((slotTarget != nil ? slotStarOn(lat: p.lat, lon: p.lon) : model.isTipFavorite(lat: p.lat, lon: p.lon)) ? .orange : .primary)
+                        Text(favoriteActionTitle(lat: p.lat, lon: p.lon))
                             .font(.caption2)
+                            .lineLimit(1)
                     }
                     .foregroundStyle(.primary)
                 }
@@ -1097,7 +1341,14 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
 
-                ShareLink(item: "\(p.name) \(p.address)\n坐标 \(String(format: "%.6f,%.6f", p.lat, p.lon))") {
+                Button {
+                    haptic()
+                    PlaceShare.present(PlaceShare.payload(name: p.name,
+                                                          address: p.address,
+                                                          type: p.poiType,
+                                                          road: p.road,
+                                                          lat: p.lat, lon: p.lon))
+                } label: {
                     VStack(spacing: 2) {
                         Image(systemName: "square.and.arrow.up")
                             .font(.title3)
@@ -1108,8 +1359,9 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
 
-                Spacer()
+                Spacer(minLength: 4)
 
+                // 白色描边"导航"：直接开始导航
                 Button {
                     haptic()
                     let name = p.name
@@ -1120,6 +1372,25 @@ struct ContentView: View {
                     model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: true)
                 } label: {
                     Text("导航")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.blue)
+                        .frame(width: 76, height: 40)
+                        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.blue, lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
+
+                // 蓝色实心"路线"：先规划路线、给出方案，不直接进导航
+                Button {
+                    haptic()
+                    let name = p.name
+                    let lat = p.lat
+                    let lon = p.lon
+                    closeTapPlace()
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: false)
+                } label: {
+                    Text("路线")
                         .font(.subheadline.bold())
                         .foregroundStyle(.white)
                         .frame(width: 76, height: 40)
@@ -1445,11 +1716,9 @@ struct ContentView: View {
 
     /// 地图缩放 + / - 按钮（右下角，高德式；定位按钮在放大按钮上方）
     private var zoomOverlay: some View {
-        // v1.81.2 去垂直 Spacer：位置由 DraggableFloat 自由定位（HStack Spacer 仅负责右侧对齐）
-        VStack {
-            HStack {
-                Spacer()
-                VStack(spacing: 6) {
+        // v1.97 修复定位按钮消失：旧版内容带 150 底部内边距，配合 6% 的顶部锚点会把整组顶出屏幕；
+        // 改为紧凑竖排（定位 / + / -），位置由 DraggableFloat 负责
+        VStack(spacing: 6) {
                     // 当前定位按钮（放大按钮上方，非导航中显示；点击清空路线规划回到主页）
                     if !model.navigating {
                         Button {
@@ -1496,10 +1765,6 @@ struct ContentView: View {
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
-                }
-                .padding(.trailing, 18)
-                .padding(.bottom, 150)
-            }
         }
     }
 
@@ -1952,15 +2217,14 @@ struct ContentView: View {
         }
     }
 
-    /// 分享点位（motonav:// 深链，供好友点击直达）
+    /// 分享点位（v1.96 统一走 PlaceShare：给的是高德/苹果/百度三条通用导航链接，
+    /// 对方没装本 App 也能直接导航；原先的 motonav:// 深链对方打不开，微信也会拒收）
     private func sharePoi(_ p: Poi) {
-        let link = "motonav://\(p.name)@\(p.lat),\(p.lon)"
-        let text = "摩卫士违法拍照点位：\(p.name)（\(p.type.label)）\n坐标 \(String(format: "%.5f,%.5f", p.lat, p.lon))\n打开链接直接导航：\(link)"
-        let avc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let root = scene.windows.first?.rootViewController {
-            root.present(avc, animated: true)
-        }
+        PlaceShare.present(PlaceShare.payload(name: p.name,
+                                              address: "",
+                                              type: p.type.label,
+                                              road: "",
+                                              lat: p.lat, lon: p.lon))
     }
 
     /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
@@ -2174,19 +2438,32 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 Button {
                     haptic()
-                    model.toggleTipFavorite(name: t.name, lat: t.lat, lon: t.lon)
+                    if slotTarget != nil {
+                        toggleSlotAssignment(name: t.name, lat: t.lat, lon: t.lon)
+                    } else {
+                        model.toggleTipFavorite(name: t.name, lat: t.lat, lon: t.lon)
+                    }
                 } label: {
                     VStack(spacing: 2) {
-                        Image(systemName: model.isTipFavorite(lat: t.lat, lon: t.lon) ? "star.fill" : "star")
+                        Image(systemName: (slotTarget != nil ? slotStarOn(lat: t.lat, lon: t.lon) : model.isTipFavorite(lat: t.lat, lon: t.lon)) ? "star.fill" : "star")
                             .font(.title3)
-                            .foregroundStyle(model.isTipFavorite(lat: t.lat, lon: t.lon) ? .orange : .primary)
-                        Text("收藏")
+                            .foregroundStyle((slotTarget != nil ? slotStarOn(lat: t.lat, lon: t.lon) : model.isTipFavorite(lat: t.lat, lon: t.lon)) ? .orange : .primary)
+                        Text(favoriteActionTitle(lat: t.lat, lon: t.lon))
                             .font(.caption2)
+                            .lineLimit(1)
                     }
                     .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
-                ShareLink(item: "\(t.name) \(tipRoad ?? (!t.sub.isEmpty ? t.sub : ""))") {
+                Button {
+                    haptic()
+                    // v1.96 与地点介绍卡统一：文本 + 有效 http(s) 链接，微信才肯接收
+                    PlaceShare.present(PlaceShare.payload(name: t.name,
+                                                          address: t.sub,
+                                                          type: "",
+                                                          road: tipRoad ?? "",
+                                                          lat: t.lat, lon: t.lon))
+                } label: {
                     VStack(spacing: 2) {
                         Image(systemName: "square.and.arrow.up")
                             .font(.title3)
@@ -2251,7 +2528,8 @@ struct ContentView: View {
         VStack(spacing: 8) {
             searchInputRow
             // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
-            if searchFocused && searchText.isEmpty {
+            // v1.97 常用地点设置态不弹快捷卡片（避免误点跳到导航）
+            if searchFocused && searchText.isEmpty && slotTarget == nil {
                 quickAccessPanel
             }
             if showSuggestions && !suggestions.isEmpty && !model.navigating {
@@ -2295,6 +2573,7 @@ struct ContentView: View {
 
             Button {
                 selectedTab = 1
+                slotTarget = nil
                 haptic()
             } label: {
                 VStack(spacing: 3) {
@@ -2810,6 +3089,16 @@ struct ContentView: View {
     }
 }
 
+/// v1.97 "我的-常用地点"收藏项（ForEach 需要 Identifiable，不能用元组）
+private struct FavoriteEntry: Identifiable {
+    let key: String
+    let name: String
+    let lat: Double
+    let lon: Double
+    let time: Double
+    var id: String { key }
+}
+
 enum EditMode { case add, edit }
 
 struct PoiEditSheet: View {
@@ -2923,13 +3212,12 @@ struct PoiDetailSheet: View {
                                     in: RoundedRectangle(cornerRadius: 8))
                 }
                 Button {
-                    let link = "motonav://\(poi.name)@\(poi.lat),\(poi.lon)"
-                    let text = "摩卫士违法拍照点位：\(poi.name)（\(poi.type.label)）\n坐标 \(String(format: "%.5f,%.5f", poi.lat, poi.lon))\n打开链接直接导航：\(link)"
-                    let avc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let root = scene.windows.first?.rootViewController {
-                        root.present(avc, animated: true)
-                    }
+                    // v1.96 统一分享格式（文本 + http 链接），微信可正常接收
+                    PlaceShare.present(PlaceShare.payload(name: poi.name,
+                                                          address: "",
+                                                          type: poi.type.label,
+                                                          road: "",
+                                                          lat: poi.lat, lon: poi.lon))
                 } label: {
                     Label("分享", systemImage: "square.and.arrow.up")
                         .font(.footnote.bold())
@@ -3144,8 +3432,9 @@ private struct DraggableFloat<Content: View>: View {
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
-        let px = x ?? defaultPos.x
-        let py = y ?? defaultPos.y
+        // v1.97 兜底钳制：历史拖动位置可能落在屏幕外（如旧版缩放键 6%），这里拉回可视区
+        let px = min(0.96, max(0.04, x ?? defaultPos.x))
+        let py = min(0.93, max(0.10, y ?? defaultPos.y))
         _pos = State(initialValue: CGPoint(x: px, y: py))
         _initialX = State(initialValue: px)
     }
