@@ -107,14 +107,18 @@ struct ContentView: View {
         // v2.05 诊断：body 求值到了没（只记第一次，避免每秒刷屏）
         let _ = StartupLog.markOnce("body-enter")
         ZStack {
+            BodyProbe("bf-enter")
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
+                BodyProbe("bf-map-before")
                 mapLayer
+                BodyProbe("bf-map-after")
                 // v1.81.4 全屏天气动画（高德同款）：下雨雨丝/下雪飘雪，透明覆盖不拦截手势
                 // v1.86 仅初始地图页/导航态渲染：沉浸模式与巡航模式暂停（省电、不挡视野）
                 if !uiHidden && !model.cruiseMode {
                     weatherFX
                 }
+                BodyProbe("bf-weather-after")
                 // v1.92 省电调暗：仅非导航态盖轻黑罩（OLED 上省电），
                 // 导航中不再遮挡——骑行户外阳光 + 头盔镜片下，地图变暗会看不清路口与电子眼
                 if model.powerSaving && !model.navigating {
@@ -183,6 +187,7 @@ struct ContentView: View {
                 }
                 // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
                 if !uiHidden {
+                    BodyProbe("bf-bottom")
                     bottomOverlay
                 }
                 // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
@@ -210,6 +215,7 @@ struct ContentView: View {
                 bottomTabBar
             }
             // v1.86 启动闪屏：全屏黑色 + 白色楷体"骑士地图"，1 秒后淡出进入首页
+            BodyProbe("bf-end")
             if showSplash {
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -974,7 +980,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.07")
+                Text("v2.08")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }

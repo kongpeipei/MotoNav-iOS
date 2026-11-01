@@ -48,15 +48,38 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ = AppModel.shared
         StartupLog.mark("model-ready")
 
-        // 手动建窗口：这是整条启动链最关键的一步
+        // v2.08：先挂纯 UIKit 页面，确认窗口/渲染/主线程都正常，再换 SwiftUI。
+        // 一上来就挂 SwiftUI 时，一旦它那边出问题就是黑屏，什么都看不到；
+        // 先给一个必然能显示的 UIView，屏幕亮起来就知道走到哪一步了。
         let win = UIWindow(frame: UIScreen.main.bounds)
-        let host = UIHostingController(rootView: ContentView().environmentObject(AppModel.shared))
-        win.rootViewController = host
+        win.backgroundColor = UIColor(red: 0.06, green: 0.55, blue: 0.32, alpha: 1)
+        win.rootViewController = DiagRootController()
         win.makeKeyAndVisible()
         window = win
         StartupLog.mark("window-visible")
 
+        // scene 状态单独记一笔：没有 scene 时窗口也可能"以为显示了其实没有"
+        let scenes = UIApplication.shared.connectedScenes.count
+        StartupLog.mark("scene-check", "scenes=\(scenes) state=\(UIApplication.shared.applicationState.rawValue)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.switchToSwiftUI()
+        }
+
         return true
+    }
+
+    /// 从纯 UIKit 首屏切到 SwiftUI（分两段：极简视图 → 真正主界面）
+    private func switchToSwiftUI() {
+        guard let win = window else {
+            StartupLog.mark("swap-no-window")
+            return
+        }
+        StartupLog.mark("swap-begin")
+        let root = AnyView(BootstrapView().environmentObject(AppModel.shared))
+        let host = MotoHost(rootView: root)
+        win.rootViewController = host
+        StartupLog.mark("swap-done")
     }
 
     /// 通过 motonav:// 链接直接规划路线（对应原来 SwiftUI 的 .onOpenURL）
@@ -71,11 +94,18 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         StartupLog.markOnce("app-active")
+        // scene 可能晚于 didFinishLaunching 就绪，这里补一次窗口与场景的绑定信息
+        StartupLog.markOnce("scene-active", "scenes=\(UIApplication.shared.connectedScenes.count)")
+    }
+
+    func applicationWillResignActive(_ application: UIApplication) {
+        StartupLog.mark("app-resign-active")
     }
 
     // v1.81.4 导航中切到后台：播报"骑士地图继续为您导航"，导航与语音提醒继续后台运行
     //（Info.plist UIBackgroundModes 含 location+audio）；用户从后台清除 App 后停止
     func applicationDidEnterBackground(_ application: UIApplication) {
+        StartupLog.mark("app-background")
         let m = AppModel.shared
         if m.navigating {
             m.speak("骑士地图继续为您导航")

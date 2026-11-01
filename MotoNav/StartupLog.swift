@@ -73,6 +73,14 @@ enum StartupLog {
         try? data.write(to: url, options: .atomic)
     }
 
+    /// 取最后 n 行（诊断页直接显示在屏幕上，用户不用去「文件」App 找）
+    static func tail(_ n: Int) -> String {
+        guard let data = try? Data(contentsOf: fileURL),
+              let text = String(data: data, encoding: .utf8) else { return "（无日志）" }
+        let lines = text.split(separator: "\n").map(String.init)
+        return lines.suffix(n).joined(separator: "\n")
+    }
+
     /// 清空日志（设置页"清空启动日志"按钮用）
     static func clear() {
         queue.async { try? FileManager.default.removeItem(at: fileURL) }

@@ -122,9 +122,12 @@ enum CrashGuard {
     ///   · 进程被系统静默杀掉（心跳到某一秒就断了，且没有 BLOCKED）
     /// 这一条能把"卡死"和"被杀"彻底分开，不用再猜。
     static func startHeartbeat() {
-        for (delay, name) in [(1.0, "alive-1s"), (3.0, "alive-3s"), (8.0, "alive-8s"), (16.0, "alive-16s")] {
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
-                StartupLog.mark(name)
+        // v2.08：点打得更密。上一版 1 秒一个点，而进程往往活不过 1 秒，
+        // 等于什么都没留下；现在 0.3 秒一个，能看出"死在第几秒"。
+        let marks: [Double] = [0.3, 0.8, 1.4, 2.0, 2.6, 3.2, 4.0, 6.0, 10.0, 16.0]
+        for d in marks {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + d) {
+                StartupLog.mark(String(format: "tick-%.1fs", d), "内存 \(memMB())MB")
             }
         }
         // 主线程探针：往主队列投一个任务，1.2 秒内没被执行 → 主线程卡死
@@ -140,7 +143,21 @@ enum CrashGuard {
             }
         }
     }
+
+    /// 当前进程占用内存（MB）。用来判断是不是被系统按内存超限杀掉（jetsam）。
+    static func memMB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return -1 }
+        return Double(info.resident_size) / 1024.0 / 1024.0
+    }
 }
+
 
 /// 跨线程传一个 bool（只为诊断，不需要严格同步）
 private final class ProbeFlag {
