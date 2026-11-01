@@ -116,12 +116,12 @@ struct ContentView: View {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
                 BodyProbe("bf-map-before")
-                mapLayer
+                AnyView(mapLayer)
                 BodyProbe("bf-map-after")
                 // v1.81.4 全屏天气动画（高德同款）：下雨雨丝/下雪飘雪，透明覆盖不拦截手势
                 // v1.86 仅初始地图页/导航态渲染：沉浸模式与巡航模式暂停（省电、不挡视野）
                 if !uiHidden && !model.cruiseMode {
-                    weatherFX
+                    AnyView(weatherFX)
                 }
                 BodyProbe("bf-weather-after")
                 // v1.92 省电调暗：仅非导航态盖轻黑罩（OLED 上省电），
@@ -139,35 +139,35 @@ struct ContentView: View {
                     // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
                     if !showRouteOverview {
                         BodyProbe("bp-compass")
-                        compassOverlay
+                        AnyView(compassOverlay)
                         // v1.90 顶部居中道路名胶囊（高德式：导航中显示当前道路名，一目了然）
-                        if model.navigating { roadNamePill }
+                        if model.navigating { AnyView(roadNamePill) }
                         // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-                        DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { routeBarOverlay }
+                        DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { AnyView(routeBarOverlay) }
                         // 地图缩放 + / - 按钮（含当前定位按钮）
                         // v1.99 默认位置改为搜索框右上方（底部搜索卡上沿右侧），符合常见地图习惯；
                         // 地点卡出现时暂时收起，避免整组压在卡片上
                         if tapPlace == nil && tipCard == nil {
-                            DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { zoomOverlay }
+                            DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
                         }
                         // v2.01 右上角比例尺（随缩放实时变化；原 GPS 按钮已移除）
                         BodyProbe("bp-scale")
-                        scaleOverlay
+                        AnyView(scaleOverlay)
                     }
                     // v1.97 常用地点设置提示条（从"我的"点铅笔后回到地图时显示）
                     if slotTarget != nil && !model.navigating {
-                        slotEditBanner
+                        AnyView(slotEditBanner)
                             .frame(maxHeight: .infinity, alignment: .top)
                             .padding(.top, 6)
                     }
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
-                    locateButtonOnly
+                    AnyView(locateButtonOnly)
                 }
                 BodyProbe("bp-alert")
                 // v2.04 接近电警横幅：沉浸/导航状态下也要显示（安全提醒优先于界面整洁）
                 if let alert = model.cameraAlert {
-                    cameraAlertBanner(alert)
+                    AnyView(cameraAlertBanner(alert))
                         .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, 96)
                         .padding(.horizontal, 16)
@@ -178,21 +178,21 @@ struct ContentView: View {
                 // 导航中悬浮退出按钮（仅上下移动；v1.85 取消左滑删除，全览时隐藏，取消全览恢复）
                 if model.navigating && !showRouteOverview {
                     // v2.02 贴底摆放（高德导航卡片位置）；key 变更以清掉旧版记住的偏高位置
-                    DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.925), lockX: true) { exitNavOverlay }
+                    DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.925), lockX: true) { AnyView(exitNavOverlay) }
                 }
                 // v1.81.4 导航全览操作条（高德同款：固定全览 / 取消全览(13s)）
                 if model.navigating && showRouteOverview {
-                    DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { routeOverviewBar }
+                    DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { AnyView(routeOverviewBar) }
                 }
                 // v1.63 导航态左侧竖排：刷新 / 极简（可拖动；v1.84 全览时隐藏）
                 if model.navigating && !showRouteOverview {
-                    DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { navSideOverlay }
+                    DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { AnyView(navSideOverlay) }
                 }
                 // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/抓拍/速度/道路/预计到达），
                 // 移除顶部重复的大数字条 navTopBar，避免信息分散（高德同款单卡片式导航状态）
                 // v1.84 巡航模式顶部卡片（白底：速度 + 最近拍照点）
                 if model.cruiseMode && !model.navigating {
-                    cruiseCard
+                    AnyView(cruiseCard)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
@@ -200,9 +200,9 @@ struct ContentView: View {
                     BodyProbe("bf-bottom")
                     // v2.10：精简模式下换成不含 DraggableFloat 的简单搜索卡
                     if lite {
-                        liteBottom
+                        AnyView(liteBottom)
                     } else {
-                        bottomOverlay
+                        AnyView(bottomOverlay)
                     }
                 }
                 // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
@@ -216,18 +216,18 @@ struct ContentView: View {
                 if let s = model.tripSummary {
                     DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
                                    deleteLabel: "删除",
-                                   onSwipeLeft: { dismissTripAndReset() }) { tripSummaryCard(s) }
+                                   onSwipeLeft: { dismissTripAndReset() }) { AnyView(tripSummaryCard(s)) }
                 }
                 // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
                 if mapLoadFailed {
-                    mapLoadBanner
+                    AnyView(mapLoadBanner)
                 }
             } else {
-                settingsPage
+                AnyView(settingsPage)
             }
             // v1.80 底部选项卡：仅"我的"页保留（导航主页已合并进底部主卡片，导航/我的按钮在卡片内）
             if !model.navigating && !uiHidden && selectedTab == 1 {
-                bottomTabBar
+                AnyView(bottomTabBar)
             }
             // v1.86 启动闪屏：全屏黑色 + 白色楷体"骑士地图"，1 秒后淡出进入首页
             BodyProbe("bf-end")
@@ -1356,19 +1356,19 @@ struct ContentView: View {
                     // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
                     DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                                    deleteLabel: "关闭",
-                                   onSwipeLeft: { closeTapPlace() }) { tapPlaceCard(tp) }
+                                   onSwipeLeft: { closeTapPlace() }) { AnyView(tapPlaceCard(tp)) }
                 } else if let t = tipCard {
                     DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                                    deleteLabel: "删除",
-                                   onSwipeLeft: { closeTipCard() }) { tipInfoCard(t) }
+                                   onSwipeLeft: { closeTipCard() }) { AnyView(tipInfoCard(t)) }
                 } else if !model.routeChoices.isEmpty {
                     // 路线规划卡：方案选项 + 开始导航 合并为一张白底卡（样式同地点卡），默认贴底
                     // v1.84 仅上下移动，除非左拉删除（左拉时允许左右移动触发删除）
                     DraggableFloat(key: "routeplan", defaultPos: CGPoint(x: 0.5, y: 0.90), lockX: true,
                                    deleteLabel: "删除",
-                                   onSwipeLeft: { closeRoutePlan() }) { routePlanCard }
+                                   onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanCard) }
                 } else {
-                    DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { categoryBar }
+                    DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
                     // v1.99 移除地图上浮动的"历史搜索"横条：搜索框聚焦时面板内已有历史列表，
                     // 地图上再挂一条既挡视线又重复
                 }
@@ -1376,13 +1376,13 @@ struct ContentView: View {
                 BodyProbe("bo-cat")
                 if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
                     BodyProbe("bo-main")
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { bottomMainCard }
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88), lockX: true) { AnyView(bottomMainCard) }
                     BodyProbe("bo-main-after")
                 }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
-                DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.70)) { turnAheadCard }
-                DraggableFloat(key: "snapalert", defaultPos: CGPoint(x: 0.5, y: 0.80)) { snapAlertCard }
+                DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.70)) { AnyView(turnAheadCard) }
+                DraggableFloat(key: "snapalert", defaultPos: CGPoint(x: 0.5, y: 0.80)) { AnyView(snapAlertCard) }
             }
         }
     }
@@ -3134,20 +3134,20 @@ struct ContentView: View {
                     Spacer(minLength: 0)
                 }
             }
-            searchInputRow
+            AnyView(searchInputRow)
             // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
             // v1.97 常用地点设置态不弹快捷卡片（避免误点跳到导航）
             if searchFocused && searchText.isEmpty && slotTarget == nil {
-                quickAccessPanel
+                AnyView(quickAccessPanel)
             }
             if showSuggestions && !suggestions.isEmpty && !model.navigating {
-                suggestionsList
+                AnyView(suggestionsList)
             }
             // 高德 POI 联想候选（填写高德 Key 后显示，点击直接定位；v1.86 导航中不弹出避免挡导航）
             if showSuggestions && !onlineTips.isEmpty && !model.navigating {
-                onlineTipsList
+                AnyView(onlineTipsList)
             }
-            tabButtonsRow
+            AnyView(tabButtonsRow)
         }
         .padding(.horizontal, 10)
         .padding(.top, 6)
