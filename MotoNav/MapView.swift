@@ -131,6 +131,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         return map
     }
 
+    /// v2.02 折线重建键：路线/方案/路况/足迹/AOI 任一变化才重建
+    private func routeRenderKey() -> String {
+        var parts: [String] = [
+            "\(route.count)", navigating ? "nav" : "plan", "\(selectedRouteIdx)",
+            "\(choiceRoutes.count)", "\(trafficSpans.count)", "\(footprint.count)",
+            "\(tipPolygon?.count ?? 0)"
+        ]
+        if let f = route.first { parts.append("\(f.latitude),\(f.longitude)") }
+        if let l = route.last { parts.append("\(l.latitude),\(l.longitude)") }
+        if let t = tipPolygon?.first { parts.append("\(t.latitude),\(t.longitude)") }
+        return parts.joined(separator: "|")
+    }
+
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
         context.coordinator.onPoiLongPress = onPoiLongPress
@@ -142,7 +155,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onMapTap = onMapTap
         context.coordinator.onRouteChoiceTap = onRouteChoiceTap
         context.coordinator.onScaleChange = onScaleChange
-        context.coordinator.reportScale(map)
         context.coordinator.choiceRoutes = choiceRoutes
         context.coordinator.selectedRouteIdx = selectedRouteIdx
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
@@ -302,85 +314,80 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(CategoryAnnotation(result: r))
             }
         }
-        // v2.00 只移除折线/多边形，保留高德瓦片 overlay
-        // （旧写法 removeOverlays(map.overlays) 会把底图瓦片一起删掉，且再也没插回来，
-        //  结果整张底图退回苹果原生地图——这也是"路线压不到路"的观感来源之一）
-        map.removeOverlays(map.overlays.filter { !($0 is AmapTileOverlay) })
-        context.coordinator.underPolyline = nil
-        context.coordinator.mainPolyline = nil
-        context.coordinator.alternatePolylines = []
-        context.coordinator.trafficPolylines = []
-        context.coordinator.trafficColors = []
-        context.coordinator.footprintPolyline = nil
-        // v1.81 地点区域多边形（AOI 蓝色虚线框；随 tipPolygon 变化重建，每次重画路线后补加）
-        let polyKey = tipPolygon.map { pts in
-            pts.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ":")
-        } ?? ""
-        if polyKey != context.coordinator.lastTipPolygonKey {
-            context.coordinator.lastTipPolygonKey = polyKey
-            if let pts = tipPolygon, pts.count >= 3 {
-                let gpts = MapGeo.toGCJ(pts)
-                context.coordinator.tipPolygonOverlay = MKPolygon(coordinates: gpts, count: gpts.count)
-            } else {
-                context.coordinator.tipPolygonOverlay = nil
-            }
-        }
-        if let pg = context.coordinator.tipPolygonOverlay {
-            map.addOverlay(pg)
-        }
-        if route.count > 1 {
-            let gRoute = MapGeo.toGCJ(route)
-            if navigating {
-                // 导航中只画当前路线（草绿双层，高德导航推荐色）
-                let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
-                context.coordinator.underPolyline = under
-                let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
-                context.coordinator.mainPolyline = main
-                map.addOverlay(under)
-                map.addOverlay(main)
-            } else {
-                // 规划态：备选方案浅绿虚线 + 当前方案草绿双层（高德式同屏多路线）
-                for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
+        // v2.02 折线只在"真的变了"时重建
+        // 旧实现每次 updateUIView 都 removeOverlays + 重建全部 MKPolyline，而 updateUIView 每秒
+        // 会被定位/状态更新触发多次（一次导航卡刷新就可能几十次）→ 折线反复消失重现（雪花闪烁）
+        // + 上千点折线反复分配（卡顿）。这里按内容做键，不变就直接跳过。
+        let routeKey = routeRenderKey()
+        if routeKey != context.coordinator.lastRouteKey {
+            context.coordinator.lastRouteKey = routeKey
+            // v2.00 只移除折线/多边形，保留高德瓦片 overlay
+            // （旧写法 removeOverlays(map.overlays) 会把底图瓦片一起删掉，且再也没插回来，
+            //  结果整张底图退回苹果原生地图——这也是"路线压不到路"的观感来源之一）
+            map.removeOverlays(map.overlays.filter { !($0 is AmapTileOverlay) })
+            context.coordinator.underPolyline = nil
+            context.coordinator.mainPolyline = nil
+            context.coordinator.alternatePolylines = []
+            context.coordinator.trafficPolylines = []
+            context.coordinator.trafficColors = []
+            context.coordinator.footprintPolyline = nil
+            // v1.81 地点区域多边形（AOI 蓝色虚线框；随 tipPolygon 变化重建，每次重画路线后补加）
+            let polyKey = tipPolygon.map { pts in
+                pts.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ":")
+            } ?? ""
+            if polyKey != context.coordinator.lastTipPolygonKey {
+                context.coordinator.lastTipPolygonKey = polyKey
+                if let pts = tipPolygon, pts.count >= 3 {
                     let gpts = MapGeo.toGCJ(pts)
-                    let alt = MKPolyline(coordinates: gpts, count: gpts.count)
-                    context.coordinator.alternatePolylines.append(alt)
-                    map.addOverlay(alt)
+                    context.coordinator.tipPolygonOverlay = MKPolygon(coordinates: gpts, count: gpts.count)
+                } else {
+                    context.coordinator.tipPolygonOverlay = nil
                 }
-                let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
-                context.coordinator.underPolyline = under
-                let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
-                context.coordinator.mainPolyline = main
-                map.addOverlay(under)
-                map.addOverlay(main)
             }
-            // v1.99 路况：缓行黄 / 拥堵红，叠在当前方案之上（高德式）
-            for span in trafficSpans where span.points.count >= 2 {
-                let gpts = MapGeo.toGCJ(span.points)
+            if let pg = context.coordinator.tipPolygonOverlay {
+                map.addOverlay(pg)
+            }
+            if route.count > 1 {
+                let gRoute = MapGeo.toGCJ(route)
+                if navigating {
+                    // 导航中只画当前路线（草绿双层，高德导航推荐色）
+                    let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
+                    context.coordinator.underPolyline = under
+                    let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
+                    context.coordinator.mainPolyline = main
+                    map.addOverlay(under)
+                    map.addOverlay(main)
+                } else {
+                    // 规划态：备选方案浅绿虚线 + 当前方案草绿双层（高德式同屏多路线）
+                    for (idx, pts) in choiceRoutes.enumerated() where idx != selectedRouteIdx && pts.count > 1 {
+                        let gpts = MapGeo.toGCJ(pts)
+                        let alt = MKPolyline(coordinates: gpts, count: gpts.count)
+                        context.coordinator.alternatePolylines.append(alt)
+                        map.addOverlay(alt)
+                    }
+                    let under = MKPolyline(coordinates: gRoute, count: gRoute.count)
+                    context.coordinator.underPolyline = under
+                    let main = MKPolyline(coordinates: gRoute, count: gRoute.count)
+                    context.coordinator.mainPolyline = main
+                    map.addOverlay(under)
+                    map.addOverlay(main)
+                }
+                // v1.99 路况：缓行黄 / 拥堵红，叠在当前方案之上（高德式）
+                for span in trafficSpans where span.points.count >= 2 {
+                    let gpts = MapGeo.toGCJ(span.points)
+                    let poly = MKPolyline(coordinates: gpts, count: gpts.count)
+                    context.coordinator.trafficPolylines.append(poly)
+                    context.coordinator.trafficColors.append(span.color)
+                    map.addOverlay(poly)
+                }
+            }
+            // v1.99 足迹回放：蓝色虚线（不受路线清空影响）
+            if footprint.count >= 2 {
+                let gpts = MapGeo.toGCJ(footprint)
                 let poly = MKPolyline(coordinates: gpts, count: gpts.count)
-                context.coordinator.trafficPolylines.append(poly)
-                context.coordinator.trafficColors.append(span.color)
+                context.coordinator.footprintPolyline = poly
                 map.addOverlay(poly)
             }
-        }
-        // v2.01 导航中沿路线铺白色方向箭头（高德同款）；只随路线变化重建
-        let arrowKey = navigating
-            ? "\(route.count)-\(route.first.map { "\($0.latitude),\($0.longitude)" } ?? "")-\(route.last.map { "\($0.latitude),\($0.longitude)" } ?? "")"
-            : "off"
-        if arrowKey != context.coordinator.lastArrowKey {
-            context.coordinator.lastArrowKey = arrowKey
-            map.annotations.compactMap { $0 as? RouteArrowAnnotation }.forEach { map.removeAnnotation($0) }
-            if navigating {
-                for a in MapViewRepresentable.buildArrows(route) {
-                    map.addAnnotation(a)
-                }
-            }
-        }
-        // v1.99 足迹回放：蓝色虚线（不受路线清空影响）
-        if footprint.count >= 2 {
-            let gpts = MapGeo.toGCJ(footprint)
-            let poly = MKPolyline(coordinates: gpts, count: gpts.count)
-            context.coordinator.footprintPolyline = poly
-            map.addOverlay(poly)
         }
         // v1.99 组队队友标注：按 名称+坐标 做键，变化才重建
         let teamKey = teamMembers.map { "\($0.name)@\(String(format: "%.5f", $0.lat)),\(String(format: "%.5f", $0.lon))" }
@@ -543,7 +550,24 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// v1.98 备选路线点击切换
         var onRouteChoiceTap: ((Int) -> Void)?
 
-        /// v2.01 比例尺：算出"58pt 比例尺条代表多少米"，取 1/2/5×10ⁿ 的整数刻度
+        /// v2.02 比例尺（重写）
+        ///
+        /// 旧实现有两个致命问题，直接导致启动卡顿/闪退与比例尺乱跳：
+        /// ① 在 updateUIView 里调用 → 回调改 SwiftUI @State → 触发新一轮 updateUIView → 循环；
+        /// ② 在 mapViewDidChangeVisibleRegion 里调用（每帧一次）→ 状态高频抖动。
+        /// 现在：只在"地图停止变化"后计算，0.25 秒去抖，且用 lastScaleText 去重。
+        private var scaleWork: DispatchWorkItem?
+
+        func scheduleScale(_ map: MKMapView, delay: TimeInterval = 0.25) {
+            scaleWork?.cancel()
+            let w = DispatchWorkItem { [weak self, weak map] in
+                guard let self, let map else { return }
+                self.reportScale(map)
+            }
+            scaleWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+        }
+
         func reportScale(_ map: MKMapView) {
             guard map.bounds.height > 0 else { return }
             let metersPerPoint = map.region.span.latitudeDelta * 111_000.0 / Double(map.bounds.height)
@@ -551,18 +575,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             let target = metersPerPoint * 58.0
             let nice: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500,
                                   1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000]
-            var pick = nice.last!
+            var pick = nice.last ?? 100_000
             for v in nice where v >= target { pick = v; break }
             let text = pick >= 1000
-                ? "\\(Int(pick / 1000)) 公里"
-                : "\\(Int(pick)) 米"
+                ? "\(Int(pick / 1000)) 公里"
+                : "\(Int(pick)) 米"
             guard text != lastScaleText else { return }
             lastScaleText = text
-            // 地图代理回调里同步改 SwiftUI @State 会触发"Modifying state during view update"，
-            // 丢到下一轮主线程
-            DispatchQueue.main.async { [weak self] in
-                self?.onScaleChange?(text)
-            }
+            onScaleChange?(text)
         }
         var choiceRoutes: [[CLLocationCoordinate2D]] = []
         var selectedRouteIdx = 0
@@ -588,10 +608,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPreviewKey = ""
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
-        /// v2.01 路线方向箭头重建键
-        var lastArrowKey = ""
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
         var lastScaleText = ""
+        /// v2.02 折线重建键（内容不变就不重建，避免闪烁/卡顿）
+        var lastRouteKey = ""
         /// v1.84 巡航模式状态记忆（巡航开关切换/跟随 tick/上次相机中心节流）
         var lastCruise: Bool?
         var lastCruiseTick = 0
@@ -735,7 +755,6 @@ struct MapViewRepresentable: UIViewRepresentable {
             var hit: MKAnnotation?
             var hitDist = CGFloat.greatestFiniteMagnitude
             for a in map.annotations where !(a is MKUserLocation) {
-                if a is RouteArrowAnnotation { continue }   // 方向箭头不参与点选
                 let isPlace = a is PlaceAnnotation
                 // 被碰撞隐藏的地点标签不参与命中：缩小时大量标签被 MapKit 隐藏，
                 // 若仍参与命中，点空地会弹出看不见的地名卡
@@ -815,12 +834,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool { false }
 
-        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
-            reportScale(mapView)   // v2.01 缩放/俯仰时同步右上角比例尺
-        }
-
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            reportScale(mapView)
+            scheduleScale(mapView)   // v2.02 地图稳定后再算比例尺（去抖，避免每帧改状态）
             // 程序 setRegion 触发时不标记用户移动
             if programmaticMove {
                 programmaticMove = false
@@ -833,6 +848,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         // v1.69 地图加载回调（MKMapView：渲染完成 / 加载失败）
         func mapViewDidFinishRenderingMap(_ mapView: MKMapView, fullyRendered: Bool) {
             onMapLoad?(true, "地图渲染完成")
+            if lastScaleText.isEmpty { scheduleScale(mapView, delay: 0.1) }  // v2.02 首屏补一次
         }
 
         func mapViewDidFailLoadingMap(_ mapView: MKMapView, withError error: Error) {
@@ -865,18 +881,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v?.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
-                return v
-            }
-            if let ra = annotation as? RouteArrowAnnotation {
-                // v2.01 路线方向箭头（白色 chevron，已按航向预旋转）
-                let id = "routeArrow"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: id)
-                v.annotation = ra
-                v.image = MapViewRepresentable.arrowImage(bearing: ra.bearing)
-                v.canShowCallout = false
-                v.isEnabled = false
-                v.displayPriority = .defaultLow
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
@@ -969,7 +973,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 r.lineCap = .round
                 // v1.99 路况分段优先着色（缓行黄 / 拥堵红）
                 if let ti = self.trafficPolylines.firstIndex(where: { $0 === poly }) {
-                    r.strokeColor = self.trafficColors[ti]
+                    // 防御：数组若因并发/重建短暂不同步，越界会直接崩（crash 日志里的常见项）
+                    r.strokeColor = ti < self.trafficColors.count ? self.trafficColors[ti] : UIColor.systemOrange
                     r.lineWidth = 7
                     return r
                 }
@@ -1016,20 +1021,6 @@ struct MapViewRepresentable: UIViewRepresentable {
             return MKOverlayRenderer(overlay: overlay)
         }
     }
-}
-
-/// v2.01 路线方向箭头（导航中沿路线铺的白色 chevron）
-/// 内部存 WGS，`coordinate` 输出 GCJ；bearing 为航向（0=北）
-final class RouteArrowAnnotation: NSObject, MKAnnotation {
-    let bearing: Double
-    private let wgs: CLLocationCoordinate2D
-    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
-    init(wgs: CLLocationCoordinate2D, bearing: Double) {
-        self.wgs = wgs
-        self.bearing = bearing
-        super.init()
-    }
-    var title: String? { nil }
 }
 
 /// v1.99 组队队友标注（地图上的"骑手点"）
@@ -1173,77 +1164,6 @@ extension MapViewRepresentable {
             c.restoreGState()
         }
     }
-
-    /// v2.01 沿路线每隔约 65 米放一个方向箭头（最多 80 个，避免长路线拖慢渲染）
-    static func buildArrows(_ pts: [CLLocationCoordinate2D]) -> [RouteArrowAnnotation] {
-        guard pts.count >= 2 else { return [] }
-        var out: [RouteArrowAnnotation] = []
-        var acc = 0.0
-        var nextAt = 45.0
-        for i in 0..<(pts.count - 1) {
-            let a = pts[i], b = pts[i + 1]
-            let seg = a.distance(to: b)
-            guard seg > 0.01 else { continue }
-            while nextAt <= acc + seg && out.count < 80 {
-                let t = (nextAt - acc) / seg
-                let c = CLLocationCoordinate2D(
-                    latitude: a.latitude + (b.latitude - a.latitude) * t,
-                    longitude: a.longitude + (b.longitude - a.longitude) * t)
-                out.append(RouteArrowAnnotation(wgs: c, bearing: bearing(a, b)))
-                nextAt += 65
-            }
-            acc += seg
-        }
-        return out
-    }
-
-    /// 两点航向（度，0=正北）
-    static func bearing(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
-        let p1 = a.latitude * .pi / 180
-        let p2 = b.latitude * .pi / 180
-        let dl = (b.longitude - a.longitude) * .pi / 180
-        let y = sin(dl) * cos(p2)
-        let x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl)
-        let deg = atan2(y, x) * 180 / .pi
-        return (deg + 360).truncatingRemainder(dividingBy: 360)
-    }
-
-    /// v2.01 箭头图案（按航向预旋转 10° 一档缓存，避免每帧重绘）
-    static func arrowImage(bearing: Double) -> UIImage {
-        let bucket = Int((bearing / 10).rounded()) % 36
-        if let hit = ArrowImageCache.shared.images[bucket] { return hit }
-        let size = CGSize(width: 22, height: 22)
-        let img = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
-            c.translateBy(x: size.width / 2, y: size.height / 2)
-            c.rotate(by: CGFloat(Double(bucket) * 10 * .pi / 180))
-            let path = UIBezierPath()
-            path.move(to: CGPoint(x: 0, y: -6.5))
-            path.addLine(to: CGPoint(x: -5.5, y: 4.5))
-            path.move(to: CGPoint(x: 0, y: -6.5))
-            path.addLine(to: CGPoint(x: 5.5, y: 4.5))
-            c.setLineCap(.round)
-            c.setLineJoin(.round)
-            // 深色描边打底（浅色道路上也能看清）
-            c.setLineWidth(4.6)
-            UIColor.black.withAlphaComponent(0.22).setStroke()
-            c.addPath(path.cgPath)
-            c.strokePath()
-            // 白色箭头
-            c.setLineWidth(2.8)
-            UIColor.white.setStroke()
-            c.addPath(path.cgPath)
-            c.strokePath()
-        }
-        ArrowImageCache.shared.images[bucket] = img
-        return img
-    }
-}
-
-/// v2.01 箭头图片缓存（扩展里不能声明静态存储属性，单独放一个类）
-final class ArrowImageCache {
-    static let shared = ArrowImageCache()
-    var images: [Int: UIImage] = [:]
 }
 
 // MARK: - v1.67 高德瓦片底图（纯高德视觉；GCJ→WGS 重投影 + NSLock 防渲染线程数据竞争闪退）
@@ -1315,9 +1235,45 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 if let hit, let cg = hit.cgImage {
                     ctx.draw(cg, in: rect)
                 } else if needFetch {
-                    fetchTile(x, y, z, key)
+                    // 先请求靠近屏幕中心的瓦片：旧实现按行列顺序，中心往往最后才到，
+                    // 3D 俯视时表现为中间一片空白（"雪花点"）
+                    let cx = Double(x0 + x1) / 2, cy = Double(y0 + y1) / 2
+                    let d = (Double(x) - cx) * (Double(x) - cx) + (Double(y) - cy) * (Double(y) - cy)
+                    if d < 25 { fetchTile(x, y, z, key) }
+                    else { queueTile(x, y, z, key) }
                 }
             }
+        }
+    }
+
+    /// v2.02 重绘合并：一帧内最多触发一次 setNeedsDisplay（旧实现每张瓦片到达都全图重绘）
+    private var redrawScheduled = false
+    private func markNeedsRedraw() {
+        guard !redrawScheduled else { return }
+        redrawScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.redrawScheduled = false
+            self.setNeedsDisplay()
+        }
+    }
+
+    /// v2.02 边缘瓦片延迟加载队列（优先保证屏幕中心先出图）
+    private var queuedTiles: Set<String> = []
+    private func queueTile(_ x: Int, _ y: Int, _ z: Int, _ key: String) {
+        // draw() 跑在 VectorKit 渲染线程，主线程也会插队 → queuedTiles 必须加锁，
+        // 否则 Set 并发写入会 EXC_BAD_ACCESS（本文件历史上就踩过同类闪退）
+        lock.lock()
+        if queuedTiles.contains(key) { lock.unlock(); return }
+        queuedTiles.insert(key)
+        lock.unlock()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.queuedTiles.remove(key)
+            let cached = self.cache[key] != nil
+            self.lock.unlock()
+            if !cached { self.fetchTile(x, y, z, key) }
         }
     }
 
@@ -1333,7 +1289,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 cache[key] = img
                 pending.remove(key)
                 lock.unlock()
-                setNeedsDisplay()
+                markNeedsRedraw()
                 return
             }
             lock.unlock()
@@ -1377,14 +1333,16 @@ final class AmapTileRenderer: MKOverlayRenderer {
                         // 骑行滚动地图会连续下载数百张 → 数百次目录枚举。改为每 50 张清一次
                         Self.trimDiskIfNeeded()
                     }
-                    if self.cache.count > 200 {
-                        var drop = 50
+                    // v2.02 缓存上限 200 → 1200：3D 45° 俯视时包围盒覆盖的瓦片数是 2D 的 3~5 倍，
+                    // 200 张会被瞬间冲掉 → 同屏瓦片反复"加载-淘汰-再加载"，表现为雪花点与卡顿
+                    if self.cache.count > 1200 {
+                        var drop = 300
                         while drop > 0, let k = self.cache.keys.first {
                             self.cache.removeValue(forKey: k)
                             drop -= 1
                         }
                     }
-                    self.setNeedsDisplay()
+                    self.markNeedsRedraw()
                 } else if err != nil || (resp as? HTTPURLResponse)?.statusCode != 200 {
                     self.pending.remove(key) // 失败瓦片：移出待下载，滚动/重绘后自然重试
                 }

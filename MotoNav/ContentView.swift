@@ -41,8 +41,6 @@ struct ContentView: View {
     /// 高德搜索 Key 输入弹窗
     @State private var showAmapKeyInput = false
     @State private var amapKeyInput = ""
-    @State private var longPressCoord: CLLocationCoordinate2D?
-    @State private var showLongPressMenu = false
     /// 标记该点：待标记坐标 + 备注输入
     @State private var pendingMarkCoord: CLLocationCoordinate2D?
     @State private var showMarkNameAlert = false
@@ -87,8 +85,6 @@ struct ContentView: View {
     @State private var showTeamRide = false
     /// v1.99 搜索结果排序（0 距离 / 1 名称）
     @State private var tipSort = 0
-    /// v2.01 右上角比例尺文本（由地图缩放回传）
-    @State private var scaleText = "200 米"
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
     @State private var minimalMap = false
     /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
@@ -153,7 +149,8 @@ struct ContentView: View {
                 }
                 // 导航中悬浮退出按钮（仅上下移动；v1.85 取消左滑删除，全览时隐藏，取消全览恢复）
                 if model.navigating && !showRouteOverview {
-                    DraggableFloat(key: "exitnav", defaultPos: CGPoint(x: 0.5, y: 0.84), lockX: true) { exitNavOverlay }
+                    // v2.02 贴底摆放（高德导航卡片位置）；key 变更以清掉旧版记住的偏高位置
+                    DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.925), lockX: true) { exitNavOverlay }
                 }
                 // v1.81.4 导航全览操作条（高德同款：固定全览 / 取消全览(13s)）
                 if model.navigating && showRouteOverview {
@@ -170,8 +167,8 @@ struct ContentView: View {
                     cruiseCard
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                // v1.66：沉浸模式下底部内容（搜索框/规划卡/导航卡）隐藏；导航中导航卡不受影响
-                if !uiHidden || model.navigating {
+                // v1.66：沉浸模式下底部内容隐藏（v2.02 导航中同样可收起，导航卡单独渲染不受影响）
+                if !uiHidden {
                     bottomOverlay
                 }
                 // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层，卡片之上渲染在下方）
@@ -252,23 +249,6 @@ struct ContentView: View {
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
                 model.updatePoi(id: p.id, type: type, name: name, lat: lat, lon: lon, radiusM: r)
             }
-        }
-        .confirmationDialog("地图选点", isPresented: $showLongPressMenu, presenting: longPressCoord) { coord in
-            Button("添加违法拍照") {
-                pendingCoord = coord
-                showTypePicker = true
-            }
-            Button("标记该点") {
-                pendingMarkCoord = coord
-                markName = ""
-                showMarkNameAlert = true
-            }
-            // v1.95 轻点地图改为弹出地点卡后，沉浸模式的入口移到这里
-            Button("隐藏界面（沉浸模式）") {
-                tapPlace = nil
-                withAnimation(.easeOut(duration: 0.2)) { uiHidden = true }
-            }
-            Button("取消", role: .cancel) {}
         }
         .alert("标记该点", isPresented: $showMarkNameAlert) {
             TextField("备注名称（如：前方有大坑 / 事故多发地）", text: $markName)
@@ -441,11 +421,13 @@ struct ContentView: View {
             zoomOutTick: model.zoomOutTick,
             pitchDeg: model.pitchDeg,
             onScaleChange: { t in
-                if t != scaleText { scaleText = t }
+                // v2.02 写进 AppModel（@Published）而不是 View 的 @State：
+                // 地图回调在 SwiftUI 更新周期内改 @State 会触发下一轮 updateUIView → 循环卡死
+                model.setScale(t)
             },
             onLongPress: { coord in
-                longPressCoord = coord
-                showLongPressMenu = true
+                // v2.02 长按只做一件事：出地点卡（添加违法拍照已移到卡片最下方）
+                showTapPlace(coord)
             },
             onPoiLongPress: { p in
                 poiManagePoi = p
@@ -466,9 +448,8 @@ struct ContentView: View {
                 showTapPlace(CLLocationCoordinate2D(latitude: pl.lat, longitude: pl.lon), seed: pl.name)
             },
             onPlaceLongPress: { pl in
-                // v1.81 长按地图地点名 → 高亮+北向上+地点信息卡（同搜索点击格式）
-                haptic()
-                showTipCard(name: pl.name, lat: pl.lat, lon: pl.lon, sub: "")
+                // v2.02 长按地点名标签 → 同一张地点卡（统一入口）
+                showTapPlace(CLLocationCoordinate2D(latitude: pl.lat, longitude: pl.lon), seed: pl.name)
             },
             onCategorySelect: { r in
                 model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
@@ -478,7 +459,7 @@ struct ContentView: View {
                 // v1.96 轻点地图：
                 //   命中地点名文字 → 地点介绍卡（在 MapView 里已派发 onPlaceSelect）
                 //   点到非地点区域 → 收起所有卡片并隐藏全部界面（再轻点一次恢复）
-                guard !model.navigating else { return }
+                // v2.02 导航中轻点也收起浮层（导航卡保留），再轻点一次恢复
                 // v1.99 足迹回放中：轻点地图先退出回放
                 if !model.footprintPreview.isEmpty {
                     model.footprintPreview = []
@@ -504,12 +485,7 @@ struct ContentView: View {
                     model.status = "已退出路线规划"
                     return
                 }
-                // 地点标签数据缺失（Overpass 拉取失败/离线）时退回 v1.95 行为：
-                // 轻点即出地点卡，否则"点哪里都只是隐藏界面"，地点卡功能等于不可用
-                if model.placeLabels.isEmpty {
-                    showTapPlace(coord)
-                    return
-                }
+                // v2.02 轻点 = 收起浮层，长按 = 出地点卡（两条路径职责分开，不再互相顶替）
                 hideAllOnBlankTap()
             },
             onRouteChoiceTap: { idx in
@@ -643,7 +619,7 @@ struct ContentView: View {
             HStack {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(scaleText)
+                    Text(model.scaleText)
                         .font(.caption2.bold())
                         .foregroundStyle(.primary)
                     ZStack(alignment: .bottomTrailing) {
@@ -960,7 +936,7 @@ struct ContentView: View {
             HStack {
                 Label("版本", systemImage: "info.circle")
                 Spacer()
-                Text("v2.01")
+                Text("v2.02")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
@@ -1356,8 +1332,14 @@ struct ContentView: View {
 
     /// 地点介绍卡：名称 / 类型 / 地址 / 距离 / 收藏·搜周边·标记·分享 / 导航
     private func tapPlaceCard(_ p: TapPlaceInfo) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
+        // v2.02 重排：信息（名称/地址/距离）在上，操作按"次要图标 → 主按钮 → 上报"三层，
+        // 「添加违法拍照」固定放在卡片最下方（原来藏在地图长按菜单里，几乎没人发现）
+        let starOn = slotTarget != nil
+            ? slotStarOn(lat: p.lat, lon: p.lon)
+            : model.isTipFavorite(lat: p.lat, lon: p.lon)
+        return VStack(spacing: 0) {
+            // ── 头部：类别图标 + 名称 + 关闭 ──
+            HStack(alignment: .center, spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.blue.opacity(0.12))
@@ -1367,7 +1349,7 @@ struct ContentView: View {
                 }
                 .frame(width: 38, height: 38)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(p.name)
                             .font(.headline)
@@ -1378,16 +1360,10 @@ struct ContentView: View {
                                 .frame(width: 14, height: 14)
                         }
                     }
-                    if !p.poiType.isEmpty {
-                        Text(p.poiType)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else if p.loading {
-                        Text("正在解析地点…")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(placeSubtitle(p))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 Button {
@@ -1395,130 +1371,85 @@ struct ContentView: View {
                     closeTapPlace()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 18))
+                        .font(.system(size: 19))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 9)
 
+            // ── 地址 ──
             if !p.address.isEmpty {
-                Text(p.address)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 1)
+                    Text(p.address)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
             }
 
-            HStack(spacing: 12) {
+            // ── 距离 / 骑行时间 ──
+            HStack(spacing: 6) {
                 if let d = distText(p.lat, p.lon) {
-                    Label(d, systemImage: "location.fill")
+                    placeChip(d, icon: "location.fill")
                 }
                 if let mins = motoMinutes(p.lat, p.lon) {
-                    Label("摩托约\(mins)分钟", systemImage: "clock.fill")
+                    placeChip("摩托约 \(mins) 分钟", icon: "clock.fill")
                 }
-                if !p.road.isEmpty {
-                    Label(p.road, systemImage: "road.lanes").lineLimit(1)
-                }
+                Spacer(minLength: 0)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
 
             Divider()
-                .padding(.vertical, 2)
 
-            HStack(spacing: 6) {
-                Button {
+            // ── 次要操作：收藏 / 搜周边 / 标记 / 分享 ──
+            HStack(spacing: 0) {
+                placeAction(icon: starOn ? "star.fill" : "star",
+                            title: favoriteActionTitle(lat: p.lat, lon: p.lon),
+                            tint: starOn ? .orange : .primary) {
                     haptic()
                     if slotTarget != nil {
                         toggleSlotAssignment(name: p.name, lat: p.lat, lon: p.lon)
                     } else {
                         model.toggleTipFavorite(name: p.name, lat: p.lat, lon: p.lon)
                     }
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: (slotTarget != nil ? slotStarOn(lat: p.lat, lon: p.lon) : model.isTipFavorite(lat: p.lat, lon: p.lon)) ? "star.fill" : "star")
-                            .font(.title3)
-                            .foregroundStyle((slotTarget != nil ? slotStarOn(lat: p.lat, lon: p.lon) : model.isTipFavorite(lat: p.lat, lon: p.lon)) ? .orange : .primary)
-                        Text(favoriteActionTitle(lat: p.lat, lon: p.lon))
-                            .font(.caption2)
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
-
-                Button {
+                placeAction(icon: "magnifyingglass", title: "搜周边") {
                     haptic()
                     let tip = AppModel.AmapTip(name: p.name, sub: p.road, lat: p.lat, lon: p.lon)
                     closeTapPlace()
                     aroundSearch(tip)
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.title3)
-                        Text("搜周边")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
-
-                Button {
+                placeAction(icon: "mappin.and.ellipse", title: "标记") {
                     haptic()
                     pendingMarkCoord = p.coordinate
                     markName = p.name
                     showMarkNameAlert = true
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "mappin.and.ellipse")
-                            .font(.title3)
-                        Text("标记")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
-
-                Button {
+                placeAction(icon: "square.and.arrow.up", title: "分享") {
                     haptic()
                     PlaceShare.present(PlaceShare.payload(name: p.name,
                                                           address: p.address,
                                                           type: p.poiType,
                                                           road: p.road,
                                                           lat: p.lat, lon: p.lon))
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.title3)
-                        Text("分享")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 7)
 
-                Spacer(minLength: 4)
-
-                // 白色描边"导航"：直接开始导航
-                Button {
-                    haptic()
-                    let name = p.name
-                    let lat = p.lat
-                    let lon = p.lon
-                    closeTapPlace()
-                    model.clearPreview()
-                    model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: true)
-                } label: {
-                    Text("导航")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.blue)
-                        .frame(width: 76, height: 40)
-                        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.blue, lineWidth: 1.5))
-                }
-                .buttonStyle(.plain)
-
-                // 蓝色实心"路线"：先规划路线、给出方案，不直接进导航
+            // ── 主操作：路线（次要）/ 导航（主要） ──
+            HStack(spacing: 10) {
                 Button {
                     haptic()
                     let name = p.name
@@ -1530,14 +1461,68 @@ struct ContentView: View {
                 } label: {
                     Text("路线")
                         .font(.subheadline.bold())
-                        .foregroundStyle(.white)
-                        .frame(width: 76, height: 40)
-                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(.blue)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    haptic()
+                    let name = p.name
+                    let lat = p.lat
+                    let lon = p.lon
+                    closeTapPlace()
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: true)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                            .font(.system(size: 15, weight: .bold))
+                        Text("导航")
+                            .font(.subheadline.bold())
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 11))
                 }
                 .buttonStyle(.plain)
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            // ── 最下方：添加违法拍照（从地图长按菜单移过来，位置固定好找） ──
+            Button {
+                haptic()
+                pendingCoord = p.coordinate
+                showTypePicker = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.86, green: 0.36, blue: 0.16))
+                    Text("添加违法拍照")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("限速 · 压线 · 禁摩")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
-        .padding(14)
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1545,6 +1530,47 @@ struct ContentView: View {
         )
         .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
         .padding(.horizontal, 16)
+    }
+
+    /// v2.02 地点卡副标题：类型 · 道路（缺一项时只显示另一项）
+    private func placeSubtitle(_ p: TapPlaceInfo) -> String {
+        if p.loading && p.poiType.isEmpty && p.road.isEmpty { return "正在解析地点…" }
+        let parts = [p.poiType, p.road].filter { !$0.isEmpty }
+        return parts.isEmpty ? "地图选点" : parts.joined(separator: " · ")
+    }
+
+    /// v2.02 地点卡信息胶囊（距离/时间）
+    private func placeChip(_ text: String, icon: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+            Text(text)
+                .font(.caption2.weight(.medium))
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.06), in: Capsule())
+    }
+
+    /// v2.02 地点卡次要操作按钮（等分四列）
+    private func placeAction(icon: String, title: String, tint: Color = .primary,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(tint)
+                    .frame(height: 20)
+                Text(title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// v1.81.3 左滑关闭路线规划卡（清掉路线方案，搜索主卡自动恢复）
@@ -2215,8 +2241,9 @@ struct ContentView: View {
 
     /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
     private var exitNavOverlay: some View {
-        // v1.81.3 高德同款白底黑字导航状态卡（用时/里程/红绿灯/抓拍/预计到达）
-        // 左侧小× → 切换为"退出导航/取消"两按钮确认
+        // v2.02 按高德导航底部卡片重做：
+        //   位置贴底、高度固定（旧版红绿灯/车道行"有就插、没有就撤"→ 卡片高度反复跳变）
+        //   左侧灰色圆形 ×、右侧浅灰圆角"全览"，中间三段大数字（剩余/用时/到达）
         VStack {
             if model.navigating {
                 if showExitConfirm {
@@ -2228,122 +2255,170 @@ struct ContentView: View {
                         } label: {
                             Text("退出导航")
                                 .font(.headline.bold())
-                                .foregroundStyle(.black)
+                                .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
+                                .frame(height: 50)
+                                .background(Color(red: 0.85, green: 0.20, blue: 0.18),
+                                            in: RoundedRectangle(cornerRadius: 14))
                         }
                         .buttonStyle(.plain)
                         Button {
                             haptic()
                             showExitConfirm = false
                         } label: {
-                            Text("取消")
+                            Text("继续导航")
                                 .font(.headline.bold())
-                                .foregroundStyle(.black)
+                                .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
+                                .frame(height: 50)
+                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 14))
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 14)
-                    .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
+                    .padding(10)
+                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18))
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                    .padding(.horizontal, 12)
                 } else if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
-                    // v1.90 统一白底黑字（深浅色模式一致，高德同款导航状态卡）
-                    // 第一行：分钟/公里/红绿灯/抓拍；第二行：下一转向+当前道路+速度；第三行：预计到达
-                    let dimFg: Color = Color.black.opacity(0.45)
-                    let mainFg: Color = Color.black.opacity(0.75)
-                    let arriveFg: Color = Color.gray
-                    let minTxt = "\(max(ns.remainS, 0) / 60)"
-                    let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
-                    let lights = model.trafficLights.count
-                    let snaps = model.routePois.count
-                    let arriveTxt: String = {
-                        let f = DateFormatter()
-                        f.dateFormat = "HH:mm"
-                        return f.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
-                    }()
-                    VStack(spacing: 0) {
-                        // v2.01 红绿灯倒计时（距路口 260 米内出现）
-                        if let nl = model.nextTrafficLight {
-                            lightCountdownRow(nl)
-                        }
-                        // 第一行：退出 × ｜ 分钟 ｜ 公里 ｜ 红绿灯 ｜ 抓拍 ｜ 全览
-                        HStack(spacing: 0) {
-                            Button {
-                                haptic()
-                                showExitConfirm = true
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.title3)
-                                    .foregroundStyle(dimFg)
-                                    .padding(.horizontal, 10)
-                            }
-                            .buttonStyle(.plain)
-                            exitCellDivider
-                            exitStatusCell(minTxt, "分钟", forceBlack: true)
-                            exitCellDivider
-                            exitStatusCell(kmTxt, "公里", forceBlack: true)
-                            exitCellDivider
-                            exitStatusCell("\(lights)", "红绿灯", forceBlack: true)
-                            exitCellDivider
-                            exitStatusCell("\(snaps)", "抓拍", forceBlack: true)
-                            exitCellDivider
-                            // 全览按钮
-                            Button {
-                                haptic()
-                                startRouteOverview()
-                            } label: {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 22, weight: .semibold))
-                                    .foregroundStyle(mainFg)
-                                    .padding(.horizontal, 12)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        // v1.90 第二行：下一转向预告（<500米）+ 实时速度（当前道路名已上移到顶部胶囊，避免重复）
-                        HStack(spacing: 8) {
-                            if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
-                                HStack(spacing: 4) {
-                                    Image(systemName: navTurnIcon(t))
-                                        .font(.subheadline.bold())
-                                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                                    Text("\(navDist(ns.distToTurnM))\(t.roadName.isEmpty ? "" : " " + t.roadName)")
-                                        .font(.footnote.weight(.semibold))
-                                        .foregroundStyle(mainFg)
-                                        .lineLimit(1)
-                                }
-                            }
-                            Spacer()
-                            Text("\(Int(ns.speedKph)) km/h")
-                                .font(.footnote.bold())
-                                .foregroundStyle(mainFg)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        // v2.01 车道级引导：推荐车道绿色高亮（距路口 300 米内）
-                        if let t = ns.nextTurn, ns.distToTurnM > 0, ns.distToTurnM < 300 {
-                            laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
-                        }
-                        // v1.90 第三行：预计到达（浅灰小字，卡片下方居中显示，高德同款）
-                        HStack {
-                            Spacer()
-                            Text("预计 \(arriveTxt) 到达")
-                                .font(.caption)
-                                .foregroundStyle(arriveFg)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                    }
-                    .background(Color.white, in: RoundedRectangle(cornerRadius: 18))
-                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
-                    .padding(.horizontal, 14)
+                    navBottomCard(ns)
                 }
             }
         }
+    }
+
+    /// v2.02 高德式导航底部卡（内容分三层，总高度恒定 → 不再跳动）
+    private func navBottomCard(_ ns: AppModel.NavStatus) -> some View {
+        let dimFg = Color.black.opacity(0.42)
+        let mainFg = Color.black.opacity(0.88)
+        let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
+        let minTxt = "\(max(ns.remainS, 0) / 60)"
+        let arriveTxt: String = {
+            let f = DateFormatter()
+            f.dateFormat = "HH:mm"
+            return f.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
+        }()
+        return VStack(spacing: 0) {
+            // ── 第一层：退出 / 三段数据 / 全览 ──
+            HStack(spacing: 0) {
+                Button {
+                    haptic()
+                    showExitConfirm = true
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(mainFg)
+                        .frame(width: 32, height: 32)
+                        .background(Color.black.opacity(0.06), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 12)
+
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(kmTxt)
+                        .font(.system(size: 24, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(mainFg)
+                    Text("公里")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(dimFg)
+                }
+                .padding(.leading, 14)
+
+                Spacer(minLength: 6)
+
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(minTxt)
+                        .font(.system(size: 24, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(mainFg)
+                    Text("分钟")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(dimFg)
+                }
+
+                Spacer(minLength: 6)
+
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(arriveTxt)
+                        .font(.system(size: 17, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(mainFg)
+                    Text("预计到达")
+                        .font(.system(size: 10))
+                        .foregroundStyle(dimFg)
+                }
+
+                Button {
+                    haptic()
+                    startRouteOverview()
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(mainFg)
+                        .frame(width: 40, height: 34)
+                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 12)
+                .padding(.leading, 10)
+            }
+            .frame(height: 52)
+
+            Divider().padding(.horizontal, 12)
+
+            // ── 第二层：下一动作 + 当前车速 ──
+            HStack(spacing: 8) {
+                if let t = ns.nextTurn, ns.distToTurnM > 0 {
+                    Image(systemName: navTurnIcon(t))
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                        .frame(width: 26)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("\(navDist(ns.distToTurnM))\(navTurnText(t))")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(mainFg)
+                            .lineLimit(1)
+                        if !t.roadName.isEmpty {
+                            Text(t.roadName)
+                                .font(.system(size: 11))
+                                .foregroundStyle(dimFg)
+                                .lineLimit(1)
+                        }
+                    }
+                } else {
+                    Text("继续直行")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(mainFg)
+                }
+                Spacer(minLength: 4)
+                Text("\(Int(ns.speedKph))")
+                    .font(.system(size: 17, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(mainFg)
+                Text("km/h")
+                    .font(.system(size: 10))
+                    .foregroundStyle(dimFg)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 36)
+
+            // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
+            // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
+            ZStack {
+                if let nl = model.nextTrafficLight {
+                    lightCountdownRow(nl)
+                } else if let t = ns.nextTurn, ns.distToTurnM > 0, ns.distToTurnM < 300 {
+                    laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
+                }
+            }
+            .frame(height: 38)
+            .frame(maxWidth: .infinity)
+            .background(Color.black.opacity(0.02))
+        }
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
+        .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+        .padding(.horizontal, 12)
     }
 
     /// v2.01 红绿灯倒计时行（导航卡顶部）：信号灯图形 + 红/绿 + 剩余秒 + 距离
@@ -2380,7 +2455,6 @@ struct ContentView: View {
                     .foregroundStyle(Color.black.opacity(0.45))
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 6)
             .background((st.red ? Color.red : Color.green).opacity(0.07))
         }
     }
@@ -2408,7 +2482,6 @@ struct ContentView: View {
                 .foregroundStyle(dimFg)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 5)
     }
 
     /// v1.81.4 全览操作条（高德同款）：固定全览 / 取消全览(倒计时)

@@ -49,6 +49,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var pitchDeg: Double = 0
     /// v2.01 路线上的信号灯路口（红绿灯倒计时用）
     @Published var trafficLights: [TrafficLight] = []
+    /// v2.02 比例尺文本（放在 ObservableObject 里而不是 View 的 @State：
+    /// 地图回调改 @State 会在 SwiftUI 更新周期内触发"下一轮更新"，形成循环，是启动卡顿/闪退的根因之一）
+    @Published var scaleText = "200 米"
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
@@ -2431,6 +2434,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return (l, max(0, d))
     }
 
+    /// v2.02 比例尺更新（去重，避免无效刷新）
+    func setScale(_ text: String) {
+        guard !text.isEmpty, text != scaleText else { return }
+        scaleText = text
+    }
+
     /// v2.01 3D / 2D 切换（地图右侧"3D"按钮）
     func togglePitch() {
         pitchDeg = pitchDeg > 0 ? 0 : 45
@@ -2450,13 +2459,38 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 沿路线折线累计已走距离（米）：定位点到折线的最近点（含前段距离）
+    /// v2.02 行进里程（增量搜索）
+    ///
+    /// 旧实现每次调用都线性扫完整条路线（几千点），而导航卡每秒刷新会调用 2~3 次
+    /// （navigationStatus / nextTrafficLight / currentRoadName 各一次）→ 每秒上万次距离计算，
+    /// 这是导航中"地图发涩、卡片一顿一顿"的主要来源。
+    /// 现在只在上次位置附近 ±80 个点里找最近点，跑到窗口边缘才做一次全量校正。
+    private var traveledCacheIdx = 0
+    private var traveledRouteKey = ""
+
     private func traveledM(_ pts: [CLLocationCoordinate2D], _ loc: CLLocationCoordinate2D) -> Int {
-        var bestI = 0
+        guard pts.count > 1 else { return 0 }
+        let key = "\(pts.count)-\(pts[0].latitude)-\(pts[pts.count - 1].longitude)"
+        if key != traveledRouteKey {
+            traveledRouteKey = key
+            traveledCacheIdx = 0
+        }
+        let lo = max(0, traveledCacheIdx - 80)
+        let hi = min(pts.count - 1, traveledCacheIdx + 80)
+        var bestI = lo
         var bestD = Double.greatestFiniteMagnitude
-        for i in pts.indices {
+        for i in lo...hi {
             let d = distanceM(loc, pts[i])
             if d < bestD { bestD = d; bestI = i }
         }
+        // 最近点贴着窗口边缘 → 说明可能已经跑出窗口，全量校正一次
+        if (bestI == lo && lo > 0) || (bestI == hi && hi < pts.count - 1) {
+            for i in pts.indices {
+                let d = distanceM(loc, pts[i])
+                if d < bestD { bestD = d; bestI = i }
+            }
+        }
+        traveledCacheIdx = bestI
         var acc = 0.0
         for i in 0..<bestI { acc += distanceM(pts[i], pts[i + 1]) }
         return Int(acc + bestD / 2)
