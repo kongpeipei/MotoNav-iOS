@@ -137,18 +137,54 @@ def collect_locals(lines, start, end):
 
 
 def lint_binding_dollar(lines):
+    """A. 检查弹窗/输入框 API 的参数是否漏了 $。
+
+    漏写 $ 的三类 API：
+      .sheet(item: X) / .sheet(isPresented: X) / .alert(isPresented: X)
+      .confirmationDialog(isPresented: X)
+      TextField(_:text: X) / SecureField(_:text: X) / TextEditor(text: X)
+    全部要求 Binding<T>，在 ViewModifier 里必须写 $X。
+    """
     problems = []
     pat_sheet_item = re.compile(r"\.sheet\(\s*item:\s*(\w+)")
     pat_presented = re.compile(r"isPresented:\s*(\w+)")
+    pat_textfield = re.compile(r"\b(?:TextField|SecureField)\s*\(\s*\"[^\"]*\"\s*,\s*text:\s*(\w+)")
+    pat_texteditor = re.compile(r"\bTextEditor\s*\(\s*text:\s*(\w+)")
     for name, s, e in find_modifier_structs(lines):
         for i in range(s, min(e + 1, len(lines))):
             l = lines[i]
-            for rx in (pat_sheet_item, pat_presented):
+            for rx in (pat_sheet_item, pat_presented, pat_textfield, pat_texteditor):
                 for mm in rx.finditer(l):
                     ident = mm.group(1)
                     if ident in ("true", "false", "Binding"):
                         continue
-                    problems.append((i + 1, name, f"弹窗参数 '{ident}' 缺少 $（应写 ${ident}）"))
+                    problems.append((i + 1, name, f"绑定参数 '{ident}' 缺少 $（应写 ${ident}）"))
+    return problems
+
+
+def lint_closure_labels(lines):
+    """E. 检查闭包调用是否多写了参数标签。
+
+    形如 `var onAddPoiAtPending: (PoiType) -> Void` 的闭包成员，
+    调用时不能写 `onAddPoiAtPending(type: x)` —— Swift 的无标签闭包类型
+    调用只接受位置参数，写了 label 会报 "extraneous argument label"。
+    """
+    problems = []
+    # 收集所有 "var name: (Types) -> Ret" 形式的闭包成员
+    closure_types = {}
+    for i, l in enumerate(lines):
+        m = re.match(r"\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:private\s+|fileprivate\s+)?var\s+(\w+)\s*:\s*\(([^)]*)\)\s*->", l)
+        if m:
+            closure_types[m.group(1)] = m.group(2)
+    if not closure_types:
+        return problems
+    for i, l in enumerate(lines):
+        for name, types in closure_types.items():
+            # 只报"有多个参数"的闭包（单参数闭包写 label 也可能合法）
+            if "," not in types:
+                continue
+            for mm in re.finditer(re.escape(name) + r"\s*\(\s*(\w+)\s*:", l):
+                problems.append((i + 1, "-", f"闭包 '{name}' 不接受参数标签 '{mm.group(1)}:'（应写 {name}(值)）"))
     return problems
 
 
@@ -310,11 +346,12 @@ def main():
         lines = strip_comments(raw).split("\n")
         if not find_modifier_structs(lines):
             # 非修饰符文件也要查重复定义
-            for prob in lint_duplicate_members(lines, f):
+            for prob in lint_duplicate_members(lines, f) + lint_closure_labels(lines):
                 all_problems.append((f,) + prob)
             continue
         for prob in (lint_binding_dollar(lines) + lint_undeclared_refs(lines)
-                     + lint_modifier_calls(lines) + lint_duplicate_members(lines, f)):
+                     + lint_modifier_calls(lines) + lint_duplicate_members(lines, f)
+                     + lint_closure_labels(lines)):
             all_problems.append((f,) + prob)
 
     seen = set()

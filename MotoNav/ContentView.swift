@@ -295,7 +295,7 @@ struct ContentView: View {
         // v2.25 弹窗组 2 已抽到 SheetGroup2Modifier（拆分以解决类型检查超时）
         .modifier(SheetGroup2Modifier(editPoi: $editPoi, showMarkNameAlert: $showMarkNameAlert, markName: $markName, showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput, showTypePicker: $showTypePicker, pendingMarkCoord: $pendingMarkCoord, onAddPoiAtPending: { addPoiAtPending(type: $0) }, onCameraKindTitle: { cameraKindTitle($0) }))
         // v2.25 弹窗组 3 已抽到 SheetGroup3Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi, editPoi: $editPoi))
+        .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, onCameraKindTitle: { cameraKindTitle($0) }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi, editPoi: $editPoi))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
         // v2.15 长按拍照点 →「更改」：四种类型（顺序按骑手最常被拍的来排）
@@ -5089,7 +5089,7 @@ private struct SheetGroup2Modifier: ViewModifier {
             }
         }
         .alert("标记该点", isPresented: $showMarkNameAlert) {
-            TextField("备注名称（如：前方有大坑 / 事故多发地）", text: markName)
+            TextField("备注名称（如：前方有大坑 / 事故多发地）", text: $markName)
             Button("保存标记") {
                 let name = markName.trimmingCharacters(in: .whitespacesAndNewlines)
                 let final = name.isEmpty ? "自定义标记点" : name
@@ -5103,7 +5103,7 @@ private struct SheetGroup2Modifier: ViewModifier {
             Text("输入备注名称，保存后下次打开 App 依然保留；长按图标可拖动微调位置")
         }
         .alert("高德搜索Key", isPresented: $showAmapKeyInput) {
-            TextField("粘贴高德开放平台 Web 服务 Key", text: amapKeyInput)
+            TextField("粘贴高德开放平台 Web 服务 Key", text: $amapKeyInput)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             Button("保存") {
@@ -5117,7 +5117,7 @@ private struct SheetGroup2Modifier: ViewModifier {
         }
         .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
             ForEach(PoiType.allCases.filter(\.isCamera), id: \.self) { t in
-                Button(t.label) { onAddPoiAtPending(type: t) }
+                Button(t.label) { onAddPoiAtPending(t) }
             }
             Button("取消", role: .cancel) {}
         }
@@ -5132,6 +5132,9 @@ private struct SheetGroup3Modifier: ViewModifier {
     @Binding var quickName: String
     var onChangeCameraPoiType: (PoiType) -> Void
     var onDeleteCameraPoi: () -> Void
+    /// v2.26 修复编译错误：Group3 里用了 onCameraKindTitle 却没声明这个成员
+    /// （它原本只在 Group2 声明过，拆分组时漏了）
+    var onCameraKindTitle: (PoiType) -> String
     /// v2.25 拍照类型候选表（ContentView 里是计算属性，这里用闭包传入）
     var cameraKindsForPicker: [PoiType]
     /// v2.25 当前选中的拍照点（删除/改类型都要用）
@@ -5161,7 +5164,7 @@ private struct SheetGroup3Modifier: ViewModifier {
             Text("删除后不再提醒，且无法恢复")
         }
         .alert("命名快捷卡片", isPresented: $showQuickNameAlert) {
-            TextField("名称（如：回龙观桥下）", text: quickName)
+            TextField("名称（如：回龙观桥下）", text: $quickName)
             Button("保存") {
                 if let c = pendingQuickCoord {
                     let n = quickName.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -150,16 +150,16 @@ final class CameraSyncService: ObservableObject {
 
         // ── ① 官方公示 ──────────────────────────────────────────────
         let official = await fetchOfficialCandidates()
-        if let err = official.error {
-            result.officialError = err
+        if !official.error.isEmpty {
+            result.officialError = official.error
         }
         result.officialAdded = official.candidates
         result.notes.append(contentsOf: official.notes)
 
         // ── ② 网络平台 ──────────────────────────────────────────────
         let web = await fetchWebCandidates(existing: official.candidates)
-        if let err = web.error {
-            result.webError = err
+        if !web.error.isEmpty {
+            result.webError = web.error
         }
         result.webCandidates = web.candidates
         result.notes.append(contentsOf: web.notes)
@@ -295,10 +295,11 @@ final class CameraSyncService: ObservableObject {
             if seen.contains(name) { continue }
             seen.insert(name)
             // 就近取方向："东、西、北" 之类（只看路口名后面的 30 个字）
-            let idx = text.range(of: name)?.upperBound
             let tail: String
-            if let idx {
-                tail = String(text[idx..<text.index(idx, offsetBy: 30, limitedBy: text.endIndex) ?? text.endIndex])
+            if let r = text.range(of: name) {
+                let upper = r.upperBound
+                let end = text.index(upper, offsetBy: 30, limitedBy: text.endIndex) ?? text.endIndex
+                tail = String(text[upper..<end])
             } else {
                 tail = ""
             }
