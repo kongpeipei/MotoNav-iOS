@@ -49,6 +49,7 @@ GLOBAL_NAMES = {
     "Poi", "PoiType", "PoiDetailSheet", "PoiEditSheet", "VoiceSettingsSheet", "FootprintSheet",
     "CameraTapSheet", "CameraCandidate", "CameraSyncService", "CameraSyncResult",
     "CameraManageSheet", "CameraTextParser", "ParsedCamera", "WebPageFetcher",
+    "DiagnosticsSheet",
     "OfflineMapSheet", "TeamRideSheet", "PoliceCamera", "CameraKind", "PlaceLabel",
     "MapViewRepresentable", "SearchHit", "RouteLink", "RouteWaypoint", "AppModel",
     "FootprintStore", "OfflineMapManager", "TeamRide", "PoliceCameraStore", "AppSecrets",

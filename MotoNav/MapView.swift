@@ -1811,12 +1811,81 @@ final class AmapTileRenderer: MKOverlayRenderer {
     /// 夜间瓦片（导航中 style=8）
     var dark = false
     /// v1.90 瓦片磁盘缓存目录（Caches/Tiles）：常用区域瓦片自动落盘，离线可用、省流量
+    ///
+    /// v2.27（优化建议 #14）按 style 分目录：
+    /// 白天（style=7）与夜间（style=8）的瓦片内容完全不同，
+    /// 旧版共用一个目录 → 夜间瓦片把白天的覆盖掉，白天来了又覆盖夜间的，
+    /// 结果就是"切换昼夜时刚看过的区域又要重新下一遍"。
+    /// 分目录后两套缓存互不干扰。
     private static let diskDir: URL = {
         let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tiles", isDirectory: true)
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }()
+    /// v2.27 某个 style 的瓦片缓存目录（style=7 白天 / 8 夜间）
+    static func diskDirFor(style: Int) -> URL {
+        let u = diskDir.appendingPathComponent("style\(style)", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: u.path) {
+            try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        }
+        return u
+    }
+    /// v2.27 瓦片缓存统计（诊断页用）
+    private static let statLock = NSLock()
+    private static var _hitCount = 0
+    private static var _missCount = 0
+    /// 缓存命中次数（磁盘/内存命中）
+    static var hitCount: Int {
+        statLock.lock(); defer { statLock.unlock() }
+        return _hitCount
+    }
+    /// 缓存未命中次数（需要走网络）
+    static var missCount: Int {
+        statLock.lock(); defer { statLock.unlock() }
+        return _missCount
+    }
+    static func noteHit() {
+        statLock.lock(); _hitCount += 1; statLock.unlock()
+    }
+    static func noteMiss() {
+        statLock.lock(); _missCount += 1; statLock.unlock()
+    }
+
+    /// v2.27（优化建议 #13）瓦片失败指数退避：5s → 10s → 30s → 60s 封顶
+    ///
+    /// 用失败次数决定等待时长：偶尔失败快速重试（网络抖动），
+    /// 持续失败拉长间隔（真的断网，避免请求风暴）。
+    private static let backoffLock = NSLock()
+    private static var backoffCounts: [String: Int] = [:]
+    private static let backoffLadder: [TimeInterval] = [5, 10, 30, 60]
+    private static func backoffDelay(for key: String) -> TimeInterval {
+        backoffLock.lock()
+        let n = backoffCounts[key] ?? 0
+        backoffCounts[key] = n + 1
+        backoffLock.unlock()
+        return backoffLadder[min(n, backoffLadder.count - 1)]
+    }
+
+    /// 瓦片磁盘缓存总大小（字节）
+    static func diskCacheSize() -> UInt64 {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: diskDir, includingPropertiesForKeys: [.fileSizeKey], options: []) else { return 0 }
+        var total: UInt64 = 0
+        for f in files {
+            let size = (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            total += UInt64(size)
+            // style 子目录要递归统计
+            if let sub = try? fm.contentsOfDirectory(at: f, includingPropertiesForKeys: [.fileSizeKey], options: []) {
+                for g in sub {
+                    let s2 = (try? g.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    total += UInt64(s2)
+                }
+            }
+        }
+        return total
+    }
     /// v1.99 离线包目录（OfflineMapManager 下载到这里）
     private static let offlineDir: URL = {
         let u = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -2036,7 +2105,9 @@ final class AmapTileRenderer: MKOverlayRenderer {
             if done { return }
 
             // 1) 离线包 / 磁盘缓存（后台读，命中即用，不再发网络请求）
-            let diskURL = Self.diskDir.appendingPathComponent("\(key).png")
+            // v2.27（优化建议 #14）按 style 分目录：白天/夜间瓦片互不覆盖
+            let style = key.hasPrefix("n-") ? 8 : 7
+            let diskURL = Self.diskDirFor(style: style).appendingPathComponent("\(key).png")
             let offlineURL = Self.offlineDir.appendingPathComponent("\(key).png")
             for url in [offlineURL, diskURL] {
                 guard let img = UIImage(contentsOfFile: url.path) else { continue }
@@ -2048,8 +2119,10 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 }
                 self.lock.unlock()
                 if !already { self.markNeedsRedraw(rect) }
+                Self.noteHit()   // v2.27 诊断用
                 return
             }
+            Self.noteMiss()      // v2.27 诊断用
 
             // 2) 网络
             self.lock.lock()
@@ -2105,7 +2178,13 @@ final class AmapTileRenderer: MKOverlayRenderer {
                         // v2.14 失败退避：网络不通时旧实现会在下一帧立刻重试，
                         // 屏幕上百张瓦片 → 每秒几百个失败请求，CPU 与电量全耗在这上面。
                         // 记下来 30 秒内不再请求同一张（地图重绘不会再触发重试风暴）。
-                        self.ioQueue.asyncAfter(deadline: .now() + 30) { [weak self] in
+                        //
+                        // v2.27（优化建议 #13）改成**指数退避**：5s → 10s → 30s → 60s 封顶。
+                        // 旧版固定 30 秒的问题：弱网下用户干等 30 秒才能看到地图恢复，
+                        // 而网络抖动往往几秒就恢复了 —— 白白让用户盯着空白地图。
+                        // 指数退避让"偶尔抖一下"快速恢复，"持续断网"又不会变成请求风暴。
+                        let delay = Self.backoffDelay(for: key)
+                        self.ioQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
                             guard let self else { return }
                             self.lock.lock()
                             self.failedCooling.remove(key)
@@ -2115,7 +2194,9 @@ final class AmapTileRenderer: MKOverlayRenderer {
                     }
                     self.markNeedsRedraw(rect)
                     // 瓦片落盘（同一队列，不阻塞渲染；离线/无网时命中磁盘直接显示）
-                    let durl = Self.diskDir.appendingPathComponent("\(key).png")
+                    // v2.27（建议 #14）按 style 分目录写入
+                    let style = key.hasPrefix("n-") ? 8 : 7
+                    let durl = Self.diskDirFor(style: style).appendingPathComponent("\(key).png")
                     if let data = data, !FileManager.default.fileExists(atPath: durl.path) {
                         try? data.write(to: durl)
                     }

@@ -54,10 +54,38 @@ struct ContentView: View {
     @State private var lastSyncOfficialError = ""
     /// v2.27 电警点位管理页
     @State private var showCameraManage = false
+    /// v2.27 开发者诊断页
+    @State private var showDiagnostics = false
+    /// v2.27 版本号连点计数（连点 7 次进入诊断页）
+    @State private var versionTapCount = 0
+    @State private var versionTapResetTask: Task<Void, Never>?
     /// v2.27 同步提示框的自动倒计时（秒）；0 = 不倒计时
     @State private var syncCountdown = 0
     /// v2.27 倒计时任务
     @State private var syncCountdownTask: Task<Void, Never>?
+
+    /// v2.27（优化建议 #25）连点版本号进入诊断页
+    ///
+    /// 7 次连点触发，2 秒内不连点就重置计数。
+    /// 隐藏入口的好处：普通用户看不到"诊断"这种让人困惑的菜单项，
+    /// 但真出问题时（用户截图反馈）能自助打开，把诊断信息发给开发者。
+    private func handleVersionTap() {
+        versionTapCount += 1
+        // 重置计时：每次点击都重新给 2 秒窗口
+        versionTapResetTask?.cancel()
+        versionTapResetTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if !Task.isCancelled { versionTapCount = 0 }
+        }
+        if versionTapCount >= 7 {
+            versionTapCount = 0
+            versionTapResetTask?.cancel()
+            showDiagnostics = true
+            haptic()
+        } else if versionTapCount >= 5 {
+            haptic()   // 接近时给触感反馈，提示"再点几下"
+        }
+    }
 
     /// v2.26 同步提示框状态机
     enum SyncPromptState {
@@ -308,7 +336,7 @@ struct ContentView: View {
         // v2.25 弹窗组 3 已抽到 SheetGroup3Modifier（拆分以解决类型检查超时）
         .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, onCameraKindTitle: { cameraKindTitle($0) }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi, editPoi: $editPoi))
         // v2.27 弹窗组 4：电警点位管理页（单独一组，控制类型推断复杂度）
-        .modifier(SheetGroup4Modifier(showCameraManage: $showCameraManage, camStore: camStore))
+        .modifier(SheetGroup4Modifier(showCameraManage: $showCameraManage, showDiagnostics: $showDiagnostics, camStore: camStore))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
         // v2.15 长按拍照点 →「更改」：四种类型（顺序按骑手最常被拍的来排）
@@ -1083,6 +1111,10 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
+            // v2.27 优化建议 #25：开发者诊断隐藏入口 —— 连点版本号 7 次进入
+            // （不用放进可见菜单里，普通用户不需要看到；但出了问题要能自助查看）
+            .contentShape(Rectangle())
+            .onTapGesture { handleVersionTap() }
             // v2.26 按要求删除「关于」分区底部的高德搜索 Key 选项
             // （Key 的设置入口保留在上面的「搜索设置」分区里，不再在页尾重复出现）
         }
@@ -2369,7 +2401,34 @@ struct ContentView: View {
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
+                        // v2.27 优化建议 #17：显示「距我 1.2 km」，方便判断顺序是否合理
+                        let distText = model.waypointDistanceText(wp)
+                        if !distText.isEmpty {
+                            Text(distText)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer(minLength: 4)
+                        // v2.27 优化建议 #15：上移/下移调序
+                        // （iOS 上长按拖动排序成本高且易与卡片拖动手势冲突，按钮更稳）
+                        Button {
+                            haptic()
+                            model.moveWaypoint(wp, offset: -1)
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.caption.bold())
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            haptic()
+                            model.moveWaypoint(wp, offset: 1)
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.caption.bold())
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.plain)
                         // 点击途经点 → 地图定位到该点
                         Button {
                             haptic()
@@ -5373,12 +5432,17 @@ private struct SheetGroup3Modifier: ViewModifier {
 private struct SheetGroup4Modifier: ViewModifier {
     @EnvironmentObject var model: AppModel
     @Binding var showCameraManage: Bool
+    /// v2.27 开发者诊断页
+    @Binding var showDiagnostics: Bool
     var camStore: PoliceCameraStore
 
     func body(content: Content) -> some View {
         content
         .sheet(isPresented: $showCameraManage) {
             CameraManageSheet(store: camStore, model: model)
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            DiagnosticsSheet(model: model, camStore: camStore)
         }
     }
 }

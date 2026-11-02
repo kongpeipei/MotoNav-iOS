@@ -1435,6 +1435,41 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    // MARK: - v2.27 诊断信息（优化建议 #24/#25）
+
+    /// 定位授权状态的可读描述
+    var locationAuthText: String {
+        switch lm.authorizationStatus {
+        case .authorizedAlways: return "始终允许"
+        case .authorizedWhenInUse: return "使用 App 期间允许"
+        case .denied: return "已拒绝（去系统设置开启）"
+        case .restricted: return "受限"
+        case .notDetermined: return "未询问"
+        @unknown default: return "未知"
+        }
+    }
+
+    /// 最近的操作日志（诊断页展示；用户截图给开发者时能直接看到发生了什么）
+    ///
+    /// 只保留最近 50 条，避免无限增长。
+    @Published private(set) var recentLogs: [String] = []
+
+    /// 记录一条诊断日志
+    func log(_ text: String) {
+        let line = "[\(Self.timeText(Date()))] \(text)"
+        recentLogs.append(line)
+        if recentLogs.count > 50 {
+            recentLogs.removeFirst(recentLogs.count - 50)
+        }
+    }
+
+    /// 时间格式化（HH:mm:ss）
+    private static func timeText(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: d)
+    }
+
     // MARK: - 接近提醒引擎
 
     func checkAlerts(at coord: CLLocationCoordinate2D) {
@@ -2843,6 +2878,39 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         waypoints.removeAll { $0.id == wp.id }
         status = "已删除途经「\(wp.name)」，正在重新规划…"
         replan()
+    }
+
+    /// v2.27 途经点调序（优化建议 #15）
+    ///
+    /// 骑行场景经常要微调途经点顺序（接人顺序、加油顺序）。
+    /// iOS 上长按拖动排序实现成本高且容易与卡片拖动手势冲突，
+    /// 所以用「上移/下移」按钮 —— 稳、可预期、零学习成本。
+    ///
+    /// - Parameter offset: -1 上移，+1 下移
+    func moveWaypoint(_ wp: RouteWaypoint, offset: Int) {
+        guard offset == -1 || offset == 1 else { return }
+        guard let idx = waypoints.firstIndex(where: { $0.id == wp.id }) else { return }
+        let target = idx + offset
+        guard target >= 0, target < waypoints.count else {
+            status = offset < 0 ? "「\(wp.name)」已是第一个途经点" : "「\(wp.name)」已是最后一个途经点"
+            return
+        }
+        // 交换位置（相邻，直接 swap 即可）
+        waypoints.swapAt(idx, target)
+        status = "已把「\(wp.name)」移到第 \(target + 1) 位，正在重新规划…"
+        replan()
+    }
+
+    /// v2.27 途经点距离（优化建议 #17）
+    ///
+    /// 在每个途经点旁显示「距我 1.2 公里」，方便判断顺序是否合理
+    /// （比如先加了个远的接人点，其实另一个更近）。
+    /// - Returns: 距离文本；没有定位时返回空串
+    func waypointDistanceText(_ wp: RouteWaypoint) -> String {
+        guard let loc = currentLocation else { return "" }
+        let d = distanceM(loc, CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon))
+        if d >= 1000 { return String(format: "%.1f km", d / 1000.0) }
+        return "\(Int(d)) m"
     }
 
     func clearWaypoints() {
