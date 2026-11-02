@@ -126,6 +126,12 @@ final class PoliceCameraStore: ObservableObject {
     @Published var voiceOn: Bool {
         didSet { UserDefaults.standard.set(voiceOn, forKey: "pcVoiceOn") }
     }
+    /// v2.26 用户手动删除的点位 id（删除后不再显示，重启也不复活）
+    @Published private(set) var deletedIds: Set<Int> = []
+    /// v2.26 手动同步新增的点位（官方公示 / 网络平台发现），持久化在本地
+    @Published private(set) var syncedExtra: [PoliceCamera] = []
+    private let deletedKey = "pcDeletedIds"
+    private let syncedKey = "pcSyncedExtra"
 
     private init() {
         layerOn = UserDefaults.standard.object(forKey: "pcLayerOn") as? Bool ?? true
@@ -140,6 +146,15 @@ final class PoliceCameraStore: ObservableObject {
                 if let id = Int(k), v.count == 2 { overrides[id] = v }
             }
         }
+        // v2.26 读回被用户删除的点位
+        if let arr = UserDefaults.standard.array(forKey: deletedKey) as? [Int] {
+            deletedIds = Set(arr)
+        }
+        // v2.26 读回手动同步新增的点位
+        if let data = UserDefaults.standard.data(forKey: syncedKey),
+           let list = try? JSONDecoder().decode([PoliceCamera].self, from: data) {
+            syncedExtra = list
+        }
         guard let url = Bundle.main.url(forResource: "hefei_cameras", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let list = try? JSONDecoder().decode([PoliceCamera].self, from: data) else {
@@ -152,7 +167,12 @@ final class PoliceCameraStore: ObservableObject {
 
     /// 把人工校准坐标套到内置库上（每次改动后重算 all）
     private func applyOverrides() {
-        all = raw.map { c in
+        var merged = raw
+        // v2.26 追加手动同步新增的点位（用独立 id 段 900000+，避免与内置 id 冲突）
+        merged.append(contentsOf: syncedExtra)
+        // v2.26 剔除被用户删除的点位
+        merged = merged.filter { !deletedIds.contains($0.id) }
+        all = merged.map { c in
             guard let o = overrides[c.id], o.count == 2 else { return c }
             var n = c
             n.lat = o[0]
@@ -160,6 +180,70 @@ final class PoliceCameraStore: ObservableObject {
             return n
         }
         adjustedCount = overrides.count
+    }
+
+    /// v2.26 删除点位：从地图上消失，重启也不复活
+    func delete(id: Int) {
+        deletedIds.insert(id)
+        UserDefaults.standard.set(Array(deletedIds), forKey: deletedKey)
+        // 同步新增的点位被删掉后，从本地副本里也移除（避免"删除→恢复"时又冒出来）
+        if let idx = syncedExtra.firstIndex(where: { $0.id == id }) {
+            syncedExtra.remove(at: idx)
+            saveSynced()
+        }
+        applyOverrides()
+    }
+
+    /// v2.26 添加手动同步发现的新点位（id 分配 900000+ 段，避免与内置库冲突）
+    @discardableResult
+    func addSynced(name: String, district: String, lat: Double, lon: Double,
+                   type: CameraKind = .redLight, dirs: String = "", source: String) -> PoliceCamera {
+        // 判重规则与 existingMatch 保持一致（80 米 / 归一化同名），
+        // 否则会出现"提示框说可以添加，点了却没加上"的错位
+        if let exist = existingMatch(name: name, lat: lat, lon: lon) { return exist }
+        let nextId = (syncedExtra.map { $0.id }.max() ?? 900_000) + 1
+        let cam = PoliceCamera(id: nextId, name: name, district: district, type: type,
+                               lat: lat, lon: lon, dirs: dirs, acc: "网络同步",
+                               source: source)
+        syncedExtra.append(cam)
+        saveSynced()
+        applyOverrides()
+        return cam
+    }
+
+    /// v2.26 手动同步新增点位是否已存在（用于"发现新点位"提示前判重）
+    ///
+    /// 判重规则（从严，避免把不同路口误判成同一个）：
+    ///   · 距离 < 80 米 → 同一个点（地理上就是同一处）；
+    ///   · 名称完全相同 → 同一个点（网络来源常带前后缀，先做归一化再比）。
+    /// 不使用"互相包含"判断：否则"长江路"会命中"长江东路"，把两个不同路口搞混。
+    func existingMatch(name: String, lat: Double, lon: Double) -> PoliceCamera? {
+        let target = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        let norm = Self.normalizeName(name)
+        for c in all {
+            if c.coordinate.distance(to: target) < 80 { return c }
+            if Self.normalizeName(c.name) == norm { return c }
+        }
+        return nil
+    }
+
+    /// 名称归一化：去掉"交口/路口/交叉口"等后缀与空白、标点，便于比较
+    private static func normalizeName(_ s: String) -> String {
+        var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        for suffix in ["交叉口", "交口", "路口", "合流处", "口"] {
+            if t.hasSuffix(suffix) { t = String(t.dropLast(suffix.count)); break }
+        }
+        t = t.replacingOccurrences(of: "与", with: "")
+        t = t.replacingOccurrences(of: "和", with: "")
+        t = t.replacingOccurrences(of: "、", with: "")
+        t = t.replacingOccurrences(of: " ", with: "")
+        return t
+    }
+
+    private func saveSynced() {
+        if let data = try? JSONEncoder().encode(syncedExtra) {
+            UserDefaults.standard.set(data, forKey: syncedKey)
+        }
     }
 
     /// v2.20 手动拖动校准：记录新坐标并持久化（下次启动仍然生效）
@@ -180,6 +264,13 @@ final class PoliceCameraStore: ObservableObject {
     func restoreAll() {
         overrides.removeAll()
         saveOverrides()
+        applyOverrides()
+    }
+
+    /// v2.26 恢复被删除的点位（"我的"页菜单里与"恢复官方坐标"并列）
+    func restoreAllDeleted() {
+        deletedIds.removeAll()
+        UserDefaults.standard.set(Array(deletedIds), forKey: deletedKey)
         applyOverrides()
     }
 

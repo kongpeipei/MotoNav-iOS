@@ -40,6 +40,25 @@ struct ContentView: View {
     @StateObject private var offline = OfflineMapManager.shared
     /// v2.04 官方电警点位库（合肥交警公示）
     @StateObject private var camStore = PoliceCameraStore.shared
+    /// v2.26 手动同步点位信息服务
+    @StateObject private var camSync = CameraSyncService()
+    /// v2.26 电警点轻点弹出的详情卡（分享 + 删除）
+    @State private var cameraTapCard: PoliceCamera?
+    /// v2.26 手动同步后等待用户确认的候选点位（网络来源）
+    @State private var syncCandidates: [CameraCandidate] = []
+    /// v2.26 顶部提示框的状态：nil=不显示；.found=发现新点位待确认；.confirmCancel=二次确认取消
+    @State private var syncPromptState: SyncPromptState?
+    /// v2.26 最近一轮同步的结果摘要（显示在"我的"页）
+    @State private var syncSummaryText = ""
+
+    /// v2.26 同步提示框状态机
+    enum SyncPromptState {
+        /// 发现新点位，等用户点"添加"或"取消"
+        case found
+        /// 用户点了"取消"，再问一次：确认取消 / 不取消
+        case confirmCancel
+    }
+
     /// v1.90 省电模式总开关（"我的"页可关；关闭后低电量也不再降频/调暗）
     @AppStorage("powerSaveEnabled") private var powerSaveEnabled = true
     /// v2.12 外观：auto / light / dark（"我的"页省电下方三段式切换）
@@ -212,6 +231,13 @@ struct ContentView: View {
             if !model.navigating && !uiHidden && selectedTab == 1 {
                 AnyView(bottomTabBar)
             }
+            // v2.26 手动同步点位信息：发现新点位时的顶部提示框
+            // 放在 ZStack 最后（最上层），确保盖住所有其它 UI；
+            // 提示框不可关闭，必须"添加"或"确认取消"才能继续正常使用软件。
+            if syncPromptState != nil {
+                AnyView(syncPromptOverlay)
+                    .zIndex(100)
+            }
         }
     }
 
@@ -265,11 +291,11 @@ struct ContentView: View {
             if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
         }
         // v2.25 弹窗组 1 已抽到 SheetGroup1Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup1Modifier(poiDetail: $poiDetail, showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showOfflineMaps: $showOfflineMaps, showTeamRide: $showTeamRide, footprints: footprints, offline: offline, team: team, selectedTab: $selectedTab))
+        .modifier(SheetGroup1Modifier(poiDetail: $poiDetail, cameraTapCard: $cameraTapCard, showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showOfflineMaps: $showOfflineMaps, showTeamRide: $showTeamRide, footprints: footprints, offline: offline, team: team, selectedTab: $selectedTab, camStore: camStore))
         // v2.25 弹窗组 2 已抽到 SheetGroup2Modifier（拆分以解决类型检查超时）
         .modifier(SheetGroup2Modifier(editPoi: $editPoi, showMarkNameAlert: $showMarkNameAlert, markName: $markName, showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput, showTypePicker: $showTypePicker, pendingMarkCoord: $pendingMarkCoord, onAddPoiAtPending: { addPoiAtPending(type: $0) }, onCameraKindTitle: { cameraKindTitle($0) }))
         // v2.25 弹窗组 3 已抽到 SheetGroup3Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi))
+        .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi, editPoi: $editPoi))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
         // v2.15 长按拍照点 →「更改」：四种类型（顺序按骑手最常被拍的来排）
@@ -390,6 +416,11 @@ struct ContentView: View {
             onPoiSelect: { p in
                 haptic()
                 poiDetail = p
+            },
+            // v2.26 轻点官方电警点 → 弹出分享/删除卡片（此前点击完全没反应）
+            onCameraSelect: { c in
+                haptic()
+                cameraTapCard = c
             },
             onPlaceSelect: { pl in
                 // v1.96 轻点地点名文字 → 直接弹地点介绍卡（原先是只设"去这里"预览，点了几乎没反应）
@@ -711,6 +742,7 @@ struct ContentView: View {
                 commonPlacesSection
                 rideSection
                 dataSection
+                syncSection
                 searchKeySection
                 aboutSection
             }
@@ -819,6 +851,45 @@ struct ContentView: View {
             }
         } footer: {
             Text("点右侧铅笔可重新搜索选择地点；除「家」「公司」和「添加常用地点」外，其余选项左滑可删除。")
+        }
+    }
+
+    /// v2.26 手动同步点位信息（放在省电下方）
+    ///
+    /// 点一下会做两件事：
+    ///   ① 去合肥市公安局官网找近一年的摩托车电警点位公示 → 新的**直接**加进地图；
+    ///   ② 去抖音/百度/小红书等平台搜近一年合肥摩托车违法记录位置 → 发现的走顶部提示框让用户确认。
+    private var syncSection: some View {
+        Section {
+            Button {
+                runCameraSync()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.blue)
+                        .frame(width: 22)
+                    Text(camSync.syncing ? "正在同步点位…" : "手动同步点位信息")
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    if camSync.syncing {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .disabled(camSync.syncing)
+            if !syncSummaryText.isEmpty {
+                Text(syncSummaryText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("点位数据")
+        } footer: {
+            Text("同步合肥市公安局近一年的摩托车电警点位公示（官方来源直接入图），并在抖音、百度、小红书等平台检索近一年合肥摩托车违法记录位置（网络来源需你确认后才添加）。")
         }
     }
 
@@ -969,19 +1040,200 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
-            Button {
-                amapKeyInput = model.amapKey
-                showAmapKeyInput = true
-            } label: {
-                HStack {
-                    Label("高德搜索 Key", systemImage: "key.horizontal")
-                    Spacer()
-                    Text(amapKeyMask)
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+            // v2.26 按要求删除「关于」分区底部的高德搜索 Key 选项
+            // （Key 的设置入口保留在上面的「搜索设置」分区里，不再在页尾重复出现）
+        }
+    }
+
+    // MARK: - v2.26 手动同步点位信息
+
+    /// 执行一轮同步
+    ///
+    /// 流程（严格按需求）：
+    ///   ① 官方公示的新点位 → 直接写进地图（官方来源权威，不需要问用户）
+    ///   ② 网络平台发现的新点位 → 存进 syncCandidates，弹顶部提示框等用户确认
+    ///
+    /// 提示框一旦弹出就**不可关闭**：只有"添加"或"取消→确认取消"两条路能走完。
+    private func runCameraSync() {
+        guard !camSync.syncing else { return }
+        Task {
+            let result = await camSync.sync(amapKey: model.amapKey)
+
+            // ① 官方新增：直接入图
+            if !result.officialAdded.isEmpty {
+                for c in result.officialAdded {
+                    // 判重：官方库里已有的同名/同位置点位跳过
+                    if camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) != nil { continue }
+                    _ = camStore.addSynced(name: c.name, district: c.district,
+                                          lat: c.lat, lon: c.lon, type: .redLight,
+                                          dirs: c.dirs, source: c.source)
+                }
+            }
+
+            // ② 网络来源：进待确认列表
+            let pending = result.webCandidates.filter { c in
+                camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) == nil
+            }
+            syncCandidates = pending
+
+            // 汇总文案
+            var parts: [String] = []
+            parts.append(result.officialAdded.isEmpty
+                         ? "官方公示无新增" : "官方新增 \(result.officialAdded.count) 个")
+            if !pending.isEmpty { parts.append("网络发现 \(pending.count) 个待确认") }
+            if !result.officialError.isEmpty { parts.append("官方站点：" + result.officialError) }
+            if !result.webError.isEmpty { parts.append("网络检索：" + result.webError) }
+            syncSummaryText = parts.joined(separator: " · ")
+
+            model.status = syncSummaryText
+
+            // 有待确认点位 → 弹顶部提示框
+            if !pending.isEmpty {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                    syncPromptState = .found
                 }
             }
         }
+    }
+
+    /// v2.26 顶部提示框：发现新点位 → 添加 / 取消
+    ///
+    /// 需求：提示框不可删除，只有确认取消或者添加点位才能正常使用软件功能。
+    /// 所以这里用**全屏遮罩 + 置顶卡片**实现，而不是系统 alert
+    /// （系统 alert 能被"忽略/下滑"绕过）。
+    private var syncPromptOverlay: some View {
+        ZStack {
+            // 半透明遮罩：吞掉所有点击，逼用户做出选择
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .onTapGesture { }   // 故意不关闭
+            VStack {
+                Spacer(minLength: 0)
+                syncPromptCard
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 28)
+            }
+        }
+    }
+
+    @ViewBuilder private var syncPromptCard: some View {
+        // 注意：syncPromptState 是 Optional<SyncPromptState>，
+        // 用 `if let` 取出具体状态再 switch，比直接 switch Optional 更清晰，
+        // 也避免 Optional 提升带来的可读性问题。
+        if let state = syncPromptState {
+            switch state {
+            case .found:
+                VStack(spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .foregroundStyle(.orange)
+                        Text("已发现新点位是否添加")
+                            .font(.headline)
+                        Spacer()
+                    }
+                    Text(syncCandidateSummary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 10) {
+                        Button {
+                            // 取消 → 二次确认
+                            withAnimation(.easeOut(duration: 0.18)) { syncPromptState = .confirmCancel }
+                        } label: {
+                            Text("取消")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Color.gray.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        Button {
+                            addSyncCandidates()
+                        } label: {
+                            Text("添加")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Color.orange, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                }
+                .padding(18)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
+            case .confirmCancel:
+                VStack(spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "questionmark.circle")
+                            .foregroundStyle(.orange)
+                        Text("确认取消添加？")
+                            .font(.headline)
+                        Spacer()
+                    }
+                    Text("取消后这些新点位不会加入地图。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 10) {
+                        Button {
+                            // 确认取消 → 丢弃，不添加
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                syncPromptState = nil
+                                syncCandidates = []
+                            }
+                            model.status = "已取消添加新点位"
+                        } label: {
+                            Text("确认取消")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Color.red, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        Button {
+                            // 不取消 → 回到刚才的提示框
+                            withAnimation(.easeOut(duration: 0.18)) { syncPromptState = .found }
+                        } label: {
+                            Text("不取消")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Color.orange, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                }
+                .padding(18)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
+            }
+        }
+    }
+
+    /// 顶部提示框里的候选点位摘要（最多列 3 个）
+    private var syncCandidateSummary: String {
+        guard !syncCandidates.isEmpty else { return "" }
+        let names = syncCandidates.prefix(3).map { "「\($0.name)」" }.joined(separator: "、")
+        let more = syncCandidates.count > 3 ? " 等 \(syncCandidates.count) 个" : ""
+        return "来源：网络平台（抖音/百度/小红书等）\n待添加：" + names + more
+    }
+
+    /// 点"添加"：把候选点位写入地图
+    private func addSyncCandidates() {
+        var added = 0
+        for c in syncCandidates {
+            if camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) != nil { continue }
+            _ = camStore.addSynced(name: c.name, district: c.district, lat: c.lat, lon: c.lon,
+                                  type: .redLight, dirs: c.dirs, source: c.source)
+            added += 1
+        }
+        withAnimation(.easeOut(duration: 0.18)) {
+            syncPromptState = nil
+            syncCandidates = []
+        }
+        model.status = "已添加 \(added) 个新点位到地图"
+        syncSummaryText = "已添加 \(added) 个新点位"
     }
 
     // MARK: - 常用地点行
@@ -2658,6 +2910,14 @@ struct ContentView: View {
                             Label("恢复全部官方坐标", systemImage: "arrow.uturn.backward.circle")
                         }
                         .disabled(camStore.adjustedCount == 0)
+                        // v2.26 新增：恢复被用户删除的点位（删除后地图上就没有了）
+                        Button {
+                            camStore.restoreAllDeleted()
+                            model.status = "已恢复被删除的电警点"
+                        } label: {
+                            Label("恢复已删除点位", systemImage: "arrow.uturn.backward.square")
+                        }
+                        .disabled(camStore.deletedIds.isEmpty)
                         Divider()
                         Text("已收录 \(camStore.all.count) 个点位")
                         if camStore.adjustedCount > 0 {
@@ -4401,12 +4661,20 @@ struct JsonFile: FileDocument {
     }
 }
 
-/// 点位详情气泡（高德式地点卡片）：名称/类型/距我/收藏/分享/导航/设为常用
+/// 点位详情气泡（v2.26 精简版：只保留「分享」+「删除」）
+///
+/// v2.26 按用户要求：轻点地图抓拍点弹出的卡片，去掉分享按钮以外的所有按钮
+/// （收藏 / 导航去此处 / 设为家 / 设为公司），新增红色删除按钮。
+/// 删除后该抓拍点立即从地图上消失。
+///
+/// 为什么只留这两个：
+///   · 抓拍点是"违法的发生地"，收藏它没有意义（用户不需要常去那里）；
+///   · 设为家/公司更不可能（那是住址，不是路口）；
+///   · 真正需要的动作只有两个 —— 把点位分享给别人、或者它不准所以删掉。
 struct PoiDetailSheet: View {
     let poi: Poi
     @ObservedObject var model: AppModel
     let onClose: (Bool) -> Void
-    @State private var favorite = false
     @State private var distText = ""
 
     var body: some View {
@@ -4434,74 +4702,126 @@ struct PoiDetailSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            HStack(spacing: 10) {
-                Button {
-                    favorite.toggle()
-                    model.toggleFavorite(poi)
-                } label: {
-                    Label(favorite ? "已收藏" : "收藏", systemImage: favorite ? "star.fill" : "star")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(favorite ? Color.yellow.opacity(0.25) : Color.gray.opacity(0.12),
-                                    in: RoundedRectangle(cornerRadius: 8))
-                }
-                Button {
-                    // v1.96 统一分享格式（文本 + http 链接），微信可正常接收
-                    PlaceShare.present(PlaceShare.payload(name: poi.name,
-                                                          address: "",
-                                                          type: poi.type.label,
-                                                          road: "",
-                                                          lat: poi.lat, lon: poi.lon))
-                } label: {
-                    Label("分享", systemImage: "square.and.arrow.up")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                }
-            }
+            // v2.26 只保留分享（唯一保留的原有按钮）
             Button {
-                model.fetchRouteChoices(to: poi.name, lat: poi.lat, lon: poi.lon)
+                // v1.96 统一分享格式（文本 + http 链接），微信可正常接收
+                PlaceShare.present(PlaceShare.payload(name: poi.name,
+                                                      address: "",
+                                                      type: poi.type.label,
+                                                      road: "",
+                                                      lat: poi.lat, lon: poi.lon))
+            } label: {
+                Label("分享", systemImage: "square.and.arrow.up")
+                    .font(.footnote.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            }
+            // v2.26 新增红色删除按钮：删除后该抓拍点从地图上消失
+            Button {
+                model.deletePoi(id: poi.id)
+                model.status = "已删除「\(poi.name)」，地图上不再显示"
                 onClose(true)
             } label: {
-                Text("导航去此处")
-                    .font(.headline)
+                Label("删除", systemImage: "trash")
+                    .font(.footnote.bold())
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
-            }
-            // v1.65：设为家 / 设为公司（我的页常用地点一键调用）
-            HStack(spacing: 10) {
-                Button {
-                    model.setHome(poi)
-                    onClose(true)
-                } label: {
-                    Label("设为家", systemImage: "house.fill")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-                }
-                Button {
-                    model.setWork(poi)
-                    onClose(true)
-                } label: {
-                    Label("设为公司", systemImage: "briefcase.fill")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-                }
+                    .padding(.vertical, 11)
+                    .background(Color.red, in: RoundedRectangle(cornerRadius: 10))
             }
         }
         .padding(20)
-        .presentationDetents([.height(380)])
+        .presentationDetents([.height(330)])
         .onAppear {
-            favorite = model.isFavorite(poi)
             if let loc = model.currentLocation {
                 let d = model.distance(to: poi, from: loc)
+                distText = d >= 1000
+                    ? String(format: "距我 %.1f 公里", d / 1000.0)
+                    : String(format: "距我 %d 米", Int(d))
+            } else {
+                distText = "尚未定位"
+            }
+        }
+    }
+}
+
+/// v2.26 官方电警点详情卡：只保留「分享」+「删除」
+///
+/// 与 PoiDetailSheet 的差别：
+///   · 数据源是官方公示库（PoliceCamera），不是用户自建点位；
+///   · 删除走 PoliceCameraStore 的删除表，重启后不会复活。
+struct CameraTapSheet: View {
+    let camera: PoliceCamera
+    @ObservedObject var store: PoliceCameraStore
+    @ObservedObject var model: AppModel
+    let onClose: () -> Void
+    @State private var distText = ""
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("点位详情")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            VStack(spacing: 4) {
+                Text(camera.name)
+                    .font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                Text("\(camera.type.title) · \(distText)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text(String(format: "纬度 %.5f  经度 %.5f", camera.lat, camera.lon))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            // 分享
+            Button {
+                PlaceShare.present(PlaceShare.payload(name: camera.name,
+                                                      address: camera.district,
+                                                      type: camera.type.title,
+                                                      road: camera.dirs,
+                                                      lat: camera.lat, lon: camera.lon))
+            } label: {
+                Label("分享", systemImage: "square.and.arrow.up")
+                    .font(.footnote.bold())
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            }
+            // 红色删除
+            Button {
+                store.delete(id: camera.id)
+                model.status = "已删除「\(camera.name)」，地图上不再显示"
+                onClose()
+            } label: {
+                Label("删除", systemImage: "trash")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .background(Color.red, in: RoundedRectangle(cornerRadius: 10))
+            }
+            if !camera.source.isEmpty {
+                Text("来源：\(camera.source)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(20)
+        .presentationDetents([.height(370)])
+        .onAppear {
+            if let loc = model.currentLocation {
+                let d = loc.distance(to: camera.coordinate)
                 distText = d >= 1000
                     ? String(format: "距我 %.1f 公里", d / 1000.0)
                     : String(format: "距我 %d 米", Int(d))
@@ -4701,6 +5021,8 @@ private struct CompassDial: View {
 private struct SheetGroup1Modifier: ViewModifier {
     @EnvironmentObject var model: AppModel
     @Binding var poiDetail: Poi?
+    /// v2.26 官方电警点详情卡（轻点电警点弹出：分享 + 删除）
+    @Binding var cameraTapCard: PoliceCamera?
     @Binding var showVoiceSettings: Bool
     @Binding var showFootprints: Bool
     @Binding var showOfflineMaps: Bool
@@ -4711,18 +5033,25 @@ private struct SheetGroup1Modifier: ViewModifier {
     var team: TeamRide
     /// v2.25 足迹回放后要切回地图页
     @Binding var selectedTab: Int
+    /// v2.26 电警点详情卡需要删除官方点位
+    var camStore: PoliceCameraStore
 
     func body(content: Content) -> some View {
         content
-        .sheet(item: poiDetail) { p in
+        .sheet(item: $poiDetail) { p in
             PoiDetailSheet(poi: p, model: model) { close in
                 poiDetail = nil
             }
         }
-        .sheet(isPresented: showVoiceSettings) {
+        .sheet(item: $cameraTapCard) { c in
+            CameraTapSheet(camera: c, store: camStore, model: model) {
+                cameraTapCard = nil
+            }
+        }
+        .sheet(isPresented: $showVoiceSettings) {
             VoiceSettingsSheet(model: model)
         }
-        .sheet(isPresented: showFootprints) {
+        .sheet(isPresented: $showFootprints) {
             FootprintSheet(store: footprints) { f in
                 showFootprints = false
                 selectedTab = 0
@@ -4730,10 +5059,10 @@ private struct SheetGroup1Modifier: ViewModifier {
                 model.status = "足迹回放：\(f.destName) · \(f.distanceText)"
             }
         }
-        .sheet(isPresented: showOfflineMaps) {
+        .sheet(isPresented: $showOfflineMaps) {
             OfflineMapSheet(manager: offline, model: model)
         }
-        .sheet(isPresented: showTeamRide) {
+        .sheet(isPresented: $showTeamRide) {
             TeamRideSheet(team: team)
         }
     }
@@ -4754,12 +5083,12 @@ private struct SheetGroup2Modifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-        .sheet(item: editPoi) { p in
+        .sheet(item: $editPoi) { p in
             PoiEditSheet(mode: .edit, poi: p) { type, name, lat, lon, r in
                 model.updatePoi(id: p.id, type: type, name: name, lat: lat, lon: lon, radiusM: r)
             }
         }
-        .alert("标记该点", isPresented: showMarkNameAlert) {
+        .alert("标记该点", isPresented: $showMarkNameAlert) {
             TextField("备注名称（如：前方有大坑 / 事故多发地）", text: markName)
             Button("保存标记") {
                 let name = markName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4773,7 +5102,7 @@ private struct SheetGroup2Modifier: ViewModifier {
         } message: {
             Text("输入备注名称，保存后下次打开 App 依然保留；长按图标可拖动微调位置")
         }
-        .alert("高德搜索Key", isPresented: showAmapKeyInput) {
+        .alert("高德搜索Key", isPresented: $showAmapKeyInput) {
             TextField("粘贴高德开放平台 Web 服务 Key", text: amapKeyInput)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -4786,7 +5115,7 @@ private struct SheetGroup2Modifier: ViewModifier {
         } message: {
             Text("在高德开放平台（lbs.amap.com）注册后创建应用，获取 Web 服务 Key，粘贴后搜索联想即为高德数据（含精确坐标，点击直接定位）")
         }
-        .confirmationDialog("选择违法拍照类型", isPresented: showTypePicker) {
+        .confirmationDialog("选择违法拍照类型", isPresented: $showTypePicker) {
             ForEach(PoiType.allCases.filter(\.isCamera), id: \.self) { t in
                 Button(t.label) { onAddPoiAtPending(type: t) }
             }
@@ -4811,10 +5140,13 @@ private struct SheetGroup3Modifier: ViewModifier {
     @Binding var pendingQuickCoord: CLLocationCoordinate2D?
     @Binding var quickPickMode: Bool
     @Binding var poiManagePoi: Poi?
+    /// v2.26 修复编译错误：点位管理弹窗里"编辑该点位"要写 editPoi，
+    /// 但 Group3 之前没声明这个绑定（Group2 才有），引用会报 "cannot find 'editPoi' in scope"
+    @Binding var editPoi: Poi?
 
     func body(content: Content) -> some View {
         content
-        .confirmationDialog("更改拍照类型", isPresented: showCameraKindPicker) {
+        .confirmationDialog("更改拍照类型", isPresented: $showCameraKindPicker) {
             ForEach(cameraKindsForPicker, id: \.self) { t in
                 Button(onCameraKindTitle(t)) { onChangeCameraPoiType(t) }
             }
@@ -4822,13 +5154,13 @@ private struct SheetGroup3Modifier: ViewModifier {
         } message: {
             Text(cameraPoiCard.map { "当前：\(onCameraKindTitle($0.type))" } ?? "")
         }
-        .confirmationDialog("删除这个拍照点？", isPresented: showCameraPoiDeleteConfirm) {
+        .confirmationDialog("删除这个拍照点？", isPresented: $showCameraPoiDeleteConfirm) {
             Button("删除", role: .destructive) { onDeleteCameraPoi() }
             Button("取消", role: .cancel) {}
         } message: {
             Text("删除后不再提醒，且无法恢复")
         }
-        .alert("命名快捷卡片", isPresented: showQuickNameAlert) {
+        .alert("命名快捷卡片", isPresented: $showQuickNameAlert) {
             TextField("名称（如：回龙观桥下）", text: quickName)
             Button("保存") {
                 if let c = pendingQuickCoord {

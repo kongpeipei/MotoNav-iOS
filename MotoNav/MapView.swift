@@ -76,6 +76,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var onPoiLongPress: ((Poi) -> Void)?
     var onPoiMoved: ((Poi, Double, Double) -> Void)?
     var onPoiSelect: ((Poi) -> Void)?
+    /// v2.26 电警点轻点回调（官方公示点位 → 弹出分享/删除卡片）
+    var onCameraSelect: ((PoliceCamera) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
     var onPlaceLongPress: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -213,6 +215,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.traveledIdx = traveledIdx
         context.coordinator.onUserMovedChanged = onUserMovedChanged
         context.coordinator.onPoiSelect = onPoiSelect
+        // v2.26 电警点轻点 → 分享/删除卡片
+        context.coordinator.onCameraSelect = onCameraSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onPlaceLongPress = onPlaceLongPress
         context.coordinator.onCategorySelect = onCategorySelect
@@ -901,6 +905,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var dragStartPt: CGPoint = .zero
         private var dragStartCoord: CLLocationCoordinate2D?
         var onPoiSelect: ((Poi) -> Void)?
+        /// v2.26 电警点轻点回调（官方公示点位 → 弹出分享/删除卡片）
+        var onCameraSelect: ((PoliceCamera) -> Void)?
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onPlaceLongPress: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -1343,6 +1349,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             } else if let ca = view.annotation as? CategoryAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onCategorySelect?(ca.result)
+            } else if let cam = view.annotation as? CameraAnnotation {
+                // v2.26 轻点官方电警点 → 弹出"分享 + 删除"卡片（此前点击完全没反应）
+                mapView.deselectAnnotation(view.annotation, animated: false)
+                if let c = cam.camera {
+                    onCameraSelect?(c)
+                }
             }
         }
 
@@ -2172,6 +2184,8 @@ final class CameraAnnotation: NSObject, MKAnnotation {
     let kind: CameraKind
     let cameraName: String
     let dirs: String
+    /// v2.26 保留原始 PoliceCamera，点击电警点时要把完整点位信息交给上层（分享/删除要用）
+    let camera: PoliceCamera?
     /// 是否处于"刚播报"高亮态
     var isHot = false
 
@@ -2186,6 +2200,7 @@ final class CameraAnnotation: NSObject, MKAnnotation {
         self.kind = camera.type
         self.cameraName = camera.name
         self.dirs = camera.dirs
+        self.camera = camera
         let gcj = MapGeo.toGCJ(camera.coordinate)
         self.coordinate = gcj
         self.originCoordinate = gcj
