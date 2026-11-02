@@ -1116,11 +1116,43 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// 导航中最后跟随位置（开远自动拉回）
         var navLastFollow: CLLocationCoordinate2D?
         /// 程序主动设置区域（避免被标记为用户移动）
-        private var programmaticMove = false
+        /// v2.29 程序化移动标志：**计数器**（原来是 Bool）
+        ///
+        /// 旧实现用 Bool，有真实的失衡：
+        /// 一次 setRegionProgrammatically 里往往做了**两件**会各自触发 region 事务的事
+        /// （比如 `map.userTrackingMode = .followWithHeading` 和 `map.camera = cam`），
+        /// MapKit 是否把它们合并成一个事务并不确定 ——
+        /// 不合并时，第二个 regionDidChange 回调撞上 Bool 已被消费的状态，
+        /// 走进 `else if !animated` 分支 → **误判成"用户手动移了地图"**（userMoved = true）。
+        ///
+        /// 后果：导航卡片整张塌掉，只剩一个"继续导航"按钮
+        /// （ContentView 的 navUserMoved 分支），用户看到的就是"点了开始导航卡住了"。
+        /// 自动回中要求位移 > 100 米，所以短距离内这个塌陷会一直持续。
+        ///
+        /// 改成计数器后：N 次程序化移动能吃掉 N 个回调，不会互相干扰。
+        /// 再加一个"自动过期"兜底：程序化移动后 1.5 秒内没等到回调就把计数清零，
+        /// 避免某次 MapKit 没回调导致后续**真实的**用户手势被误吞。
+        private var programmaticMoveCount = 0
+        /// 程序化移动的时间戳（用于自动过期）
+        private var programmaticMoveAt = Date.distantPast
 
         func setRegionProgrammatically(_ block: () -> Void) {
-            programmaticMove = true
+            programmaticMoveCount += 1
+            programmaticMoveAt = Date()
             block()
+        }
+
+        /// 消费一次程序化移动标记；返回 true 表示这次回调是程序化造成的
+        private func consumeProgrammaticMove() -> Bool {
+            // 超过 1.5 秒还没等到对应回调 → 认为 MapKit 吞掉了/合并了，清零重来
+            if programmaticMoveCount > 0, Date().timeIntervalSince(programmaticMoveAt) > 1.5 {
+                programmaticMoveCount = 0
+            }
+            if programmaticMoveCount > 0 {
+                programmaticMoveCount -= 1
+                return true
+            }
+            return false
         }
 
         /// v1.98 统一缩放入口：先脱离跟随（否则 MapKit 会立刻回中，表现为按钮点了没反应）
@@ -1348,8 +1380,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             scheduleScale(mapView)   // v2.02 地图稳定后再算比例尺（去抖，避免每帧改状态）
             // 程序 setRegion 触发时不标记用户移动
-            if programmaticMove {
-                programmaticMove = false
+            if consumeProgrammaticMove() {
+                // 程序化移动，正常
             } else if !animated {
                 // 用户手势（拖动/旋转/缩放）触发的区域变化 → 暂停跟随与自动旋转
                 userMoved = true
@@ -1990,6 +2022,33 @@ final class AmapTileRenderer: MKOverlayRenderer {
     /// v2.16 并发上限 12 → 24：4 个子域各 6 个并发，正好吃满 URLSession 单域默认连接数
     private static let maxInflight = 24
 
+    // MARK: - v2.29 骑行省电模式
+    //
+    // 调研发现：OsmAnd / Komoot 都提供"简化地图"省电模式，
+    // 核心是降低地图细节与刷新频率 —— 摩托车骑行时手机往往还在导航，
+    // 电量比手机导航（插着充电）更紧张。
+    //
+    // 实现方式（不改架构，只调两个旋钮）：
+    // · zMax 19 → 17：少加载 2 级瓦片，近看稍糊但省一半流量与 GPU
+    // · 并发 24 → 12：网络请求少一半，弱网下响应更快
+    //
+    // 做成全局开关（瓦片渲染器是 static 的，没法用实例状态）。
+    // 用 UserDefaults 存，进程内同步到静态变量。
+    private static var powerSaveMap: Bool = {
+        UserDefaults.standard.bool(forKey: "ridingPowerSaveMap")
+    }()
+
+    /// v2.29 设置骑行省电地图模式
+    static func setPowerSaveMap(_ on: Bool) {
+        powerSaveMap = on
+        UserDefaults.standard.set(on, forKey: "ridingPowerSaveMap")
+    }
+
+    /// 省电模式下的瓦片层级上限
+    private static var effectiveZMax: Int { powerSaveMap ? 17 : zMax }
+    /// 省电模式下的并发上限
+    private static var effectiveMaxInflight: Int { powerSaveMap ? 12 : maxInflight }
+
     /// v2.00 瓦片直铺（关键修复）
     ///
     /// 高德瓦片本身就是 GCJ-02 网格，而 MKMapView 的 overlay 坐标 / 标注坐标在本 App 里
@@ -2009,7 +2068,8 @@ final class AmapTileRenderer: MKOverlayRenderer {
         //
         // K=20 对应 zoomScale=1（MKMapView 默认视野约为 z=20 级别的密度）。
         let zRaw = log2(Double(zoomScale)) + 20.0
-        let z = min(AmapTileRenderer.zMax, max(AmapTileRenderer.zMin, Int(zRaw.rounded())))
+        // v2.29 省电模式用更低的层级上限
+        let z = min(AmapTileRenderer.effectiveZMax, max(AmapTileRenderer.zMin, Int(zRaw.rounded())))
         let n = 1 << z
         let per = MKMapRect.world.size.width / Double(n)
         var x0 = max(0, Int(floor(mapRect.minX / per)))
@@ -2218,7 +2278,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
 
             // 2) 网络
             self.lock.lock()
-            if self.inflight >= Self.maxInflight {
+            if self.inflight >= Self.effectiveMaxInflight {
                 // 并发满了：撤掉 pending 让下一帧重投（不发定时器，避免一屏几百个定时块）
                 self.pending.remove(key)
                 self.lock.unlock()

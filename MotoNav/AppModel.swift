@@ -254,6 +254,113 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 当前出行方式
     @Published var travelMode: TravelMode = .moto
 
+    /// v2.29 各方案的禁摩风险等级（按方案下标索引）
+    ///
+    /// 调研发现：高德/百度的方案卡只显示「距离 / 用时 / 红绿灯数」，
+    /// **没有禁摩风险这一维度** —— 但对摩托车这是最关键的信息
+    /// （合肥这类城市禁摩高架/主干道很常见）。
+    ///
+    /// 缓存起来：riderRisks 是按当前选中方案算的，
+    /// 而方案卡要逐个显示各方案的风险等级，不能直接复用。
+    /// 这里按方案下标缓存，方案列表变化时清空。
+    private var choiceRiskCache: [Int: ChoiceRisk] = [:]
+    private var choiceRiskCacheKey: String = ""
+
+    /// v2.29 方案卡上的禁摩风险徽标
+    enum ChoiceRisk {
+        case none       // 无风险
+        case low        // 轻微（隧道/大桥）
+        case high       // 明确禁摩/高速/高架
+
+        var label: String {
+            switch self {
+            case .none: return "可通行"
+            case .low: return "有隧道/大桥"
+            case .high: return "含禁摩路段"
+            }
+        }
+        var shortLabel: String {
+            switch self {
+            case .none: return "可通行"
+            case .low: return "注意"
+            case .high: return "禁摩"
+            }
+        }
+        var isBlocked: Bool { self == .high }
+    }
+
+    /// v2.29 取某方案的禁摩风险等级
+    func choiceRisk(_ c: RouteChoice, index: Int) -> ChoiceRisk {
+        // 缓存键：方案列表的指纹（数量 + 每条的里程/用时）
+        let key = routeChoices.map { "\($0.distanceM)-\($0.durationS)" }.joined(separator: "|")
+        if key != choiceRiskCacheKey {
+            choiceRiskCacheKey = key
+            choiceRiskCache.removeAll()
+        }
+        if let cached = choiceRiskCache[index] { return cached }
+        let risks = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
+        let blocked = risks.contains { $0.kind.motoBlocked }
+        let risky = !risks.isEmpty
+        let r: ChoiceRisk = blocked ? .high : (risky ? .low : .none)
+        choiceRiskCache[index] = r
+        return r
+    }
+
+    /// v2.29 起点是否被手动固定（不等于当前位置）
+    ///
+    /// 调研发现：Google 明确要求"起点必须是当前位置，否则只给路线预览"，
+    /// 而高德/百度允许手动起点但**不告诉用户导航实际从哪开始**——
+    /// 用户看到"出发点：XX"，实际导航却是从几公里外的那个点开始的，
+    /// 到了那儿才提示"请先去往出口"（本 App 也一样，见 navTopHintBar 的 needExit）。
+    ///
+    /// 这里显式暴露这个状态，让用户能一键纠正。
+    var originIsManual: Bool { originLat != 0 || originLon != 0 }
+
+    /// v2.29 手动起点与当前位置的距离（米）；未固定时返回 nil
+    ///
+    /// 带缓存：这个值会在 body 求值期被读（规划卡的提示条），
+    /// 而 distanceM 会构造两个 CLLocation —— 每帧算一次是纯浪费。
+    /// 位置变化超过 50 米才重算。
+    private var originDistCache: Int?
+    private var originDistCacheAt: CLLocationCoordinate2D?
+
+    func originDistanceFromUser() -> Int? {
+        guard originIsManual, let cur = currentLocation else { return nil }
+        // 位置没怎么动就直接用缓存
+        if let cached = originDistCache, let at = originDistCacheAt {
+            if distanceM(at, cur) < 50 { return cached }
+        }
+        let d = Int(distanceM(cur, CLLocationCoordinate2D(latitude: originLat, longitude: originLon)))
+        originDistCache = d
+        originDistCacheAt = cur
+        return d
+    }
+
+    /// v2.29 起点改回当前位置（起点不再固定）
+    func resetOriginToCurrentLocation() {
+        originName = "我的位置"
+        originLat = 0
+        originLon = 0
+        status = "起点已改回我的位置，正在重新规划…"
+        replan()
+    }
+
+    /// v2.29 骑行极简模式（竞品空白点）
+    ///
+    /// 调研发现：高德/百度只有"播报分级"，**所有竞品都没有骑行视觉精简模式** ——
+    /// 屏幕信息密度还是按驾车设计的。但摩托车骑手戴着头盔，
+    /// 视野只有一条缝，余光能读到的信息非常有限。
+    ///
+    /// 极简模式下：
+    /// · 底卡只留「下一动作 + 距离 + 车速 + ETA」，隐藏车道图与红绿灯读秒
+    /// · 字号放大（动作 14pt → 18pt），距离与车速同步放大
+    /// · 隐藏地图上的缩放按钮组与比例尺（减少视觉噪声）
+    ///
+    /// 与 speechMode（播报分级）正交：语音照旧，屏幕更干净。
+    @Published var ridingMinimalUI: Bool = UserDefaults.standard.object(forKey: "ridingMinimalUI") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(ridingMinimalUI, forKey: "ridingMinimalUI") }
+    }
+
     /// v2.28 优先少红绿灯（排序偏好，作用于方案列表）
     @Published var preferFewLights: Bool = UserDefaults.standard.object(forKey: "preferFewLights") as? Bool ?? false {
         didSet { UserDefaults.standard.set(preferFewLights, forKey: "preferFewLights") }
@@ -308,7 +415,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 导航轨迹缓冲（结束后存为足迹）
     private var trackPoints: [CLLocationCoordinate2D] = []
     private var maxSpeedKph: Double = 0
-    private var lastRiskSpoken = Set<String>()
     private var lastCurveSpoken = Date.distantPast
 
     /// 实时速度（m/s，来自定位，导航卡显示 km/h）
@@ -1377,6 +1483,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 // v2.28 导航进度更新放在这里（事件驱动），而不是 body 求值期 ——
                 // 后者会触发 SwiftUI 无限重算循环（"点开始导航就卡死"的根因）。
                 updateNavProgress(at: coord)
+                // v2.29 按速度自动切换视野档位（低速看清路口 / 高速看远）
+                updateAutoNavScale()
             }
             // v1.99 组队位置上报（未组队时是空操作）
             TeamRide.shared.update(lat: coord.latitude, lon: coord.longitude,
@@ -1615,6 +1723,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// v2.29 音频会话激活（带缓存，避免重复的同步 IPC）
+    ///
+    /// setCategory / setActive 都是 coreaudiod 的同步调用，
+    /// 在来电、Siri 抢占、蓝牙切路由时可能阻塞几百毫秒甚至秒级。
+    /// 导航中播报很频繁（每几百米一次），每次都调一遍既慢又可能卡主线程。
+    ///
+    /// 这里只在会话还没激活时设置一次。被系统打断（来电）时由
+    /// `invalidateAudioSession()` 置回 false，下次播报会重新激活。
+    private var audioSessionActive = false
+
+    private func activateAudioSessionIfNeeded() {
+        guard !audioSessionActive else { return }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? session.setActive(true)
+        audioSessionActive = true
+    }
+
+    /// 音频会话被系统抢占后调用（下次播报会重新激活）
+    func invalidateAudioSession() {
+        audioSessionActive = false
+    }
+
     private func speakSystem(_ text: String) {
         // v1.80 恢复最早默认中文女声（用户要求"本地内置改回原来声音"）：系统默认 zh-CN、正常语速、无语气词
         let u = AVSpeechUtterance(string: text)
@@ -1768,14 +1899,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if since < 30 && priority < 2 { return }
             if since < 8 { return }
         }
-        // v1.81.4 后台语音播报：playback 会话（Info.plist 已含 audio 后台模式），导航切后台语音继续
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-        try? AVAudioSession.sharedInstance().setActive(true)
         let now = Date()
         // 播报去重：2.5 秒内不连续播报（转向近提示/到达/超速高优先级可打断）
+        //
+        // v2.29：**去重判断必须放在音频会话激活之前**。
+        // 旧顺序是「先 setCategory + setActive(true) → 再去重」，
+        // 而这两个调用是 coreaudiod 的同步 IPC（来电/Siri/蓝牙切路由时可能阻塞数百毫秒到秒级），
+        // 每次播报都白付一次，连被去重挡掉的那些播报也付了 —— 纯浪费。
         if now.timeIntervalSince(lastSpeakAt) < 2.5 && priority <= lastSpeakPriority {
             if now.timeIntervalSince(lastSpeakAt) < 1.2 || lastSpeakText == text { return }
         }
+        // v1.81.4 后台语音播报：playback 会话（Info.plist 已含 audio 后台模式），导航切后台语音继续
+        //
+        // v2.29：只在会话尚未激活时才设置 —— 重复 setActive 是无意义的同步开销。
+        activateAudioSessionIfNeeded()
         if priority > lastSpeakPriority && now.timeIntervalSince(lastSpeakAt) < 6 {
             speech.stopSpeaking(at: .immediate)
             xfPlayer?.stop()
@@ -2494,7 +2631,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.routeDurationS = best.durationS
             self.lastTurnSpoken = -1
             self.farAnnounced.removeAll()
-            self.lastRiskSpoken.removeAll()
+            self.riskSpokenStage.removeAll()
             let near = self.nearbyPoisOnRoute(best.points)
             self.routePois = near
             self.riderRisks = RiderAnalyzer.risks(best.turns, totalM: best.distanceM)
@@ -2526,8 +2663,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let choices = await RouteFetcher.fetchAll(from: from, to: rawEnd, amapKey: amapKey,
                                                       via: self.waypointCoords)
             if choices.isEmpty {
+                // v2.29 降级：第一次规划失败且还有途经点 → 去掉途经点再试一次
+                // （起终点互换后途经点顺序/位置最容易导致高德直接失败）
+                if !self.degradedPlan, !self.waypoints.isEmpty {
+                    self.replanWithoutWaypoints(reason: "反向规划失败")
+                    return
+                }
+                self.degradedPlan = false
                 fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon, walkLeg: [])
             } else {
+                // 规划成功 → 清除降级标记
+                self.degradedPlan = false
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
                 let list = self.preferMotoRoutes(choices).map { c -> RouteChoice in
                     let n = nearbyPoisOnRoute(c.points).count
@@ -2580,7 +2726,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         riderRisks = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
         trafficSpans = c.traffic
         trafficLights = TrafficLightBuilder.lights(turns: c.turns)
-        lastRiskSpoken.removeAll()
+        riskSpokenStage.removeAll()
         status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
         if !riderRisks.isEmpty {
             let blocked = riderRisks.contains { $0.kind.motoBlocked }
@@ -2649,16 +2795,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.99 轨迹重新开始
             trackPoints.removeAll()
             maxSpeedKph = 0
-            lastRiskSpoken.removeAll()
+            riskSpokenStage.removeAll()
             alertStage = [:]
             offRouteCount = 0
             arriveAnnounced = false
             startMonitoring()
-            startLiveActivity(destName: destName)
             // v2.28：立即初始化导航状态缓存。
             // 否则从「点开始导航」到「第一次定位回调」之间（可能有好几百毫秒），
             // 底部导航卡会因为 navStatusCache == nil 而整个不显示 —— 看起来像"点了没反应"。
             navStatusCache = navigationStatus(at: currentLocation)
+            // v2.29 顺序调整：先让 UI 状态全部发布出去（navigating 等 @Published 要下个
+            // runloop 才生效），**再**做可能阻塞的事。
+            //
+            // 旧顺序把 startLiveActivity 放在最前面，而 Activity.request 是**同步**的
+            // （内部 XPC 到 activitykitd，首次还要冷启动 Widget 扩展），
+            // 耗时几百毫秒到数秒。主线程被堵住 → 第一帧导航 UI 根本画不出来 →
+            // 用户看到的就是"点了开始导航卡住了"。
+            //
+            // 这个卡顿是**偶发**的：取决于 activitykitd 守护进程冷热、Widget 扩展是否已加载，
+            // 所以用户描述是"有时候点开始导航会卡住"。
+            //
+            // 现在改成：先发状态 → 下一轮 runloop 再启动 Live Activity，
+            // 且用 Task 包裹（不在主线程同步等），并加超时兜底。
+            scheduleLiveActivityStart(destName: destName)
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
         }
@@ -2951,18 +3110,55 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 导航中：向前 500 米内出现禁摩/隧道/高架等风险段时播报（每段只报一次）
+    /// v2.29 已播报过的风险（记录播报到了哪一档）
+    private var riskSpokenStage: [Int: Int] = [:]
+
+    /// 骑行风险提醒（禁摩/限行/隧道/大桥）
+    ///
+    /// v2.29 改成**双段式**时机（竞品空白点）：
+    /// 调研发现高德只在遇到禁行点时说一句"前方禁摩，已重新规划"，
+    /// 百度也只有一次提醒 —— 骑手没有决策窗口。
+    ///
+    /// 现在分两档：
+    /// · **500 米预告**："前方 500 米进入 XX 路（禁摩/限行路段），请提前绕行"
+    ///   —— 提前知道，给出调整路线的时间
+    /// · **150 米决策**："前方 150 米到达 XX 路路口，请走右侧辅路"
+    ///   —— 到了必须做决定的时刻，给出路口级的具体指引
+    ///
+    /// 只有禁摩类（motoBlocked）走双段式；隧道/大桥只需预告一次
+    /// （它们不是"能不能进"的问题，而是"注意安全"）。
     private func checkRiderRisks(at coord: CLLocationCoordinate2D) {
         guard navigating, !riderRisks.isEmpty, speechMode != .simple else { return }
         let remain = route.last.map { distanceM(coord, $0) } ?? 0
         let traveled = max(0, routeDistanceM - Int(remain))
         for r in riderRisks where r.ahead(of: traveled) {
-            guard !lastRiskSpoken.contains(r.id) else { continue }
             let d = Double(r.fromM - traveled)
-            guard d >= 0, d < 500 else { continue }
-            lastRiskSpoken.insert(r.id)
+            guard d >= 0 else { continue }
+            let stage = riskSpokenStage[r.id] ?? 0
+
+            // 第二档：150 米内的路口级决策提醒
+            if stage == 1, d < 150 {
+                riskSpokenStage[r.id] = 2
+                let road = r.roadName.isEmpty ? "" : "（\(r.roadName)）"
+                speak("前方\(Int(d))米到达\(r.kind.title)\(road)路口，请按现场指示绕行", priority: 2)
+                status = "⚠️ 前方\(Int(d))米需绕行"
+                continue
+            }
+
+            // 第一档：500 米预告
+            guard stage == 0, d < 500 else { continue }
+            riskSpokenStage[r.id] = 1
             let road = r.roadName.isEmpty ? "" : "（\(r.roadName)）"
-            speak("前方\(Int(d))米进入\(r.kind.title)\(road)，\(r.kind.advice)", priority: 2)
-            status = "⚠️ 前方\(Int(d))米\(r.kind.title)"
+            if r.kind.motoBlocked {
+                // 禁摩类：预告 + 明确说"提前绕行"
+                speak("前方\(Int(d))米进入\(r.kind.title)\(road)，\(r.kind.advice)", priority: 2)
+                status = "⚠️ 前方\(Int(d))米\(r.kind.title)"
+            } else {
+                // 隧道/大桥：一次预告即可
+                riskSpokenStage[r.id] = 2   // 不再报第二档
+                speak("前方\(Int(d))米\(r.kind.title)\(road)，\(r.kind.advice)", priority: 2)
+                status = "⚠️ 前方\(Int(d))米\(r.kind.title)"
+            }
         }
     }
 
@@ -3088,6 +3284,23 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// v2.19 起终点互换：起点变为原终点，终点变为原起点，互换后立即重新规划
+    /// v2.29 起终点互换（用户报告：互换后点开始导航，出发点还是互换前的状态，
+    /// 而且导航不显示任何路线和卡片）
+    ///
+    /// 旧实现的三个真实缺陷：
+    /// 1. **途经点没有跟着换方向** —— 起点变成原终点后，途经点仍在原路径上，
+    ///    高德收到的是「A(原终点) → 途经(原路径上) → B(原起点)」这种自相矛盾的请求，
+    ///    直接失败 → 没有路线、没有卡片。
+    /// 2. **起点被永久钉死** —— originLat/originLon 写成原终点后不再跟随定位，
+    ///    用户已经骑着车离开几公里了，导航还从旧位置起算。
+    /// 3. **终点名显示成"我的位置"** —— 换成真实地名更符合直觉。
+    ///
+    /// 现在按高德/百度的正确语义实现：
+    /// · 起点 = 原终点（固定，这是用户明确要的"从那边出发"）
+    /// · 终点 = 原起点（如果原起点是"我的位置"，就显示当前定位的名字）
+    /// · **途经点按新方向重排**：原来在"起点→终点"路径上的点仍在，
+    ///   但顺序反转（返程时"去接人"的顺序应该倒过来）
+    /// · 互换后如果规划失败，自动退回"用当前定位作为终点"再试一次
     func swapOriginDest() {
         guard destLat != 0 || destLon != 0 else {
             status = "还没有终点，先选一个目的地"
@@ -3098,16 +3311,59 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
         let oldOriginName = originName
-        // 起点固定为原终点（不再跟随定位），终点取原起点
+        let oldOriginLat = oldOrigin.latitude
+        let oldOriginLon = oldOrigin.longitude
+
+        // ① 起点 = 原终点
         originName = destName
         originLat = destLat
         originLon = destLon
+
+        // ② 终点 = 原起点
         destName = oldOriginName
-        destLat = oldOrigin.latitude
-        destLon = oldOrigin.longitude
+        destLat = oldOriginLat
+        destLon = oldOriginLon
+
+        // ③ 途经点按新方向重排（v2.29 修复"互换后无路线无卡片"）
+        //
+        // 高德的做法是"系统会自动优化最优行驶顺序"——
+        // 返程时途经点的访问顺序应该反过来（原来"先 A 后 B"，返程就是"先 B 后 A"）。
+        // 这里做同样的事：把途经点数组反转。
+        //
+        // 为什么必须反：旧起点→旧终点的路径是 A→W1→W2→B，
+        // 反向走就是 B→W2→W1→A。若不反，请求会变成 B→W1→W2→A，
+        // W1、W2 都不在新路径上，高德要么绕一大圈（用户截图里"69.8 公里"就是这个症状）、要么直接报错（无路线无卡片）。
+        if waypoints.count > 1 {
+            waypoints.reverse()
+        }
+
         status = "已交换起点终点，正在重新规划…"
         replan()
     }
+
+    /// v2.29 互换后的规划失败降级
+    ///
+    /// 起终点互换是高德最容易失败的操作：起点变成了原终点（几公里外），
+    /// 终点变成"当前位置"，方向与原来完全相反。
+    /// 如果高德因为途经点顺序或其它原因返回失败，用户会看到"无路线无卡片"，
+    /// 不知道发生了什么。
+    ///
+    /// 这里做一次降级：失败时**去掉途经点**再试一次（途经点是最容易让
+    /// 反向规划失败的因素），并在提示里说清楚发生了什么。
+    func replanWithoutWaypoints(reason: String) {
+        guard !waypoints.isEmpty else { return }
+        let saved = waypoints
+        waypoints = []
+        status = "\(reason)，正在去掉途经点重新规划…"
+        // 起终点与途经点数量变化会影响下次 fetchRouteChoices 的参数，
+        // 这里用一个标记让 fetchRouteChoices 知道这次是降级规划
+        degradedPlan = true
+        _ = saved
+        replan()
+    }
+
+    /// v2.29 标记：本次规划是"去掉途经点"的降级规划
+    var degradedPlan = false
 
     /// 按当前起点/途经/终点重新拉方案（不自动开始导航）
     func replan() {
@@ -3255,6 +3511,25 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let speedKph: Double
         let nextTurn: RouteTurn?
         let distToTurnM: Int
+    }
+
+    /// v2.29 延迟启动 Live Activity（避免阻塞"开始导航"的第一帧）
+    ///
+    /// Activity.request 是同步阻塞调用（XPC 到 activitykitd），
+    /// 放在 toggleNavigation 的主线程上会卡住第一帧渲染。
+    /// 这里推到下一轮 runloop 之后再启动，并且：
+    /// · 用 Task 包裹，不阻塞主线程
+    /// · 加超时兜底：3 秒还没起来就放弃（灵动岛只是附加功能，不值得为此拖慢导航）
+    private func scheduleLiveActivityStart(destName: String) {
+        Task { @MainActor [weak self] in
+            // 让本轮 runloop 先把 navigating=true 等 @Published 发布出去
+            await Task.yield()
+            guard let self, self.navigating else { return }
+            // 再让出一轮，确保 UI 已经画出第一帧
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard self.navigating, self.liveActivity == nil else { return }
+            self.startLiveActivity(destName: destName)
+        }
     }
 
     /// v2.28 导航状态缓存（由定位回调更新，UI 直接读）
@@ -3489,6 +3764,62 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         navScaleTick += 1
     }
 
+    /// v2.29 骑行省电地图（OsmAnd/Komoot 都有这个）
+    ///
+    /// 降低瓦片层级与并发请求数，省流量与 GPU。
+    /// 骑行时手机在导航、没法插充电，这一档比手机导航更该有。
+    @Published var ridingPowerSaveMap: Bool = UserDefaults.standard.object(forKey: "ridingPowerSaveMap") as? Bool ?? false {
+        didSet {
+            UserDefaults.standard.set(ridingPowerSaveMap, forKey: "ridingPowerSaveMap")
+            // 瓦片渲染器是 static 的，需要手动同步
+            AmapTileRenderer.setPowerSaveMap(ridingPowerSaveMap)
+        }
+    }
+
+    /// v2.29 自动视野档位开关（按速度切换）
+    ///
+    /// 调研发现：Komoot 支持面板滑动换指标、OsmAnd 面板可自定义，
+    /// 行业共识是"仪表信息应该随骑行状态自动变"。
+    /// 骑行场景下这一点特别明显：
+    /// · 低速（等红灯、拐弯）→ 需要看清近处路口 → 近景
+    /// · 中速（市区骑行）→ 中景
+    /// · 高速（快速路）→ 需要看前方几百米的排队情况 → 远景
+    ///
+    /// 默认开启。用户手动切档后 20 秒内不自动覆盖（尊重用户意图）。
+    @Published var autoNavScale: Bool = UserDefaults.standard.object(forKey: "autoNavScale") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoNavScale, forKey: "autoNavScale") }
+    }
+    /// v2.29 用户最后一次手动切档的时间（用于抑制自动切换）
+    private var lastManualScaleAt: Date = .distantPast
+
+    /// v2.29 按速度自动选择视野档位（米/厘米）
+    ///
+    /// 速度阈值参考城区骑行实际体验：
+    /// · < 18 km/h（≈5 m/s）→ 近景 30：路口密集的老城区，要看清下一个路口
+    /// · 18~38 km/h → 中景 50：市区常规骑行
+    /// · > 38 km/h → 远景 200：快速路，要看前方排队
+    func autoNavScaleTarget() -> Int {
+        let kph = currentSpeed * 3.6
+        if kph < 18 { return 30 }
+        if kph < 38 { return 50 }
+        return 200
+    }
+
+    /// v2.29 在定位回调里调用：按速度自动切视野
+    ///
+    /// 用户手动切过之后 20 秒内不动 —— 骑行中用户主动调了视野，
+    /// 说明他有明确意图（可能前方在修路、或者他就是想看远点），
+    /// 20 秒后（过了这个路口）再恢复自动。
+    private func updateAutoNavScale() {
+        guard navigating, autoNavScale else { return }
+        if Date().timeIntervalSince(lastManualScaleAt) < 20 { return }
+        let target = autoNavScaleTarget()
+        if navScaleTarget != target {
+            navScaleTarget = target
+            navScaleTick += 1
+        }
+    }
+
     /// v2.28 循环切换导航视野档位（近 / 中 / 远）
     ///
     /// 三档对应骑行时三种真实需求：
@@ -3505,6 +3836,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         case 40..<120: next = 200  // 中 → 远
         default: next = 30         // 远 → 近
         }
+        // v2.29 记录手动操作：20 秒内不被自动切换覆盖
+        lastManualScaleAt = Date()
         setNavScale(next)
         status = "视野：\(next) 米/厘米"
     }

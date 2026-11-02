@@ -973,6 +973,35 @@ struct ContentView: View {
                 Label("避开高速/高架", systemImage: "road.lanes")
             }
 
+            // v2.29 自动视野（按速度切换近/中/远景）
+            Toggle(isOn: Binding(
+                get: { model.autoNavScale },
+                set: { model.autoNavScale = $0 }
+            )) {
+                Label("按速度自动切换视野", systemImage: "speedometer")
+            }
+
+            // v2.29 骑行省电地图（降瓦片层级与并发，省流量与电量）
+            Toggle(isOn: Binding(
+                get: { model.ridingPowerSaveMap },
+                set: { model.ridingPowerSaveMap = $0 }
+            )) {
+                Label("省电地图（低细节）", systemImage: "leaf.fill")
+            }
+
+            // v2.29 骑行极简模式（竞品空白点）
+            //
+            // 调研发现：高德/百度只有"播报分级"，**没有一家做骑行视觉精简**。
+            // 但摩托车骑手戴头盔，视野只有一条缝 —— 底卡塞满信息反而看不清。
+            // 开启后：底卡只留「下一动作 + 距离 + 车速」，字号放大，
+            // 隐藏车道图、红绿灯读秒、地图缩放组与比例尺。
+            Toggle(isOn: Binding(
+                get: { model.ridingMinimalUI },
+                set: { model.ridingMinimalUI = $0 }
+            )) {
+                Label("骑行极简界面", systemImage: "rectangle.on.rectangle.angled")
+            }
+
             if !model.riderRisks.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(model.riderRisks.prefix(3)) { r in
@@ -993,7 +1022,7 @@ struct ContentView: View {
         } header: {
             Text("骑行偏好")
         } footer: {
-            Text("播报：简洁只报转弯；标准加电子眼；详细再加路名与剩余里程。开启「避开高速/高架」后，规划会优先选择禁摩风险更少的方案，导航到风险路段前会语音提醒。")
+            Text("播报：简洁只报转弯；标准加电子眼；详细再加路名与剩余里程。开启「避开高速/高架」后，规划会优先选择禁摩风险更少的方案，导航到风险路段前会语音提醒。\n\n「骑行极简界面」把屏幕信息降到最少、字号放大，适合戴头盔骑行时用余光看（高德/百度都还没做这个）。\n\n「按速度自动切换视野」：慢速看清下一个路口，上了快速路自动拉远看前方排队（手动调过视野后 20 秒内不会自动覆盖）。\n\n「省电地图」降低瓦片细节与并发请求数，骑行时手机没法插充电时更耐用。")
         }
     }
 
@@ -2307,6 +2336,8 @@ struct ContentView: View {
     private var routePlanTopCard: some View {
         VStack(spacing: 10) {
             routePlanHeader
+            // v2.29 起点被手动固定时的明示（竞品都没做好的机会点）
+            originFixedNotice
             travelModeRow
         }
         .padding(.horizontal, 14)
@@ -2321,6 +2352,46 @@ struct ContentView: View {
         // 既挡住地图、又把下卡的"开始导航"按钮埋住导致点不动。
         // 加了这条上限，即便将来卡片内容再变多，也不会再撑爆。
         .frame(maxHeight: UIScreen.main.bounds.height * 0.45)
+    }
+
+    /// v2.29 「起点不是当前位置」的明示条
+    ///
+    /// 调研发现：Google 强制"起点必须是当前位置，否则降级为预览"；
+    /// 高德/百度允许手动起点但**不告诉用户导航实际从哪开始**。
+    /// 用户在规划卡上看到"出发点：XX"，实际导航要从那个点起步 ——
+    /// 中间几公里他并没有意识到，到了那儿才被提示"请先去往出口"。
+    ///
+    /// 这里把这件事说清楚，并给一个一键纠正的按钮。
+    /// 只有距离超过 300 米才提示（就在附近时提示是噪声）。
+    @ViewBuilder
+    private var originFixedNotice: some View {
+        if let d = model.originDistanceFromUser(), d > 300 {
+            HStack(spacing: 8) {
+                Image(systemName: "figure.walk.departure")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.orange)
+                Text("将从「\(model.originName)」出发，距您约 \(d >= 1000 ? "\(d / 1000) 公里" : "\(d) 米")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button {
+                    haptic()
+                    model.resetOriginToCurrentLocation()
+                } label: {
+                    Text("从我这出发")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.orange, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 
     /// v2.28 出行方式选择器（高德样式的一排胶囊按钮）
@@ -3138,7 +3209,7 @@ struct ContentView: View {
                         model.selectedRouteIdx = idx
                         model.applyRouteChoice(c)
                     } label: {
-                        routeChoiceCard(c, selected: model.selectedRouteIdx == idx)
+                        routeChoiceCard(c, index: idx, selected: model.selectedRouteIdx == idx)
                     }
                     .buttonStyle(.plain)
                 }
@@ -3167,8 +3238,10 @@ struct ContentView: View {
     ///
     /// 选中态用**高德蓝**描边（截图里选中的那张是蓝框），
     /// 不再用旧版的绿色 —— 绿色会和地图上的路线色撞色，看不出哪个被选中。
-    private func routeChoiceCard(_ c: RouteChoice, selected: Bool) -> some View {
+    private func routeChoiceCard(_ c: RouteChoice, index: Int, selected: Bool) -> some View {
         let sel = selected
+        // v2.29 禁摩风险徽标（竞品方案卡没有这个维度，但对摩托车最关键）
+        let risk = model.choiceRisk(c, index: index)
         let distTxt = c.distanceM < 1000
             ? "\(c.distanceM)米"
             : String(format: "%.1f公里", Double(c.distanceM) / 1000.0)
@@ -3207,13 +3280,24 @@ struct ContentView: View {
                     .foregroundStyle(.orange)
                 }
             }
-            // 标签
-            Text(c.label)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(sel ? .white : .secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(sel ? accent : Color(.tertiarySystemFill), in: Capsule())
+            // 标签 + 禁摩风险徽标
+            HStack(spacing: 4) {
+                Text(c.label)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(sel ? .white : .secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(sel ? accent : Color(.tertiarySystemFill), in: Capsule())
+                // 禁摩风险（只在有风险时显示，避免给用户添噪）
+                if risk != .none {
+                    Text(risk.shortLabel)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(risk.isBlocked ? Color.red : Color.orange, in: Capsule())
+                }
+            }
         }
         .frame(width: 116, alignment: .leading)
         .padding(.horizontal, 10)
@@ -3547,11 +3631,17 @@ struct ContentView: View {
             DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { AnyView(routeBarOverlay) }
             // 地图缩放 + / - 按钮（含当前定位按钮）
             // 地点卡出现时暂时收起，避免整组压在卡片上
-            if tapPlace == nil && tipCard == nil {
-                DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
+            //
+            // v2.29 骑行极简模式：隐藏缩放组与比例尺。
+            // 头盔视野下这两块是纯视觉噪声，而且缩放按钮在骑行中几乎不用
+            //（有"视野"档位按钮就够了）。屏幕上少两块，地图信息更干净。
+            if !model.ridingMinimalUI {
+                if tapPlace == nil && tipCard == nil {
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
+                }
+                // v2.01 右上角比例尺（随缩放实时变化）
+                AnyView(scaleOverlay)
             }
-            // v2.01 右上角比例尺（随缩放实时变化）
-            AnyView(scaleOverlay)
         }
     }
 
@@ -3748,8 +3838,24 @@ struct ContentView: View {
 
     /// v2.02 高德式导航底部卡（内容分三层，总高度恒定 → 不再跳动）
     private func navBottomCard(_ ns: AppModel.NavStatus) -> some View {
-        let dimFg = Color.black.opacity(0.42)
-        let mainFg = Color.black.opacity(0.88)
+        // v2.29 修复「底部提示卡纯黑」（用户截图）
+        //
+        // 根因：背景用的是 Color(.systemBackground)，**深色模式下它就是纯黑**；
+        // 而卡内所有文字用的是 Color.black.opacity(0.88)（mainFg/dimFg）——
+        // 于是变成"黑底黑字"，一个字都看不见，屏幕上只剩一块纯黑矩形。
+        //
+        // 高德的做法是导航底卡**始终用浅色**（夜间也不反色），
+        // 这样骑行时无论系统主题如何，读数都清晰。
+        // 这里跟随外观设置：浅色模式用 systemBackground（白），
+        // 深色模式用固定深灰（不用纯黑，避免和地图底图糊在一起）。
+        let isDark = colorScheme == .dark
+        let cardBg = isDark ? Color(white: 0.16) : Color(.systemBackground)
+        let dimFg = isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.42)
+        let mainFg = isDark ? Color.white.opacity(0.95) : Color.black.opacity(0.88)
+        // v2.29 骑行极简模式：字号放大（头盔视野窄，字要更大才看得清）
+        let minimal = model.ridingMinimalUI
+        let actionFontSize: CGFloat = minimal ? 18 : 14
+        let speedFontSize: CGFloat = minimal ? 21 : 17
         let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
         let minTxt = "\(max(ns.remainS, 0) / 60)"
         let arriveTxt: String = {
@@ -3836,7 +3942,7 @@ struct ContentView: View {
                         .frame(width: 26)
                     VStack(alignment: .leading, spacing: 0) {
                         Text("\(navDist(ns.distToTurnM))\(navTurnText(t))")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: actionFontSize, weight: .semibold))
                             .foregroundStyle(mainFg)
                             .lineLimit(1)
                         if !t.roadName.isEmpty {
@@ -3852,7 +3958,7 @@ struct ContentView: View {
                 }
                 Spacer(minLength: 4)
                 Text("\(Int(ns.speedKph))")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: speedFontSize, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(mainFg)
                 Text("km/h")
@@ -3864,26 +3970,40 @@ struct ContentView: View {
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
             // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
-            ZStack {
-                if let nl = model.nextTrafficLight {
-                    lightCountdownRow(nl)
-                } else if let t = ns.nextTurn, ns.distToTurnM > 0, ns.distToTurnM < 300 {
-                    laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
+            //
+            // v2.29 骑行极简模式：这一层整体不渲染。
+            // 头盔视野下车道图和红绿灯读秒都是视觉噪声（调研确认竞品都还在显示这些），
+            // 极简档把它们全交给语音，屏幕只留"下一步做什么 + 多远 + 多快"。
+            if !minimal {
+                ZStack {
+                    if let nl = model.nextTrafficLight {
+                        lightCountdownRow(nl)
+                    } else if let t = ns.nextTurn, ns.distToTurnM > 0, ns.distToTurnM < 300 {
+                        laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
+                    }
                 }
+                .frame(height: 32)
+                .frame(maxWidth: .infinity)
+                .background(Color.black.opacity(0.02))
             }
-            .frame(height: 32)
-            .frame(maxWidth: .infinity)
-            .background(Color.black.opacity(0.02))
         }
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
-        .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
+        .background(cardBg, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
+            isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.07), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 4)
         .padding(.horizontal, 12)
     }
 
     /// v2.01 红绿灯倒计时行（导航卡顶部）：信号灯图形 + 红/绿 + 剩余秒 + 距离
+    ///
+    /// v2.29：文字颜色原先硬编码为黑色，深色模式下又是"黑底黑字"。
+    /// 改为跟随底卡配色（浅色模式黑字、深色模式白字）。
     private func lightCountdownRow(_ nl: (light: TrafficLight, dist: Int)) -> some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+        let isDark = colorScheme == .dark
+        let numFg = isDark ? Color.white.opacity(0.92) : Color.black.opacity(0.78)
+        let subFg = isDark ? Color.white.opacity(0.6) : Color.black.opacity(0.45)
+        let lampBg = isDark ? Color.black.opacity(0.55) : Color.black.opacity(0.85)
+        return TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let st = nl.light.state(at: ctx.date)
             HStack(spacing: 8) {
                 VStack(spacing: 3) {
@@ -3896,7 +4016,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 3)
-                .background(Color.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 5))
+                .background(lampBg, in: RoundedRectangle(cornerRadius: 5))
                 Text(st.red ? "红灯" : "绿灯")
                     .font(.caption.bold())
                     .foregroundStyle(st.red ? Color.red : Color(red: 0.13, green: 0.62, blue: 0.30))
@@ -3904,18 +4024,18 @@ struct ContentView: View {
                     Text("\(st.remain)")
                         .font(.system(size: 18, weight: .heavy))
                         .monospacedDigit()
-                        .foregroundStyle(Color.black.opacity(0.78))
+                        .foregroundStyle(numFg)
                     Text("秒")
                         .font(.caption2)
-                        .foregroundStyle(Color.black.opacity(0.45))
+                        .foregroundStyle(subFg)
                 }
                 Spacer()
                 Text(nl.dist > 8 ? "前方 \(nl.dist) 米 · 预计" : "已到路口")
                     .font(.caption2)
-                    .foregroundStyle(Color.black.opacity(0.45))
+                    .foregroundStyle(subFg)
             }
             .padding(.horizontal, 14)
-            .background((st.red ? Color.red : Color.green).opacity(0.07))
+            .background((st.red ? Color.red : Color.green).opacity(isDark ? 0.16 : 0.07))
         }
     }
 
