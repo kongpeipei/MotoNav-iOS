@@ -22,6 +22,7 @@
 
 import SwiftUI
 import UIKit
+import CoreLocation
 
 /// v2.27 诊断页
 struct DiagnosticsSheet: View {
@@ -145,7 +146,8 @@ struct DiagnosticsSheet: View {
             let hours = now.timeIntervalSince(lastSampleAt) / 3600.0
             if hours > 0.001 {
                 // 电池是百分比（0~1），下降为耗电
-                let delta = lastBattery - b
+                // v2.27：lastBattery 是 Float，b 也是 Float → 先转 Double 再算
+                let delta = Double(lastBattery) - Double(b)
                 drainPerHour = max(0, delta / hours * 100)
             }
         }

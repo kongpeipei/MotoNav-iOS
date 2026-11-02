@@ -2106,8 +2106,10 @@ final class AmapTileRenderer: MKOverlayRenderer {
 
             // 1) 离线包 / 磁盘缓存（后台读，命中即用，不再发网络请求）
             // v2.27（优化建议 #14）按 style 分目录：白天/夜间瓦片互不覆盖
-            let style = key.hasPrefix("n-") ? 8 : 7
-            let diskURL = Self.diskDirFor(style: style).appendingPathComponent("\(key).png")
+            // 变量名用 styleDir，与下面 URL 拼接用的 styleStr 区分开
+            // （原来两处都叫 style，同作用域重复声明 → invalid redeclaration）
+            let styleDir = key.hasPrefix("n-") ? 8 : 7
+            let diskURL = Self.diskDirFor(style: styleDir).appendingPathComponent("\(key).png")
             let offlineURL = Self.offlineDir.appendingPathComponent("\(key).png")
             for url in [offlineURL, diskURL] {
                 guard let img = UIImage(contentsOfFile: url.path) else { continue }
@@ -2133,14 +2135,16 @@ final class AmapTileRenderer: MKOverlayRenderer {
                 return
             }
             self.inflight += 1
-            let style = self.dark ? "8" : "7"
+            // v2.27：变量改名 styleStr —— 同作用域里已有一个 style（瓦片样式编号 Int），
+            // 重复声明会报 "invalid redeclaration of 'style'"
+            let styleStr = self.dark ? "8" : "7"
             self.lock.unlock()
 
             // v2.14 多子域轮询：webrd01-04 按瓦片坐标取模，降低单域限流概率
             let sd = ((x + y) % 4) + 1
             guard let url = URL(string: AmapTileOverlay.tileURL
                 .replacingOccurrences(of: "{SD}", with: "\(sd)")
-                .replacingOccurrences(of: "{STYLE}", with: style)
+                .replacingOccurrences(of: "{STYLE}", with: styleStr)
                 .replacingOccurrences(of: "{x}", with: "\(x)")
                 .replacingOccurrences(of: "{y}", with: "\(y)")
                 .replacingOccurrences(of: "{z}", with: "\(z)")) else {
@@ -2195,8 +2199,8 @@ final class AmapTileRenderer: MKOverlayRenderer {
                     self.markNeedsRedraw(rect)
                     // 瓦片落盘（同一队列，不阻塞渲染；离线/无网时命中磁盘直接显示）
                     // v2.27（建议 #14）按 style 分目录写入
-                    let style = key.hasPrefix("n-") ? 8 : 7
-                    let durl = Self.diskDirFor(style: style).appendingPathComponent("\(key).png")
+                    let styleDir = key.hasPrefix("n-") ? 8 : 7
+                    let durl = Self.diskDirFor(style: styleDir).appendingPathComponent("\(key).png")
                     if let data = data, !FileManager.default.fileExists(atPath: durl.path) {
                         try? data.write(to: durl)
                     }
