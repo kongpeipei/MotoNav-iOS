@@ -116,6 +116,26 @@ final class CameraSyncService: ObservableObject {
     /// 高德 Web 服务 Key（从 AppModel 取，注入）
     private var amapKey: String = ""
 
+    /// v2.27 上次同步时间（优化建议 #19：频率限制）
+    private var lastSyncAt: Date {
+        get {
+            let t = UserDefaults.standard.double(forKey: "pcLastSyncAt")
+            return t > 0 ? Date(timeIntervalSince1970: t) : .distantPast
+        }
+        set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "pcLastSyncAt") }
+    }
+
+    /// v2.27 官方渠道最小重复间隔（小时）
+    /// 24 小时内重复点「手动同步」时，官方渠道直接跳过（省配额、避免重复抓取）。
+    private let officialCooldownHours = 24
+
+    /// v2.27 网络渠道最小重复间隔（分钟）
+    /// 网络检索每次都要打 5 组搜索，间隔太短容易被限流。
+    private let webCooldownMinutes = 10
+
+    /// v2.27 本轮同步跳过了哪些渠道（用于给用户明确提示，而不是"没发现新点位"）
+    private(set) var skippedReason = ""
+
     /// v2.26 合肥市公安局公示栏目页
     private let officialListURLs = [
         "https://gaj.hefei.gov.cn/public/6811/list.html",
@@ -147,22 +167,44 @@ final class CameraSyncService: ObservableObject {
         defer { syncing = false }
 
         var result = CameraSyncResult()
+        skippedReason = ""
+
+        // v2.27（优化建议 #19）频率限制：
+        // 官方渠道 24 小时内不重复抓（每次都要过 JS 挑战、耗流量、拖慢界面）；
+        // 网络渠道 10 分钟内不重复搜（5 组关键词，容易被限流）。
+        let now = Date()
+        let officialSkip = now.timeIntervalSince(lastSyncAt) < Double(officialCooldownHours) * 3600
+        let webSkip = now.timeIntervalSince(lastSyncAt) < Double(webCooldownMinutes) * 60
 
         // ── ① 官方公示 ──────────────────────────────────────────────
-        let official = await fetchOfficialCandidates()
-        if !official.error.isEmpty {
-            result.officialError = official.error
+        if officialSkip {
+            result.notes.append("官方渠道：24 小时内已同步过，本次跳过")
+            skippedReason = "官方渠道 24 小时内已同步过，本次跳过"
+        } else {
+            let official = await fetchOfficialCandidates()
+            if !official.error.isEmpty {
+                result.officialError = official.error
+            }
+            result.officialAdded = official.candidates
+            result.notes.append(contentsOf: official.notes)
+            // 官方渠道跑成功才更新时间戳（失败了下次还能重试）
+            if official.error.isEmpty { lastSyncAt = now }
         }
-        result.officialAdded = official.candidates
-        result.notes.append(contentsOf: official.notes)
 
         // ── ② 网络平台 ──────────────────────────────────────────────
-        let web = await fetchWebCandidates(existing: official.candidates)
-        if !web.error.isEmpty {
-            result.webError = web.error
+        if webSkip {
+            result.notes.append("网络渠道：10 分钟内已检索过，本次跳过")
+            if skippedReason.isEmpty {
+                skippedReason = "网络渠道 10 分钟内已检索过，本次跳过"
+            }
+        } else {
+            let web = await fetchWebCandidates(existing: result.officialAdded)
+            if !web.error.isEmpty {
+                result.webError = web.error
+            }
+            result.webCandidates = web.candidates
+            result.notes.append(contentsOf: web.notes)
         }
-        result.webCandidates = web.candidates
-        result.notes.append(contentsOf: web.notes)
 
         lastSummary = summarize(result)
         return result

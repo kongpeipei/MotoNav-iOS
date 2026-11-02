@@ -271,6 +271,14 @@ jobs:
           (cd "$W" && zip -qry "$OUTABS" Payload)
           echo "== 体积 =="; ls -lh "$OUT" 2>&1 | awk '{print "  "$5"  "$9}'
 
+          # ---- 冒烟检查（优化建议 #21）----
+          # 这两类问题以前只能靠人工装机试（几分钟，且容易漏）：
+          #   1) 企业签后启动即闪退（漏签 appex / 改了 BundleID 没同步子标识）
+          #   2) 覆盖安装不生效（Build 号不变，iOS 沿用旧可执行文件）
+          # 现在对产出的 IPA 做静态检查，秒级完成。
+          echo "== 冒烟检查 =="
+          python3 .ci/smoke_ipa.py "$OUT" "$MARKETING"
+
           # ---- 结构校验：v2.03 起刻意不带扩展；带扩展反而会让重签失败 ----
           echo "== IPA 结构 =="
           APPIN="Payload/$(basename "$APP")/"   # 末尾斜杠：下面所有拼接都靠它

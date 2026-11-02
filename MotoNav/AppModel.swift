@@ -2920,6 +2920,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.23 选定候选途经点：算出"添加前 / 添加后"的行程时长，供 UI 对比
     /// - 不改当前 route（还没确认），只算数字
     /// - 添加前 = 起点 → 终点；添加后 = 起点 → 途经点 → 终点
+    ///
+    /// v2.27（优化建议 #16）**省掉一半高德请求**：
+    /// 旧实现为了拿"添加前"的时长，又发了一次完整的路线请求（fetchAll），
+    /// 而"添加前"的时长其实就是**当前已应用路线的时长**（routeDurationS）——
+    /// 当前路线已经规划过一次了，数字就在手上，没必要重算。
+    /// 现在只请求"添加后"（带候选途经点）那一次，请求数从 2 次降到 1 次。
     func previewWaypointCandidate(_ wp: RouteWaypoint) {
         waypointCandidate = wp
         viaCompareLoading = true
@@ -2927,15 +2933,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             viaCompareLoading = false
             return
         }
+        // "添加前" = 当前路线时长（已有，不用重算）
+        durationBeforeVia = routeDurationS
         let end = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
         let existing = waypointCoords
         Task {
-            async let beforeTask = RouteFetcher.fetchAll(from: start, to: end, amapKey: amapKey,
-                                                        via: existing)
-            async let afterTask = RouteFetcher.fetchAll(from: start, to: end, amapKey: amapKey,
-                                                       via: existing + [CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon)])
-            let (before, after) = await (beforeTask, afterTask)
-            durationBeforeVia = preferMotoRoutes(before).first?.durationS ?? 0
+            // 只请求"添加后"这一次
+            let after = await RouteFetcher.fetchAll(from: start, to: end, amapKey: amapKey,
+                                                   via: existing + [CLLocationCoordinate2D(latitude: wp.lat, longitude: wp.lon)])
             durationAfterVia = preferMotoRoutes(after).first?.durationS ?? 0
             viaCompareLoading = false
         }
