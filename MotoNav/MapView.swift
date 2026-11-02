@@ -760,12 +760,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastNavScaleTick = navScaleTick
             if navScaleTick > 0, let loc = userLocation {
                 context.coordinator.userMoved = false
-                let ptPerCm: Double = 38.0
-                let metersPerPoint = Double(navScaleTarget) / ptPerCm
-                let screenH = Double(map.bounds.height)
-                let spanMeters = metersPerPoint * max(screenH, 1)
-                // altitude ≈ 视野高度 / (2*tan(fov/2))，俯角 45° 时取经验系数 1.15
-                let altitude = max(spanMeters * 0.62, 120)
+                let screenH = map.bounds.height
+                // v2.28：用真实物理尺寸换算（不再用 ptPerCm=38 硬编码）
+                let altitude = altitudeForScale(navScaleTarget, screenH: screenH)
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .followWithHeading
                     var cam = map.camera
@@ -789,12 +786,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // v2.22 导航视野改为按"比例尺 1 厘米 = N 米"反推（默认 50 米/厘米）
                     var cam = map.camera
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-                    let ptPerCm: Double = 38.0
-                    let metersPerPoint = Double(navScaleTarget) / ptPerCm
-                    let screenH = Double(map.bounds.height)
-                    let spanMeters = metersPerPoint * max(screenH, 1)
-                    cam.centerCoordinateDistance = max(spanMeters * 0.62, 120)
-                    map.camera = cam
+                    // v2.28：与 navScaleTick 用同一套换算（真实物理尺寸）
+                    cam.centerCoordinateDistance = altitudeForScale(navScaleTarget,
+                                                                           screenH: map.bounds.height)
                 }
             }
         }
@@ -950,7 +944,23 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func reportScale(_ map: MKMapView) {
             guard map.bounds.height > 0 else { return }
-            let metersPerPoint = map.region.span.latitudeDelta * 111_000.0 / Double(map.bounds.height)
+            // v2.28 比例尺改用相机到中心点的地面距离（centerCoordinateDistance）
+            //
+            // 旧版用 map.region.span.latitudeDelta —— 那是「地图中心的地面跨度」，
+            // 只在正交俯视（pitch=0）时等于「屏幕上一格对应的地面距离」。
+            // 一旦 3D（导航态 pitch=45°），屏幕上下两端离相机的距离差很多，
+            // 同一段比例尺线代表的实际距离会随位置变化 → 显示的数字是错的。
+            //
+            // centerCoordinateDistance 是相机到地图中心的地面距离，
+            // 在中心点处 1pt 对应的地面距离 = 该距离 / (bounds.height/2)，
+            // 2D/3D 都对。
+            let cam = map.camera
+            let halfHeightPoints = Double(map.bounds.height) / 2.0
+            guard halfHeightPoints > 0 else { return }
+            let groundDistance = cam.centerCoordinateDistance > 0
+                ? cam.centerCoordinateDistance
+                : Double(map.region.span.latitudeDelta) * 111_000.0
+            let metersPerPoint = groundDistance / halfHeightPoints
             guard metersPerPoint > 0, metersPerPoint.isFinite else { return }
             let target = metersPerPoint * 58.0
             let nice: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500,
@@ -1073,6 +1083,24 @@ struct MapViewRepresentable: UIViewRepresentable {
         func setRegionProgrammatically(_ block: () -> Void) {
             programmaticMove = true
             block()
+        }
+
+        /// v2.28 「1 厘米 = N 米」→ 相机到地图中心的地面距离（米）
+        ///
+        /// 老实现用 `ptPerCm = 38.0` 硬编码 —— 但"1 厘米对应多少点"取决于
+        /// 设备的物理尺寸与缩放（iPhone SE 约 38pt/cm，iPhone Pro Max 约 34pt/cm），
+        /// 硬编码在不同机型上比例尺会差 10% 以上，用户看到的"1厘米=50米"名不副实。
+        ///
+        /// 现在用真实物理尺寸换算：UIScreen.nativeScale 给出像素密度，
+        /// 1 厘米 = 1/2.54 英寸，据此算出屏幕物理高度（厘米），
+        /// 再推出"每 pt 对应多少米"。任何机型都对得上。
+        func altitudeForScale(_ metersPerCm: Int, screenH: CGFloat) -> Double {
+            let nativeScale = UIScreen.main.nativeScale
+            // 屏幕物理高度（厘米）：points 本身就是物理单位（1pt = 1/scale 英寸）
+            let physicalHeightCm = Double(screenH) / nativeScale / 2.54
+            let metersPerPoint = Double(metersPerCm) / max(physicalHeightCm, 1)
+            // 相机到地图中心的地面距离 ≈ 屏幕半高对应的地面距离
+            return max(metersPerPoint * Double(screenH) / 2.0, 50)
         }
 
         /// v1.98 统一缩放入口：先脱离跟随（否则 MapKit 会立刻回中，表现为按钮点了没反应）
