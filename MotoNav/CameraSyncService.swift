@@ -260,14 +260,22 @@ final class CameraSyncService: ObservableObject {
             if seen.contains(path) { return }
             seen.insert(path)
 
-            // 标题：优先取该链接的锚文本（<a href="...">标题</a>）
+            // 标题：取 <a href="...">标题</a> 的锚文本
+            //
+            // 注意：锚文本里可能含中文标点（含 ">"），所以不能简单用 [^<>]+ 截断。
+            // 做法是找到下一个 "</a>"，取它之前的纯文本。
             let afterStart = m.range.location + m.range.length
-            let afterLen = min(400, max(0, ns.length - afterStart))
+            let afterLen = min(600, max(0, ns.length - afterStart))
             let snippet = ns.substring(with: NSRange(location: afterStart, length: afterLen))
             var title = ""
-            if let anchorRe = try? NSRegularExpression(pattern: "^\\s*([^<>]{4,120}?)\\s*<"),
-               let am = anchorRe.firstMatch(in: snippet, range: NSRange(location: 0, length: (snippet as NSString).length)) {
-                title = (snippet as NSString).substring(with: am.range(at: 1))
+            if let closeRange = snippet.range(of: "</a>") {
+                let inner = String(snippet[snippet.startIndex..<closeRange.lowerBound])
+                // 去掉可能嵌套的标签，但保留文字
+                title = inner
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                // 去掉残留的孤立 ">"（去掉标签后可能剩下半个尖括号）
+                title = title.replacingOccurrences(of: ">", with: "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
             if title.isEmpty {

@@ -1059,15 +1059,15 @@ struct ContentView: View {
         Task {
             let result = await camSync.sync(amapKey: model.amapKey)
 
-            // ① 官方新增：直接入图
-            if !result.officialAdded.isEmpty {
-                for c in result.officialAdded {
-                    // 判重：官方库里已有的同名/同位置点位跳过
-                    if camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) != nil { continue }
-                    _ = camStore.addSynced(name: c.name, district: c.district,
-                                          lat: c.lat, lon: c.lon, type: .redLight,
-                                          dirs: c.dirs, source: c.source)
-                }
+            // ① 官方新增：直接入图（官方来源权威，不需要问用户）
+            var officialAddedCount = 0
+            for c in result.officialAdded {
+                // 判重：官方库里已有的同名/同位置点位跳过
+                if camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) != nil { continue }
+                _ = camStore.addSynced(name: c.name, district: c.district,
+                                      lat: c.lat, lon: c.lon, type: .redLight,
+                                      dirs: c.dirs, source: c.source)
+                officialAddedCount += 1
             }
 
             // ② 网络来源：进待确认列表
@@ -1078,8 +1078,13 @@ struct ContentView: View {
 
             // 汇总文案
             var parts: [String] = []
-            parts.append(result.officialAdded.isEmpty
-                         ? "官方公示无新增" : "官方新增 \(result.officialAdded.count) 个")
+            if officialAddedCount > 0 {
+                parts.append("官方新增 \(officialAddedCount) 个")
+            } else if !result.officialAdded.isEmpty {
+                parts.append("官方公示无新增（均已收录）")
+            } else {
+                parts.append("官方公示无新增")
+            }
             if !pending.isEmpty { parts.append("网络发现 \(pending.count) 个待确认") }
             if !result.officialError.isEmpty { parts.append("官方站点：" + result.officialError) }
             if !result.webError.isEmpty { parts.append("网络检索：" + result.webError) }
