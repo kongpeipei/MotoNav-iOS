@@ -2491,7 +2491,7 @@ struct ContentView: View {
                 VStack(spacing: 2) {
                     Image(systemName: "yensign.circle")
                         .font(.footnote)
-                    Text("省钱小贴士V2")
+                    Text("省钱信息")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)

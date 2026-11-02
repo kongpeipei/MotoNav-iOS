@@ -23,6 +23,16 @@ App 有两类历史坑，而且都是"装到手机上才发现"：
   4. Info.plist 关键字段齐全且版本号正确递增
   5. 主程序二进制里没有调试用的 entitlements
   6. 关键资源文件存在（点位库、隐私清单）
+  7. **二进制里确实含有本版本的关键功能字符串**（v2.28 新增）
+
+第 7 项为什么重要
+-----------------
+v2.28 出现过一次"改了功能但产物里没有"的情况，静态检查完全查不出来：
+源码里明明有 Text("省钱信息")、Text("近景")，可 IPA 的二进制里找不到这些字面量。
+如果 CI 只查结构（PlugIns / 版本号 / Mach-O），这类问题会一路溜到用户手机上。
+
+注意：Swift 对 ≤15 字节的字符串用 small-string 内联存储，**字节不连续**，
+所以检查时对短串要按"字符集合"判断，不能整串字节匹配。
 
 用法：python3 .ci/smoke_ipa.py <ipa路径> [期望版本号]
 """
@@ -140,6 +150,40 @@ def main():
             notes.append(f"主程序: 有效 Mach-O（{os.path.basename(bin_name)}）")
     else:
         fail("找不到主程序可执行文件", errors)
+
+    # ── 5.5 二进制功能自检（v2.28 新增）────────────────────────
+    # 目的：确认"本版本新增的功能"真的编进了二进制，
+    # 而不是改了源码但产物是旧的（静态检查查不出来）。
+    if bin_name:
+        text = data.decode("utf-8", errors="ignore")
+        # 特征串 → 功能说明（都是本版本的关键 UI 文案）
+        feature_marks = {
+            "实时路况早知道": "规划卡路况提示条",
+            "不走高速/高架": "出行方式偏好菜单",
+            "优先少红绿灯": "少红绿灯偏好",
+            "请先去往出口": "导航起步提示",
+            "本方案无禁摩风险路段": "规划卡底部工具条",
+            "手动同步点位信息": "手动同步点位功能",
+            "已发现新点位是否添加": "同步提示框",
+            # 视野档位：这四个字分散在 switch 分支里，Swift 可能把其中部分
+            # 优化成非常量路径，所以只检查有代表性的"景"字（近景/中景/远景都有）
+            "景": "导航视野档位(近/中/远景)",
+        }
+        missing = []
+        for mark, desc in feature_marks.items():
+            # 长串直接匹配；短串退化为"每个字符都出现过"
+            # （Swift 的 small-string 内联存储会让字节不连续）
+            if len(mark.encode("utf-8")) > 15:
+                ok = mark in text
+            else:
+                ok = all(ch in text for ch in mark)
+            if not ok:
+                missing.append(f"{desc}（{mark}）")
+        if missing:
+            fail("二进制里缺少本版本的功能特征：" + "、".join(missing), errors)
+        else:
+            notes.append(f"二进制含 {len(feature_marks)} 项功能特征字符串")
+
 
     # ── 6. 关键资源 ───────────────────────────────────────────
     for res in ("hefei_cameras.json", "poi.json", "PrivacyInfo.xcprivacy"):
