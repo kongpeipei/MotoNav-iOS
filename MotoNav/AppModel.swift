@@ -232,6 +232,37 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.00 命名避开 AVSpeechSynthesizer 实例（speech），否则同名冲突
     var speechMode: SpeechLevel { SpeechLevel(rawValue: speechLevel) ?? .standard }
     /// 规划时优先避开高速/高架（摩托友好）
+    // v2.28 出行方式（高德样式规划卡的第一排选择器）
+    /// 摩托车是本 App 的核心场景：会规避禁摩路段、播报红绿灯
+    enum TravelMode: String, CaseIterable, Identifiable {
+        case moto, car
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .moto: return "摩托车"
+            case .car: return "汽车"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .moto: return "motorcycle"
+            case .car: return "car"
+            }
+        }
+    }
+
+    /// 当前出行方式
+    @Published var travelMode: TravelMode = .moto
+
+    /// v2.28 优先少红绿灯（排序偏好，作用于方案列表）
+    @Published var preferFewLights: Bool = UserDefaults.standard.object(forKey: "preferFewLights") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(preferFewLights, forKey: "preferFewLights") }
+    }
+    /// v2.28 优先距离最短（排序偏好，作用于方案列表）
+    @Published var preferShortest: Bool = UserDefaults.standard.object(forKey: "preferShortest") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(preferShortest, forKey: "preferShortest") }
+    }
+
     @Published var avoidHighway: Bool = UserDefaults.standard.object(forKey: "avoidHighway") as? Bool ?? false {
         didSet { UserDefaults.standard.set(avoidHighway, forKey: "avoidHighway") }
     }
@@ -1343,6 +1374,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 trackPoints.append(coord)
                 if loc.speed > 0 { maxSpeedKph = max(maxSpeedKph, loc.speed * 3.6) }
                 checkRiderRisks(at: coord)
+                // v2.28 导航进度更新放在这里（事件驱动），而不是 body 求值期 ——
+                // 后者会触发 SwiftUI 无限重算循环（"点开始导航就卡死"的根因）。
+                updateNavProgress(at: coord)
             }
             // v1.99 组队位置上报（未组队时是空操作）
             TeamRide.shared.update(lat: coord.latitude, lon: coord.longitude,
@@ -2727,7 +2761,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func preferMotoRoutes(_ list: [RouteChoice]) -> [RouteChoice] {
         guard !list.isEmpty else { return [] }
         var ordered = list
-        if avoidHighway, list.count > 1 {
+
+        // v2.28 出行方式影响排序权重：
+        // · 摩托车：禁摩路段是硬约束 —— 宁可多绕 2 分钟也不能穿过禁摩段，
+        //   所以禁摩风险权重给得最高（原来只在 avoidHighway 时才考虑）。
+        // · 汽车：禁摩路段无所谓，主要看用时。
+        if travelMode == .moto, list.count > 1 {
+            let scored = list.enumerated().map { (idx, c) -> (Int, Int, RouteChoice) in
+                let risk = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
+                    .filter { $0.kind.motoBlocked }
+                    .reduce(0) { $0 + max(1, $1.lengthM / 800) }
+                return (risk, idx, c)
+            }
+            ordered = scored.sorted { a, b in
+                a.0 == b.0 ? a.1 < b.1 : a.0 < b.0
+            }.map { $0.2 }
+        } else if avoidHighway, list.count > 1 {
             let scored = list.enumerated().map { (idx, c) -> (Int, Int, RouteChoice) in
                 let risk = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
                     .filter { $0.kind.motoBlocked }
@@ -2738,11 +2787,38 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 a.0 == b.0 ? a.1 < b.1 : a.0 < b.0
             }.map { $0.2 }
         }
+
+        // v2.28 用户显式偏好（"偏好"菜单里可开）：在推荐位确定后再做二次调整，
+        // 因为这两个偏好的定义就是"优先"，所以直接把最优的那条提到第一位。
+        if list.count > 1 {
+            if preferFewLights {
+                // 红绿灯少的优先（trafficLights < 0 表示高德没给数据，不参与比较）
+                let withLights = ordered.filter { $0.trafficLights >= 0 }
+                if let best = withLights.min(by: { $0.trafficLights < $1.trafficLights }),
+                   let idx = ordered.firstIndex(where: { sameRoute($0, best) }) {
+                    ordered.insert(best, at: 0)
+                    ordered.remove(at: idx + 1)
+                }
+            } else if preferShortest {
+                if let best = ordered.min(by: { $0.distanceM < $1.distanceM }),
+                   let idx = ordered.firstIndex(where: { sameRoute($0, best) }) {
+                    ordered.insert(best, at: 0)
+                    ordered.remove(at: idx + 1)
+                }
+            }
+        }
+
         let f = ordered[0]
         ordered[0] = RouteChoice(points: f.points, distanceM: f.distanceM, durationS: f.durationS,
                                  turns: f.turns, label: "推荐", poiCount: f.poiCount, traffic: f.traffic,
                                  trafficLights: f.trafficLights)
         return ordered
+    }
+
+    /// v2.28 判断两个方案是否是同一条路线（用于偏好调整时的身份比对）
+    private func sameRoute(_ a: RouteChoice, _ b: RouteChoice) -> Bool {
+        a.distanceM == b.distanceM && a.durationS == b.durationS
+            && a.points.count == b.points.count
     }
 
     // MARK: - v2.04 官方电警接近提醒（不需要导航）
@@ -3166,14 +3242,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let distToTurnM: Int
     }
 
+    /// v2.28 导航状态（**纯函数**，不做任何状态写入）
+    ///
+    /// 之前这个方法在 body 求值期间写 @Published（traveledIdx / navProgress），
+    /// 而它被 UI 调了 3 次（turnAheadCard / navTopBar / navBottomCard），
+    /// 于是形成死循环：
+    ///   body 求值 → 写 @Published → SwiftUI 标记需重算 → body 再求值 → 再写 …
+    /// 表现就是"点开始导航后界面彻底卡死，点不动也退不出"。
+    ///
+    /// 现在它只算不写。要更新进度，由定位回调（didUpdateLocations）调
+    /// `updateNavProgress(at:)` 来做 —— 那是事件驱动，不会自激。
     func navigationStatus(at coord: CLLocationCoordinate2D?) -> NavStatus? {
         guard !route.isEmpty, let start = route.first, let end = route.last else { return nil }
         let loc = coord ?? currentLocation
         guard let loc = loc else { return nil }
-        // v2.27（优化建议 #22）：隧道/失定位检测。
-        // 放在这里是因为导航中 UI 每次刷新都会调它 —— 失去定位的特征就是
-        // "不再有定位回调"，只在回调里检查永远触发不了。
-        checkTunnelSignal()
         let traveled = traveledM(route, loc)
         let total = routeDistanceM > 0 ? routeDistanceM : Int(distanceM(start, end))
         let remainM = max(0, total - traveled)
@@ -3182,16 +3264,41 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             : 0
         let speed = (currentSpeed > 0) ? currentSpeed * 3.6 : 0
         let nt = routeTurns.first { $0.fromStartM > traveled }
-        // v2.22 已行驶折线索引（走过的部分画灰）
-        let idx = nearestRouteIndex(route, loc)
-        if idx != traveledIdx { traveledIdx = idx }
-        // v2.22 导航进度（右侧竖直进度条）
-        if total > 0 { navProgress = min(1, max(0, Double(traveled) / Double(total))) }
         return NavStatus(remainM: remainM, remainS: remainS, speedKph: speed,
                          nextTurn: nt, distToTurnM: nt.map { $0.fromStartM - traveled } ?? 0)
     }
 
+    /// v2.28 导航进度更新（由定位回调驱动，**不在 body 求值期调用**）
+    ///
+    /// "已走过的路变灰"（traveledIdx）和右侧竖直进度条（navProgress）
+    /// 都需要随位置变化更新，但更新动作绝不能发生在 body 求值期间 ——
+    /// 那会触发 SwiftUI 的无限重算循环（见 navigationStatus 的说明）。
+    ///
+    /// 这里做两件事：
+    /// 1. 只在值真的变化时才写 @Published（避免无谓的整树重算）；
+    /// 2. traveledIdx / navProgress 的计算全部走 O(1) 的缓存路径。
+    func updateNavProgress(at coord: CLLocationCoordinate2D?) {
+        guard navigating, !route.isEmpty else { return }
+        let loc = coord ?? currentLocation
+        guard let loc = loc else { return }
+        // 已走过的路变灰：折线最近点索引
+        let idx = nearestRouteIndex(route, loc)
+        if idx != traveledIdx { traveledIdx = idx }
+        // 右侧进度条
+        let total = routeDistanceM
+        if total > 0 {
+            let traveled = traveledM(route, loc)
+            let p = min(1, max(0, Double(traveled) / Double(total)))
+            // 变化小于 0.3% 就不写 —— 肉眼看不出差异，但能显著减少重算次数
+            if abs(p - navProgress) > 0.003 { navProgress = p }
+        }
+    }
+
     /// v2.22 最近折线点索引（走过的路变灰用；带缓存，增量搜索）
+    ///
+    /// v2.28：距离计算改用平面近似（flatDist），不再为每个点构造 CLLocation。
+    /// 这个方法每次定位都会跑（窗口 160 点 + 偶尔全量），CLLocation 的对象分配
+    /// 在导航态高频调用下是明显的 GC 压力来源。
     private var idxCache = 0
     private var idxCacheKey = ""
     private func nearestRouteIndex(_ pts: [CLLocationCoordinate2D], _ loc: CLLocationCoordinate2D) -> Int {
@@ -3201,12 +3308,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let lo = max(0, idxCache - 80), hi = min(pts.count - 1, idxCache + 80)
         var bestI = lo, bestD = Double.greatestFiniteMagnitude
         for i in lo...hi {
-            let d = distanceM(loc, pts[i])
+            let d = flatDist(loc, pts[i])
             if d < bestD { bestD = d; bestI = i }
         }
         if (bestI == lo && lo > 0) || (bestI == hi && hi < pts.count - 1) {
             for i in pts.indices {
-                let d = distanceM(loc, pts[i])
+                let d = flatDist(loc, pts[i])
                 if d < bestD { bestD = d; bestI = i }
             }
         }
@@ -3249,8 +3356,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         let traveled = traveledM(route, loc)
         // 当前位置到路线折线的最近距离（判断"还没上主线"）
-        var minD = Double.greatestFiniteMagnitude
-        for p in route { minD = min(minD, distanceM(loc, p)) }
+        //
+        // v2.28：旧版是 `for p in route { minD = min(minD, distanceM(loc, p)) }` ——
+        // 对整条路线（可达 2000+ 点）做全量扫描，且 distanceM 每次构造 2 个 CLLocation。
+        // 而这个方法在 body 求值期被调用（导航卡每秒刷新数次），
+        // 于是每秒几万次对象分配 → 主线程被拖垮，界面"卡住"。
+        //
+        // 现在改成"只算最近点附近那一小段"：
+        // traveledM 已经找到了路线上的最近点索引，最小距离必然出现在它附近，
+        // 扫 ±10 个点足够，误差在 1 米以内。
+        let minD = minDistanceToRoute(loc)
         // 车道建议：用 LaneGuideBuilder 生成（高德没给车道数据时按动作合成）
         let nextTurn = routeTurns.first { $0.fromStartM > traveled }
         let guides = LaneGuideBuilder.guides(turn: nextTurn)
@@ -3258,6 +3373,21 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                          traveledM: traveled,
                                          minDistanceToRouteM: minD,
                                          laneGuides: guides)
+    }
+
+    /// v2.28 定位点到路线折线的最小距离（米）
+    ///
+    /// 用 traveledM 已缓存的最近点索引，只扫附近一小段 —— O(1) 而非 O(n)。
+    private func minDistanceToRoute(_ loc: CLLocationCoordinate2D) -> Double {
+        guard route.count > 1 else { return .greatestFiniteMagnitude }
+        let center = min(traveledCacheIdx, route.count - 1)
+        var minD = Double.greatestFiniteMagnitude
+        let lo = max(0, center - 10)
+        let hi = min(route.count - 1, center + 10)
+        for i in lo...hi {
+            minD = min(minD, flatDist(loc, route[i]))
+        }
+        return minD
     }
 
     /// v2.22 起点内部道路连接：定位点 → 路线起点（道路入口）
@@ -3365,8 +3495,23 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// （navigationStatus / nextTrafficLight / currentRoadName 各一次）→ 每秒上万次距离计算，
     /// 这是导航中"地图发涩、卡片一顿一顿"的主要来源。
     /// 现在只在上次位置附近 ±80 个点里找最近点，跑到窗口边缘才做一次全量校正。
+    ///
+    /// v2.28 关键优化：**前缀距离表**
+    /// 旧版即使找到了最近点，还要从 0 开始逐段累加到该点（O(n) 次距离计算），
+    /// 路线 2000 点时每次调用仍是 2000 次 CLLocation 构造 + 距离计算。
+    /// 现在预先算好"从起点到第 i 点的累计距离"（cumDist），
+    /// 查表即得 O(1) 结果。这让"每次定位都算一次里程"变得廉价。
     private var traveledCacheIdx = 0
     private var traveledRouteKey = ""
+    /// 前缀距离表：cumDist[i] = 从 pts[0] 沿折线到 pts[i] 的累计距离（米）
+    private var traveledCumDist: [Double] = []
+    /// 平面近似距离（米）：比 CLLocation.distance 快一个数量级，且不产生对象分配
+    private func flatDist(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let dy = (a.latitude - b.latitude) * 110540.0
+        let dx = (a.longitude - b.longitude) * 111320.0
+            * cos((a.latitude + b.latitude) * 0.5 * .pi / 180.0)
+        return (dx * dx + dy * dy).squareRoot()
+    }
 
     private func traveledM(_ pts: [CLLocationCoordinate2D], _ loc: CLLocationCoordinate2D) -> Int {
         guard pts.count > 1 else { return 0 }
@@ -3374,25 +3519,31 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if key != traveledRouteKey {
             traveledRouteKey = key
             traveledCacheIdx = 0
+            // 重建前缀距离表（路线换了才重建）
+            var cum = [Double](repeating: 0, count: pts.count)
+            for i in 1..<pts.count {
+                cum[i] = cum[i - 1] + flatDist(pts[i - 1], pts[i])
+            }
+            traveledCumDist = cum
         }
         let lo = max(0, traveledCacheIdx - 80)
         let hi = min(pts.count - 1, traveledCacheIdx + 80)
         var bestI = lo
         var bestD = Double.greatestFiniteMagnitude
         for i in lo...hi {
-            let d = distanceM(loc, pts[i])
+            let d = flatDist(loc, pts[i])
             if d < bestD { bestD = d; bestI = i }
         }
         // 最近点贴着窗口边缘 → 说明可能已经跑出窗口，全量校正一次
         if (bestI == lo && lo > 0) || (bestI == hi && hi < pts.count - 1) {
             for i in pts.indices {
-                let d = distanceM(loc, pts[i])
+                let d = flatDist(loc, pts[i])
                 if d < bestD { bestD = d; bestI = i }
             }
         }
         traveledCacheIdx = bestI
-        var acc = 0.0
-        for i in 0..<bestI { acc += distanceM(pts[i], pts[i + 1]) }
+        // O(1) 查表得到前段距离（旧版是 O(n) 累加）
+        let acc = bestI < traveledCumDist.count ? traveledCumDist[bestI] : 0
         return Int(acc + bestD / 2)
     }
 

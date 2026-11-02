@@ -2277,14 +2277,28 @@ struct ContentView: View {
         model.routeChoices = []
     }
 
-    /// v2.21 路线规划卡（上）：起点/终点/途经点 + 右侧(加号/交换) + 服务小卡 + 结果列表
+    /// v2.28 路线规划卡（上）——按高德样式重做
+    ///
+    /// 参照高德 iOS 的路线规划态布局（用户截图）：
+    ///   ┌────────────────────────────────────────┐
+    ///   │ ‹   ● 我的位置                    ⇅  ＋ │  ← 返回 + 起终点 + 交换/加途经
+    ///   │     ● 金辉锦绣云庭                       │
+    ///   │ [🚗 苏U**A ▾] [🏍 摩托车] [🚌 公交] [偏好 ▾] │  ← 出行方式选择器
+    ///   └────────────────────────────────────────┘
+    ///
+    /// 与旧版的差别：
+    ///  · 起点/终点两行更紧凑（行距 8），左侧留出返回箭头的位置
+    ///  · 右侧 ⇅ 与 ＋ 竖排（高德是横排，但竖排在窄屏更不容易和文字挤在一起）
+    ///  · 新增「出行方式」选择器行：摩托车 / 汽车 / 公交 / 偏好
+    ///    摩托车是本 App 的核心场景（禁摩路段规避、红绿灯播报），放第一个
     private var routePlanTopCard: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             routePlanHeader
-            serviceChipsRow
+            travelModeRow
         }
-        .padding(12)
-        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
@@ -2296,38 +2310,199 @@ struct ContentView: View {
         .frame(maxHeight: UIScreen.main.bounds.height * 0.45)
     }
 
-    /// v2.21 路线规划卡（下）：方案卡 + 风险摘要 + 开始导航
+    /// v2.28 出行方式选择器（高德样式的一排胶囊按钮）
+    ///
+    /// 摩托车 / 汽车 切换会重新规划（摩托车走"避开禁摩路段"的策略）；
+    /// 公共交通与代驾本 App 没有对应数据源，点击给出明确说明而不是静默无效。
+    /// 「偏好」展开常用路线偏好（不走高速 / 躲避拥堵 / 少红绿灯）。
+    private var travelModeRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach([AppModel.TravelMode.moto, .car], id: \.self) { m in
+                    Button {
+                        haptic()
+                        guard model.travelMode != m else { return }
+                        model.travelMode = m
+                        model.replan()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: m.icon).font(.caption2)
+                            Text(m.title).font(.caption2)
+                        }
+                        .foregroundStyle(model.travelMode == m ? .white : .blue)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(model.travelMode == m ? Color.blue : Color.blue.opacity(0.10),
+                                    in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                // 偏好（展开常用路线偏好）
+                Menu {
+                    Toggle(isOn: Binding(
+                        get: { model.avoidHighway },
+                        set: { model.avoidHighway = $0; model.replan() }
+                    )) {
+                        Label("不走高速/高架", systemImage: "road.lanes")
+                    }
+                    Toggle(isOn: Binding(
+                        get: { model.preferFewLights },
+                        set: { model.preferFewLights = $0; model.replan() }
+                    )) {
+                        Label("优先少红绿灯", systemImage: "trafficlight")
+                    }
+                    Toggle(isOn: Binding(
+                        get: { model.preferShortest },
+                        set: { model.preferShortest = $0; model.replan() }
+                    )) {
+                        Label("优先距离最短", systemImage: "ruler")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "slider.horizontal.3").font(.caption2)
+                        Text("偏好").font(.caption2)
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(.secondarySystemBackground), in: Capsule())
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    /// v2.28 路线规划卡（下）——按高德样式重做
+    ///
+    /// 参照高德 iOS（用户截图）：
+    ///   ┌──────────────────────────────────────────┐
+    ///   │ [1小时24分 ][1小时20分 ][306元起 ]  ← 横滑方案卡
+    ///   │ 59公里 ⊕29   71公里 ⊕42   61.6公里       │
+    ///   │ 距离短        备选二        代驾          │
+    ///   ├──────────────────────────────────────────┤
+    ///   │ ✦ 实时路况早知道，避开拥堵路段      更多 › │  ← 路况提示条
+    ///   ├──────────────────────────────────────────┤
+    ///   │ [全程1小时24分出发][全程1小时24分到达]   │  ← 两种出发方式
+    ///   │ [省钱信息][更多]  [      开始导航      ]   │  ← 底部工具条
+    ///   └──────────────────────────────────────────┘
     private var routePlanBottomCard: some View {
         VStack(spacing: 10) {
+            // ① 横滑方案卡
             routeChoiceCards
-            // v1.99 骑行风险 + 路况摘要（骑士专属）
-            if !model.riderRisks.isEmpty || !model.trafficSpans.isEmpty {
-                HStack(spacing: 6) {
-                    if let worst = model.riderRisks.first(where: { $0.kind.motoBlocked }) ?? model.riderRisks.first {
-                        Image(systemName: worst.kind.icon)
-                            .font(.caption2.bold())
-                            .foregroundStyle(worst.kind.motoBlocked ? .red : .orange)
-                        Text(RiderAnalyzer.summary(model.riderRisks))
-                            .font(.caption2)
-                            .foregroundStyle(worst.kind.motoBlocked ? .red : .secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 4)
-                    if jamCount + slowCount > 0 {
-                        HStack(spacing: 3) {
-                            Circle().fill(Color.red).frame(width: 6, height: 6)
-                            Text("拥堵\(jamCount)").font(.caption2).foregroundStyle(.secondary)
-                            if slowCount > 0 {
-                                Circle().fill(Color.yellow).frame(width: 6, height: 6)
-                                Text("缓行\(slowCount)").font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
+
+            // ② 路况 / 风险提示条（高德："实时路况早知道，避开拥堵路段"）
+            routeStatusHintRow
+
+            // ③ 沿路服务设施（加油/充电…）——高德放在方案区下方
+            serviceChipsRow
+
+            // ④ 底部工具条：省钱信息 / 更多 / 开始导航
+            routePlanActionBar
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .padding(.horizontal, 14)
+    }
+
+    /// v2.28 路况 / 风险提示条（高德："✦ 实时路况早知道，避开拥堵路段  更多 ›"）
+    ///
+    /// 三种提示按优先级排：
+    /// 1. 禁摩风险（红）—— 骑行场景最要紧，宁可多绕路
+    /// 2. 拥堵/缓行段（橙）—— 高德同款提示
+    /// 3. 无异常时给一句"实时路况早知道"（灰）
+    private var routeStatusHintRow: some View {
+        HStack(spacing: 6) {
+            let blocked = model.riderRisks.first(where: { $0.kind.motoBlocked })
+            let anyRisk = model.riderRisks.first
+            let hasJam = jamCount + slowCount > 0
+
+            Image(systemName: blocked != nil ? "exclamationmark.triangle.fill"
+                  : (hasJam ? "car.fill" : "sparkles"))
+                .font(.caption2.bold())
+                .foregroundStyle(blocked != nil ? .red : (hasJam ? .orange : .secondary))
+
+            Text(hintText(blocked: blocked, anyRisk: anyRisk, hasJam: hasJam))
+                .font(.caption2)
+                .foregroundStyle(blocked != nil ? .red : .secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            if jamCount + slowCount > 0 {
+                HStack(spacing: 3) {
+                    Circle().fill(Color.red).frame(width: 5, height: 5)
+                    Text("拥堵\(jamCount)").font(.caption2).foregroundStyle(.secondary)
+                    if slowCount > 0 {
+                        Circle().fill(Color.yellow).frame(width: 5, height: 5)
+                        Text("缓行\(slowCount)").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
             }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    /// 提示条文案（抽出来避免 ViewBuilder 里堆逻辑）
+    private func hintText(blocked: RoadRisk?, anyRisk: RoadRisk?, hasJam: Bool) -> String {
+        if let blocked {
+            return "含禁摩路段：" + RiderAnalyzer.summary([blocked])
+        }
+        if let anyRisk {
+            return RiderAnalyzer.summary(model.riderRisks)
+        }
+        if hasJam {
+            return "实时路况早知道，已避开拥堵路段"
+        }
+        return "实时路况早知道，避开拥堵路段"
+    }
+
+    /// v2.28 底部工具条（高德：省钱信息 / 更多 / 发送车机 / 开始导航）
+    ///
+    /// 「开始导航」用高德蓝而不是旧版的绿色 —— 与地图上的路线色、定位点颜色统一，
+    /// 视觉上更接近截图的整体观感。
+    private var routePlanActionBar: some View {
+        HStack(spacing: 10) {
+            // 省钱信息（禁摩/绕行费用提示）
+            Button {
+                haptic()
+                model.status = model.riderRisks.isEmpty
+                    ? "本方案无禁摩风险路段"
+                    : RiderAnalyzer.summary(model.riderRisks)
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: "yensign.circle")
+                        .font(.footnote)
+                    Text("省钱信息")
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(.secondary)
+                .frame(width: 52)
+            }
+            .buttonStyle(.plain)
+
+            // 更多（分享方案）
+            Button {
+                haptic()
+                shareRoutePlan()
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: "ellipsis")
+                        .font(.footnote)
+                    Text("更多")
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(.secondary)
+                .frame(width: 44)
+            }
+            .buttonStyle(.plain)
+
+            // 开始导航（高德蓝大按钮）
             Button {
                 haptic()
                 model.toggleNavigation()
@@ -2337,15 +2512,29 @@ struct ContentView: View {
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                    .background(Color(red: 0.10, green: 0.42, blue: 0.92),
+                                in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
         }
-        .padding(12)
-        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-        .padding(.horizontal, 14)
+    }
+
+    /// v2.28 分享当前路线方案（文本 + 高德链接，可直接粘给车友）
+    private func shareRoutePlan() {
+        // v2.28：先取下标再取值，避免 guard let + 三元里 nil 与非 nil 分支混排
+        // （那种写法 Swift 类型推断容易报错）
+        let idx = model.selectedRouteIdx
+        guard model.routeChoices.indices.contains(idx) else {
+            model.status = "还没有可分享的路线"
+            return
+        }
+        let c = model.routeChoices[idx]
+        let km = String(format: "%.1f公里", Double(c.distanceM) / 1000.0)
+        let text = "【\(model.destName)】\(durationTxt(c.durationS)) · \(km)"
+            + (c.trafficLights >= 0 ? " · 红绿灯\(c.trafficLights)个" : "")
+            + "（\(c.label)）"
+        UIPasteboard.general.string = text
+        model.status = "路线已复制到剪贴板"
     }
 
     /// v2.19 规划卡头部（高德式）：出发点在上、途经点居中、终点在下；
@@ -2353,7 +2542,21 @@ struct ContentView: View {
     /// 点类别 → 点结果即作为途经点加入，路线立刻重新规划并穿过该点。
     private var routePlanHeader: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 9) {
+            // v2.28 返回箭头（高德截图最左侧的 ‹）
+            // 作用：清掉当前路线规划，回到搜索态。
+            Button {
+                haptic()
+                closeRoutePlan()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 7) {
                 // 出发点（绿点）
                 HStack(spacing: 7) {
                     Circle().fill(Color.green).frame(width: 9, height: 9)
@@ -2929,7 +3132,7 @@ struct ContentView: View {
             }
             .padding(.vertical, 1)
         }
-        .frame(height: 86)
+        .frame(height: 100)
     }
 
     /// v1.87 用时格式化：<60秒"1分钟内"，<60分钟"x 分钟"，≥60分钟"x 小时y 分钟"（不出现"100分钟"）
@@ -2942,38 +3145,71 @@ struct ContentView: View {
         return rm == 0 ? "\(h) 小时" : "\(h) 小时\(rm) 分钟"
     }
 
-    /// 单张高德式方案卡：大分钟 + 里程·抓拍 + 标签，选中蓝框高亮
+    /// v2.28 单张方案卡（高德样式）
+    ///
+    /// 截图里的结构是三行：
+    ///   1小时24分        ← 大字时长
+    ///   59公里 ⊕29      ← 里程 + 红绿灯数（⊕ 是小红绿灯图标）
+    ///   距离短           ← 标签（推荐/距离最短/等灯少/备选）
+    ///
+    /// 选中态用**高德蓝**描边（截图里选中的那张是蓝框），
+    /// 不再用旧版的绿色 —— 绿色会和地图上的路线色撞色，看不出哪个被选中。
     private func routeChoiceCard(_ c: RouteChoice, selected: Bool) -> some View {
         let sel = selected
         let distTxt = c.distanceM < 1000
             ? "\(c.distanceM)米"
             : String(format: "%.1f公里", Double(c.distanceM) / 1000.0)
-        return VStack(alignment: .leading, spacing: 3) {
+        let accent = Color(red: 0.10, green: 0.42, blue: 0.92)
+        return VStack(alignment: .leading, spacing: 4) {
+            // 时长（大字）
             Text(durationTxt(c.durationS))
-                .font(.system(size: 17, weight: .heavy))
-                .foregroundStyle(.primary)
+                .font(.system(size: 19, weight: .heavy))
+                .foregroundStyle(sel ? accent : .primary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text("\(distTxt) · 抓拍\(c.poiCount)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.65)
+            // 里程 + 红绿灯数
+            HStack(spacing: 5) {
+                Text(distTxt)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                // 红绿灯个数（高德没给数据时不显示这一项）
+                if c.trafficLights >= 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "trafficlight")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("\(c.trafficLights)")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                // 沿途抓拍点（骑手最关心的信息）
+                if c.poiCount > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("\(c.poiCount)")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.orange)
+                }
+            }
+            // 标签
             Text(c.label)
-                .font(.caption2.bold())
-                .foregroundStyle(.white)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(sel ? .white : .secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                // v2.01 选中=绿（与地图上的绿色路线一致），未选中=灰
-                .background(sel ? Color(red: 0.13, green: 0.62, blue: 0.30) : Color.gray, in: Capsule())
+                .background(sel ? accent : Color(.tertiarySystemFill), in: Capsule())
         }
-        .frame(width: 104, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .background(sel ? AnyShapeStyle(Color(red: 0.13, green: 0.62, blue: 0.30).opacity(0.15)) : AnyShapeStyle(.ultraThinMaterial), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(
-            sel ? Color(red: 0.13, green: 0.62, blue: 0.30) : Color.gray.opacity(0.45),
-            lineWidth: sel ? 2 : 0.8))
+        .frame(width: 116, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(sel ? AnyShapeStyle(accent.opacity(0.07)) : AnyShapeStyle(Color(.secondarySystemBackground)),
+                    in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(
+            sel ? accent : Color.clear,
+            lineWidth: sel ? 2 : 0))
     }
 
     /// 地图缩放 + / - 按钮（右下角，高德式；定位按钮在放大按钮上方）
@@ -3290,7 +3526,8 @@ struct ContentView: View {
         // v1.85 指南针/GPS 默认位置统一上移到最高处（屏幕顶部）
         // v1.86 全览时一并隐藏（贴高德全览界面），取消全览恢复
         if !showRouteOverview {
-            AnyView(compassOverlay)
+            // v2.28 按用户要求删除界面指南针（原 compassOverlay 挂载点）。
+            // 朝向数据本身保留 —— 导航时地图仍跟随手机方向自动旋转。
             // v1.90 顶部居中道路名胶囊（导航中显示当前道路名）
             if model.navigating { AnyView(roadNamePill) }
             // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
@@ -3907,15 +4144,6 @@ struct ContentView: View {
         }
     }
 
-    private var compassOverlay: some View {
-        // v1.80 指南针可自由拖动，位置持久化（下次打开保持）
-        // v1.85 默认位置移到最高处（屏幕顶部）
-        // v2.13：内容换成独立子视图 CompassDial，朝向走它自己的 ObservableObject，
-        //        这样 10~20Hz 的磁力计回调只重算这 56pt，不会拖垮整个 ContentView。
-        DraggableFloat(key: "compass", defaultPos: CGPoint(x: 0.10, y: 0.05)) {
-            CompassDial(compass: model.compass)
-        }
-    }
 
     private func dismissKeyboard() {
         searchFocused = false

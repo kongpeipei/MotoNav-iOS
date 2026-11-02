@@ -143,7 +143,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.showsUserLocation = true
-        map.showsCompass = false // 使用自绘指南针（左上角）
+        map.showsCompass = false // v2.28：按用户要求删除所有界面指南针（含系统自带的）
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
         map.isRotateEnabled = true  // 双指旋转地图
         map.delegate = context.coordinator
@@ -406,8 +406,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                         map.addAnnotation(RouteEndAnnotation(kind: "via", coordinate: coord))
                     }
                 }
-                for j in want.count..<existing.count {
-                    map.removeAnnotation(existing[j])
+                // v2.28 修复致命崩溃（用户报告"点加油地点直接退出软件"）：
+                //
+                // 旧写法 `for j in want.count..<existing.count` 在 want.count > existing.count 时
+                // 会构造**反向区间**。首次添加途经点时地图上还没有 "via" 标注，
+                // 于是区间是 1..<0 —— Range 的下标访问会触发
+                // "Fatal error: Can't get index(1) from range 1..<0"，
+                // 这是硬 trap（Release 也生效），进程立即终止，用户看到的就是"闪退"。
+                //
+                // 修法：只有 want 比 existing 少的时候才需要删除多余标注，
+                // 并且显式用 if 判断代替可能反向的区间。
+                if want.count < existing.count {
+                    for j in want.count..<existing.count {
+                        map.removeAnnotation(existing[j])
+                    }
                 }
             }
         }
@@ -878,14 +890,16 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastZoomInTick = zoomInTick
             if zoomInTick > 0 {
                 let reg = map.region
-                context.coordinator.zoom(map, by: 0.5, center: reg.center)
+                // v2.28 倍率从 0.5 调到 0.62：altitude 语义下 0.5 太猛（一下从街道跳到街区）
+                context.coordinator.zoom(map, by: 0.62, center: reg.center)
             }
         }
         if zoomOutTick != context.coordinator.lastZoomOutTick {
             context.coordinator.lastZoomOutTick = zoomOutTick
             if zoomOutTick > 0 {
                 let reg = map.region
-                context.coordinator.zoom(map, by: 2.0, center: reg.center)
+                // v2.28 倍率从 2.0 调到 1.6：缩小时过猛容易越过瓦片层级导致白花
+                context.coordinator.zoom(map, by: 1.6, center: reg.center)
             }
         }
     }
@@ -1062,18 +1076,36 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         /// v1.98 统一缩放入口：先脱离跟随（否则 MapKit 会立刻回中，表现为按钮点了没反应）
+        ///
+        /// v2.28 重写：**改用相机高度（altitude）缩放，而不是 region.span**
+        ///
+        /// 为什么必须换：
+        /// region.span 是「地面上的纬经度跨度」，而用户在屏幕上看到的是「相机离地多高」。
+        /// 两者只在正交俯视（pitch=0）时近似一致。一旦进入 3D（导航态 pitch=45°），
+        /// 用 span 缩放会出现"点 + 屏幕几乎不变"的错觉 —— 用户会觉得按钮坏了。
+        ///
+        /// MKMapCamera.altitude 才是视觉缩放的正确度量：
+        /// 高度减半 ≈ 画面放大一倍，2D/3D 表现一致。
+        ///
+        /// 另外加了上下限：太低会进入"贴地"（瓦片细节不足、看不到路网），
+        /// 太高会超出瓦片层级范围（出现白花/模糊）。
         func zoom(_ map: MKMapView, by factor: Double, center: CLLocationCoordinate2D) {
             if map.userTrackingMode != .none {
                 map.setUserTrackingMode(.none, animated: false)
             }
             userMoved = true
-            let span = map.region.span
-            let lat = min(89.0, max(0.0005, span.latitudeDelta * factor))
-            let lon = min(179.0, max(0.0005, span.longitudeDelta * factor))
             setRegionProgrammatically {
-                map.setRegion(MKCoordinateRegion(center: center,
-                                                 span: MKCoordinateSpan(latitudeDelta: lat, longitudeDelta: lon)),
-                              animated: true)
+                var cam = map.camera
+                // 相机高度：点 + 用当前值，点 - 用当前值；factor < 1 = 放大
+                let current = cam.altitude > 0 ? cam.altitude : 2000
+                var target = current * factor
+                // v2.28 上下限：50m ~ 60km
+                // 下限 50m：再近也看不出更多细节（瓦片最小层级约 50m）
+                // 上限 60km：再远瓦片层级不够，会出现模糊/白块
+                target = min(60_000, max(50, target))
+                cam.altitude = target
+                cam.centerCoordinate = MapGeo.toGCJ(center)
+                map.camera = cam
             }
         }
 
