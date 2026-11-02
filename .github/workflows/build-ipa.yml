@@ -47,6 +47,76 @@ env:
   ARTIFACT: MotoNav-unsigned
 
 jobs:
+  # =============================================================================
+  # 快速类型检查（优化建议 #3）
+  #
+  # 为什么单独一个 job：
+  #   archive 打包要 4~6 分钟，其中绝大部分时间花在"编译 + 归档 + 装包"上。
+  #   而开发者最常见的错误是**编译错误**（类型不匹配、成员未声明、参数写错）。
+  #   这个 job 只做 xcodebuild build（不打包），1~2 分钟就能出结果，
+  #   两者并行跑，整体等待时间几乎不变，但"编译错了"能早 3~4 分钟知道。
+  #
+  # 加上它还有一个好处：archive 失败时，日志里已经有明确的类型检查结论，
+  #   不用在几百行 xcodebuild 输出里翻找。
+  # =============================================================================
+  typecheck:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - name: 1) Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 2) 本地静态校验（1 秒）
+        run: |
+          set -e
+          python3 .ci/swift_lint.py
+
+      - name: 3) 只编译，不打包（类型检查）
+        env:
+          IN_AMAP_KEY: ${{ secrets.AMAP_KEY }}
+          IN_XF_APP_ID: ${{ secrets.XF_APP_ID }}
+          IN_XF_API_KEY: ${{ secrets.XF_API_KEY }}
+          IN_XF_API_SECRET: ${{ secrets.XF_API_SECRET }}
+        run: |
+          set -o pipefail
+          # 密钥注入（与 build job 一致；为空也不影响编译）
+          python3 - <<'PY'
+          import os, pathlib
+          p = pathlib.Path("MotoNav/Secrets.swift"); s = p.read_text(encoding="utf-8")
+          for k, env in [("__SECRET_AMAP_KEY__","IN_AMAP_KEY"),("__SECRET_XF_APP_ID__","IN_XF_APP_ID"),
+                         ("__SECRET_XF_API_KEY__","IN_XF_API_KEY"),("__SECRET_XF_API_SECRET__","IN_XF_API_SECRET")]:
+              v = os.environ.get(env, "")
+              if v.strip(): s = s.replace('"'+k+'"', '"'+v.strip()+'"')
+          p.write_text(s, encoding="utf-8")
+          PY
+          xcodebuild build \
+            -project MotoNav.xcodeproj \
+            -scheme MotoNav \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/dd-check" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            ENABLE_BITCODE=NO \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            -quiet > typecheck.log 2>&1 || {
+              echo "=== 类型检查失败，错误行 ==="
+              grep -E "error:" typecheck.log | head -30
+              echo "=== 末 60 行 ==="; tail -60 typecheck.log; exit 1; }
+          echo "类型检查通过 ✅"
+
+      - name: 失败时保留类型检查日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-logs
+          path: typecheck.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   build:
     # macos-15 = Xcode 16.x 镜像（工程 objectVersion 77 / 文件系统同步组，需要 Xcode 16+）
     runs-on: macos-15
@@ -239,4 +309,47 @@ jobs:
             ${{ runner.temp }}/MotoNav.xcarchive/Info.plist
           if-no-files-found: ignore
           retention-days: 7
+
+  # =============================================================================
+  # 失败通知（优化建议 #1）
+  #
+  # v2.26 之前，v2.19~v2.25 共 5 个提交只存在本地，
+  # CI 连续失败 4 次**没有人知道** —— 因为改动没推上去，没人看 CI；
+  # 等推上去时，已经堆了 4 个红色失败。
+  #
+  # 这个 job 的作用：任一 job 失败时，在 GitHub 上留一条明确的失败摘要，
+  # 并在 Actions 页面置顶。不依赖外部 webhook（企业微信/钉钉），
+  # 因为那需要额外的密钥配置；GitHub 自身的通知（邮件/网页铃铛）已经够用。
+  # =============================================================================
+  notify:
+    runs-on: ubuntu-latest
+    needs: [typecheck, build]
+    if: failure()
+    steps:
+      - name: 写入失败摘要
+        run: |
+          {
+            echo "## ❌ MotoNav 构建失败"
+            echo ""
+            echo "- 提交：\`${{ github.sha }}\`"
+            echo "- 分支：\`${{ github.ref }}\`"
+            echo "- 提交信息：${{ github.event.head_commit.message }}"
+            echo ""
+            echo "### 快速自查"
+            echo ""
+            echo "1. 本地跑静态校验（1 秒）：\`python3 .ci/swift_lint.py\`"
+            echo "2. 查看 **typecheck** job 的日志，里面有 \`error:\` 行"
+            echo "3. 查看 **build** job 的 \`build-logs\` 附件（完整 archive.log）"
+            echo ""
+            echo "### 常见原因"
+            echo ""
+            echo "| 症状 | 原因 | 处理 |"
+            echo "|---|---|---|"
+            echo "| \`cannot convert value 'X' to expected type 'Binding<X>'\` | ViewModifier 里 @Binding 漏写 \`\$\` | 加 \`\$\` |"
+            echo "| \`cannot find 'X' in scope\` | 修饰符内部用了未声明的成员 | 在 struct 上声明 \`@Binding var X\` |"
+            echo "| \`extraneous argument label\` | 无标签闭包被调用时多写了 label | 去掉 label |"
+            echo "| \`invalid redeclaration\` | 同作用域重复定义同名成员 | 改名或删掉重复 |"
+            echo "| \`unable to type-check this expression\` | 单个表达式太复杂 | 拆成更小的子表达式/ViewModifier |"
+          } > "$GITHUB_STEP_SUMMARY"
+          echo "失败摘要已写入 $GITHUB_STEP_SUMMARY"
           compression-level: 0

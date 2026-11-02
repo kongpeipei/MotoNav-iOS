@@ -1557,10 +1557,15 @@ struct ContentView: View {
                     }
                     // v2.23 底部锚定：pos.y 是卡片底边位置，卡片向上生长。
                     // 之前按中心定位（0.88），"开始导航"绿色按钮被屏幕下缘裁掉 → 点不动。
+                    // v2.27：加 zIndex(50) 保证下卡永远盖在上卡之上。
+                    // 上卡曾经因为内部一个 .frame(maxHeight: .infinity) 撑成巨大面板，
+                    // 虽然 ZStack 顺序在下，但 .position() 的布局会让上卡的点击区域
+                    // 覆盖到下卡按钮上 —— 按钮看得见却点不动。显式抬层级更稳。
                     DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanBottomCard) }
+                        .zIndex(50)
                 } else {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
                     // v1.99 移除地图上浮动的"历史搜索"横条：搜索框聚焦时面板内已有历史列表，
@@ -2180,6 +2185,12 @@ struct ContentView: View {
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
+        // v2.27 兜底：上卡高度不许超过屏幕的 45%。
+        // 之前按钮列写了 .frame(maxHeight: .infinity)，
+        // 把上卡拉成从屏幕顶盖到下方的巨大白色面板，
+        // 既挡住地图、又把下卡的"开始导航"按钮埋住导致点不动。
+        // 加了这条上限，即便将来卡片内容再变多，也不会再撑爆。
+        .frame(maxHeight: UIScreen.main.bounds.height * 0.45)
     }
 
     /// v2.21 路线规划卡（下）：方案卡 + 风险摘要 + 开始导航
@@ -2302,6 +2313,15 @@ struct ContentView: View {
             }
             // 右侧按钮组（v2.23）：
             //   「＋」与起点/终点文字区**垂直居中对齐**（正后方），「⇅」放在其下方
+            //
+            // v2.27 修复：这里原来写的是 .frame(maxHeight: .infinity, alignment: .center)。
+            // 那个"无限高"是致命的 —— HStack 的高度由最高的子视图决定，
+            // 按钮列被撑到无限高后，整个上卡变成了一个巨大的白色面板，
+            // 从屏幕顶部一路盖到下方，把"开始导航"按钮整个埋住了（点不动），
+            // 同时上卡看起来"太大"。
+            //
+            // 正确做法：让按钮列按内容取高（不撑高），
+            // 垂直居中交给 HStack 自身的 alignment: .center 来做。
             VStack(spacing: 12) {
                 Button {
                     haptic()
@@ -2326,7 +2346,8 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .frame(maxHeight: .infinity, alignment: .center)
+            // v2.27：固定为内容高度 + 垂直居中（HStack alignment 已保证居中，这里只是明确不撑高）
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 4)
     }
