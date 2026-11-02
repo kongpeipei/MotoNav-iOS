@@ -2386,10 +2386,11 @@ final class CameraPinView: MKAnnotationView {
         if configuredPending {
             badge.layer.borderWidth = 2
             badge.layer.borderColor = UIColor.white.cgColor
-            // 虚线效果：用白色圆点描边模拟（layer 不支持虚线）
-            badge.layer.borderDashPattern = nil
-            badge.alpha = 0.92
-            badge.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
+            // v2.27：CALayer 没有 borderDashPattern（那是 CAShapeLayer 才有的属性），
+            // 所以"待校准"用缩小一号 + 降低不透明度来表达区别，
+            // 而不是虚线边框（想用虚线得换成 CAShapeLayer，成本更高、收益不大）。
+            badge.alpha = 0.75
+            badge.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
             badge.center = CGPoint(x: 15, y: 15)
         } else {
             badge.layer.borderWidth = 2
