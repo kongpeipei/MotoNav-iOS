@@ -7,6 +7,19 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+
+    /// v2.28 共用的「时:分」格式化器（静态复用）
+    ///
+    /// DateFormatter 的初始化很贵 —— 它要解析格式串、读用户的地区设置、建内部日历。
+    /// 而导航底卡的"预计到达时间"在 body 求值期每次都要格式化一次，
+    /// 导航中每秒重算几十次 → 一次新建几十个 DateFormatter，纯浪费。
+    /// 静态复用一个实例即可（DateFormatter 本身线程安全，SwiftUI 全在主线程）。
+    private static let hhmmFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
     /// v1.99 组队骑行（地图队友点 + 我的页队伍面板）
     @StateObject private var team = TeamRide.shared
     /// v1.99 足迹（我的-足迹）
@@ -2895,7 +2908,7 @@ struct ContentView: View {
     /// 高德式路口放大示意图：接近下一转向（<200米）时显示交叉路口 + 转弯箭头 + 路名
     private var turnAheadCard: some View {
         Group {
-            if let ns = model.navigationStatus(at: model.currentLocation),
+            if let ns = model.navStatusCache,
                let t = ns.nextTurn, ns.distToTurnM < 200 {
                 ZStack {
                     // 当前道路（垂直）
@@ -3394,7 +3407,7 @@ struct ContentView: View {
 
     private var navTopBar: some View {
         VStack {
-            if model.navigating, let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
+            if model.navigating, let ns = model.navStatusCache, ns.remainM > 0 {
                 VStack(spacing: 8) {
                     // 第一行：剩余距离 / 剩余时间 / 速度
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -3726,7 +3739,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
-                } else if let ns = model.navigationStatus(at: model.currentLocation), ns.remainM > 0 {
+                } else if let ns = model.navStatusCache, ns.remainM > 0 {
                     navBottomCard(ns)
                 }
             }
@@ -3740,9 +3753,10 @@ struct ContentView: View {
         let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
         let minTxt = "\(max(ns.remainS, 0) / 60)"
         let arriveTxt: String = {
-            let f = DateFormatter()
-            f.dateFormat = "HH:mm"
-            return f.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
+            // v2.28：DateFormatter 创建成本很高（每次都要解析格式串、读系统设置），
+            // 而这段在 body 求值期执行 —— 导航中每秒重算几十次，纯浪费。
+            // 改成静态复用。
+            Self.hhmmFormatter.string(from: Date().addingTimeInterval(TimeInterval(max(ns.remainS, 0))))
         }()
         return VStack(spacing: 0) {
             // ── 第一层：退出 / 三段数据 / 全览 ──

@@ -2627,6 +2627,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             navUserMoved = false
             routeChoices = [] // v1.85 结束导航隐藏路线推荐卡，只保留行程卡（轻点卡片外任意处回首页）
             selectedRouteIdx = 0
+            navStatusCache = nil // v2.28 清缓存，避免下次进入导航时先显示上一条路线的余量
             finishTrip()
             endLiveActivity()
             speak("导航结束")
@@ -2654,6 +2655,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             arriveAnnounced = false
             startMonitoring()
             startLiveActivity(destName: destName)
+            // v2.28：立即初始化导航状态缓存。
+            // 否则从「点开始导航」到「第一次定位回调」之间（可能有好几百毫秒），
+            // 底部导航卡会因为 navStatusCache == nil 而整个不显示 —— 看起来像"点了没反应"。
+            navStatusCache = navigationStatus(at: currentLocation)
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
         }
@@ -2720,8 +2725,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 偏离路线检测：距路线折线 >80m 连续 3 次且距上次重规划 >25s → 自动重规划并播报
     private func rerouteIfOffTrack(at coord: CLLocationCoordinate2D) {
         guard navigating, route.count >= 2 else { offRouteCount = 0; return }
+        // v2.28 性能：旧版每次定位都遍历整条路线的所有线段（可达 2000 段），
+        // 每段一次 distToSegment（含 cos/hypot）→ 每次定位 2000 次三角函数运算。
+        // 导航中定位是高频的（移动 2 米就回调一次），这是"导航时地图发涩"的一大来源。
+        //
+        // 现在只算最近点附近的线段：最近折线点索引由 nearestRouteIndex 增量维护，
+        // 偏航检测要判断的"离路线多远"，用最近点前后各 10 段足够
+        // （真正偏航 80 米以上时，最近点索引也已经同步更新了）。
+        let center = min(idxCache, route.count - 1)
+        let lo = max(0, center - 10)
+        let hi = min(route.count - 2, center + 10)
         var minD = Double.greatestFiniteMagnitude
-        for i in 0..<(route.count - 1) {
+        for i in lo...hi {
             let d = distToSegment(coord, route[i], route[i + 1])
             if d < minD { minD = d }
         }
@@ -3242,6 +3257,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let distToTurnM: Int
     }
 
+    /// v2.28 导航状态缓存（由定位回调更新，UI 直接读）
+    ///
+    /// 之前 UI 有 3 处调用 navigationStatus(at:)（转向放大卡 / 顶部导航条 / 底部导航卡），
+    /// 每次都要重算一遍沿路线里程 —— 而这些都在 body 求值期发生，
+    /// 一次重算就是 3 遍几何运算。现在改为：定位回调算一次存这里，UI 只读。
+    @Published private(set) var navStatusCache: NavStatus?
+
     /// v2.28 导航状态（**纯函数**，不做任何状态写入）
     ///
     /// 之前这个方法在 body 求值期间写 @Published（traveledIdx / navProgress），
@@ -3281,6 +3303,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard navigating, !route.isEmpty else { return }
         let loc = coord ?? currentLocation
         guard let loc = loc else { return }
+        // v2.28：一次性算出导航状态缓存，UI 的 3 处调用直接读它
+        // （原来每次 body 重算都要重跑一遍几何运算）
+        let st = navigationStatus(at: loc)
+        if let st {
+            // 只在关键值变化时才发布，避免无谓的整树重算
+            if let old = navStatusCache,
+               old.remainM == st.remainM, old.remainS == st.remainS,
+               old.nextTurn?.fromStartM == st.nextTurn?.fromStartM,
+               abs(old.speedKph - st.speedKph) < 0.5 {
+                // 值没变，不发布
+            } else {
+                navStatusCache = st
+            }
+        }
         // 已走过的路变灰：折线最近点索引
         let idx = nearestRouteIndex(route, loc)
         if idx != traveledIdx { traveledIdx = idx }
@@ -3478,14 +3514,30 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// v1.82 当前所在道路名：取已通过转向点中最后一个转入的道路（高德式顶部道路名）
     var currentRoadName: String {
-        guard navigating, let loc = currentLocation, !route.isEmpty else { return "" }
-        let toDest = distanceM(loc, route.last ?? CLLocationCoordinate2D(latitude: destLat, longitude: destLon))
-        let traveled = max(0, routeDistanceM - Int(toDest))
-        var name = ""
-        for t in routeTurns where t.fromStartM <= traveled {
-            if !t.roadName.isEmpty { name = t.roadName }
+        guard navigating, !route.isEmpty else { return "" }
+        let traveled = traveledM(route, currentLocation ?? route[0])
+        // v2.28：原来用「到终点直线距离」反推行程，再全量遍历 routeTurns 找最后一个匹配项。
+        // routeTurns 可达上百个，而这段代码在 body 求值期被调用（导航每秒刷新数次），
+        // 属于纯浪费。现在直接用已缓存的沿路线里程 + 二分查找定位转向点。
+        guard !routeTurns.isEmpty else { return "" }
+        // 找最后一个 fromStartM <= traveled 的转向点
+        var lo = 0, hi = routeTurns.count - 1, found = -1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if routeTurns[mid].fromStartM <= traveled {
+                found = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
         }
-        return name
+        // 从该点往回找最近一个有路名的（有些转向点是内部道路，没有名称）
+        var i = found
+        while i >= 0 {
+            if !routeTurns[i].roadName.isEmpty { return routeTurns[i].roadName }
+            i -= 1
+        }
+        return ""
     }
 
     /// 沿路线折线累计已走距离（米）：定位点到折线的最近点（含前段距离）
