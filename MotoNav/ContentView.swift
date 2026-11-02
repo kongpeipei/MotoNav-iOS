@@ -50,6 +50,14 @@ struct ContentView: View {
     @State private var syncPromptState: SyncPromptState?
     /// v2.26 最近一轮同步的结果摘要（显示在"我的"页）
     @State private var syncSummaryText = ""
+    /// v2.27 官方渠道的错误信息（用于显示"人话提示 + 下一步指引"）
+    @State private var lastSyncOfficialError = ""
+    /// v2.27 电警点位管理页
+    @State private var showCameraManage = false
+    /// v2.27 同步提示框的自动倒计时（秒）；0 = 不倒计时
+    @State private var syncCountdown = 0
+    /// v2.27 倒计时任务
+    @State private var syncCountdownTask: Task<Void, Never>?
 
     /// v2.26 同步提示框状态机
     enum SyncPromptState {
@@ -296,6 +304,8 @@ struct ContentView: View {
         .modifier(SheetGroup2Modifier(editPoi: $editPoi, showMarkNameAlert: $showMarkNameAlert, markName: $markName, showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput, showTypePicker: $showTypePicker, pendingMarkCoord: $pendingMarkCoord, onAddPoiAtPending: { addPoiAtPending(type: $0) }, onCameraKindTitle: { cameraKindTitle($0) }))
         // v2.25 弹窗组 3 已抽到 SheetGroup3Modifier（拆分以解决类型检查超时）
         .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, onCameraKindTitle: { cameraKindTitle($0) }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi, editPoi: $editPoi))
+        // v2.27 弹窗组 4：电警点位管理页（单独一组，控制类型推断复杂度）
+        .modifier(SheetGroup4Modifier(showCameraManage: $showCameraManage, camStore: camStore))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
         // v2.15 长按拍照点 →「更改」：四种类型（顺序按骑手最常被拍的来排）
@@ -881,16 +891,45 @@ struct ContentView: View {
                 }
             }
             .disabled(camSync.syncing)
+            // v2.27 新增：电警点位管理（粘贴导入 / 导出 / 最近删除）
+            // 官网有反爬时，这是用户唯一走得通的路
+            Button {
+                showCameraManage = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .foregroundStyle(.blue)
+                        .frame(width: 22)
+                    Text("电警点位管理")
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
             if !syncSummaryText.isEmpty {
                 Text(syncSummaryText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            // v2.27 同步失败时给出"下一步该做什么"，而不是只报错
+            if let hint = syncFailureHint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         } header: {
             Text("点位数据")
         } footer: {
             Text("同步合肥市公安局近一年的摩托车电警点位公示（官方来源直接入图），并在抖音、百度、小红书等平台检索近一年合肥摩托车违法记录位置（网络来源需你确认后才添加）。")
         }
+    }
+
+    /// v2.27 同步失败时的人话提示 + 下一步指引（建议 #20）
+    private var syncFailureHint: String? {
+        guard let err = lastSyncOfficialError, !err.isEmpty else { return nil }
+        return "官方站点读取失败：" + err + "\n可在浏览器打开合肥市公安局网站，复制新增点位列表，到「电警点位管理」里粘贴导入。"
     }
 
     /// v1.99 骑行偏好：播报分级 + 摩托车优先（避开高速/高架）
@@ -1089,6 +1128,8 @@ struct ContentView: View {
             if !result.officialError.isEmpty { parts.append("官方站点：" + result.officialError) }
             if !result.webError.isEmpty { parts.append("网络检索：" + result.webError) }
             syncSummaryText = parts.joined(separator: " · ")
+            // v2.27：官方错误单独存一份，用于显示"人话提示 + 下一步指引"
+            lastSyncOfficialError = result.officialError
 
             model.status = syncSummaryText
 
@@ -1097,15 +1138,54 @@ struct ContentView: View {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
                     syncPromptState = .found
                 }
+                // v2.27 安全：30 秒倒计时，到点自动确认取消（优化建议 #27）
+                // 强制不可关闭的框若在骑行中弹出，用户点不到屏幕就没法继续用软件，
+                // 这是真实的安全隐患，所以给一条自动出路。
+                startSyncCountdown(seconds: 30)
             }
         }
     }
 
-    /// v2.26 顶部提示框：发现新点位 → 添加 / 取消
+    /// v2.27 启动同步提示框的倒计时
+    private func startSyncCountdown(seconds: Int) {
+        syncCountdownTask?.cancel()
+        syncCountdown = seconds
+        syncCountdownTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { return }
+                await MainActor.run {
+                    guard syncCountdown > 0 else { return }
+                    syncCountdown -= 1
+                    if syncCountdown == 0 {
+                        // 到点：自动确认取消（保守：不添加点位），恢复正常使用
+                        syncPromptState = nil
+                        syncCandidates = []
+                        model.status = "超时未选择，已自动取消添加新点位"
+                    }
+                }
+            }
+        }
+    }
+
+    /// v2.27 停止倒计时
+    private func stopSyncCountdown() {
+        syncCountdownTask?.cancel()
+        syncCountdownTask = nil
+        syncCountdown = 0
+    }
+
+    /// v2.27 顶部提示框：发现新点位 → 添加 / 取消
     ///
     /// 需求：提示框不可删除，只有确认取消或者添加点位才能正常使用软件功能。
     /// 所以这里用**全屏遮罩 + 置顶卡片**实现，而不是系统 alert
     /// （系统 alert 能被"忽略/下滑"绕过）。
+    ///
+    /// v2.27 安全增强（优化建议 #27）：
+    /// 强制不可关闭有个真实风险 —— 用户正在骑行时弹出这个框，
+    /// 没法点确认取消就被挡住，无法操作导航。
+    /// 所以加一个 **30 秒倒计时**，到点自动"确认取消"（保守选择：不添加点位），
+    /// 既满足"必须处理才能继续"的要求，又不会把用户困住。
     private var syncPromptOverlay: some View {
         ZStack {
             // 半透明遮罩：吞掉所有点击，逼用户做出选择
@@ -1140,10 +1220,19 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    // v2.27 倒计时提示：告诉用户多久会自动确认取消
+                    if syncCountdown > 0 {
+                        Text("\(syncCountdown) 秒后自动取消添加")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     HStack(spacing: 10) {
                         Button {
                             // 取消 → 二次确认
+                            stopSyncCountdown()
                             withAnimation(.easeOut(duration: 0.18)) { syncPromptState = .confirmCancel }
+                            startSyncCountdown(seconds: 30)
                         } label: {
                             Text("取消")
                                 .font(.footnote.bold())
@@ -1153,6 +1242,7 @@ struct ContentView: View {
                                 .background(Color.gray.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
                         }
                         Button {
+                            stopSyncCountdown()
                             addSyncCandidates()
                         } label: {
                             Text("添加")
@@ -1183,6 +1273,7 @@ struct ContentView: View {
                     HStack(spacing: 10) {
                         Button {
                             // 确认取消 → 丢弃，不添加
+                            stopSyncCountdown()
                             withAnimation(.easeOut(duration: 0.18)) {
                                 syncPromptState = nil
                                 syncCandidates = []
@@ -1199,6 +1290,7 @@ struct ContentView: View {
                         Button {
                             // 不取消 → 回到刚才的提示框
                             withAnimation(.easeOut(duration: 0.18)) { syncPromptState = .found }
+                            startSyncCountdown(seconds: 30)
                         } label: {
                             Text("不取消")
                                 .font(.footnote.bold())
@@ -5231,6 +5323,24 @@ private struct SheetGroup3Modifier: ViewModifier {
             Button("取消", role: .cancel) {}
         } message: { p in
             Text(String(format: "%@ · %@\n纬度 %.5f 经度 %.5f", p.name, p.type.label, p.lat, p.lon))
+        }
+    }
+}
+
+/// v2.27 弹窗组 4：电警点位管理页
+///
+/// 单独拆一个组而不是塞进 Group1~3：
+/// Swift 的类型检查超时按表达式计预算，组越大越容易触发
+/// "unable to type-check this expression in reasonable time"（v2.25 连续踩了 3 次）。
+private struct SheetGroup4Modifier: ViewModifier {
+    @EnvironmentObject var model: AppModel
+    @Binding var showCameraManage: Bool
+    var camStore: PoliceCameraStore
+
+    func body(content: Content) -> some View {
+        content
+        .sheet(isPresented: $showCameraManage) {
+            CameraManageSheet(store: camStore, model: model)
         }
     }
 }

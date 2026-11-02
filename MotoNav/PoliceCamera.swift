@@ -274,6 +274,19 @@ final class PoliceCameraStore: ObservableObject {
         applyOverrides()
     }
 
+    /// v2.27 恢复单个被删除的点位（电警点位管理页的"最近删除"列表用）
+    func restoreOne(id: Int) {
+        deletedIds.remove(id)
+        UserDefaults.standard.set(Array(deletedIds), forKey: deletedKey)
+        applyOverrides()
+    }
+
+    /// v2.27 被删除的点位列表（供"最近删除"逐条恢复）
+    /// 从内置库里按 id 找出原始点位信息（内置库不会被删除，只是被标记隐藏）
+    var deletedCameras: [PoliceCamera] {
+        raw.filter { deletedIds.contains($0.id) }
+    }
+
     private func saveOverrides() {
         var d: [String: [Double]] = [:]
         for (k, v) in overrides { d[String(k)] = v }

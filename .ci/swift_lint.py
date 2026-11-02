@@ -48,6 +48,7 @@ GLOBAL_NAMES = {
     # 枚举/类型名（工程内）
     "Poi", "PoiType", "PoiDetailSheet", "PoiEditSheet", "VoiceSettingsSheet", "FootprintSheet",
     "CameraTapSheet", "CameraCandidate", "CameraSyncService", "CameraSyncResult",
+    "CameraManageSheet", "CameraTextParser", "ParsedCamera", "WebPageFetcher",
     "OfflineMapSheet", "TeamRideSheet", "PoliceCamera", "CameraKind", "PlaceLabel",
     "MapViewRepresentable", "SearchHit", "RouteLink", "RouteWaypoint", "AppModel",
     "FootprintStore", "OfflineMapManager", "TeamRide", "PoliceCameraStore", "AppSecrets",

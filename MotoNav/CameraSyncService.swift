@@ -196,17 +196,32 @@ final class CameraSyncService: ObservableObject {
 
         var fetchedAny = false
         var lastErr = ""
+        var challengeBlocked = false
 
         for listURL in officialListURLs {
             guard let url = URL(string: listURL) else { continue }
-            guard let html = await fetchHTML(url) else {
-                lastErr = "无法访问（站点反爬或网络不通）"
-                continue
+
+            // v2.27 优先用 WKWebView 抓（能过加速乐 JS 挑战），
+            // 失败再回退到 URLSession（有的镜像/缓存不需要执行 JS）
+            var html: String? = nil
+            let web = await WebPageFetcher.shared.fetch(url, timeout: 30, requiresChallenge: true)
+            switch web {
+            case .success(let h):
+                html = h
+            case .challengeBlocked:
+                challengeBlocked = true
+                lastErr = "站点反爬校验未通过（JS 挑战）"
+            case .failed(let e):
+                lastErr = e
+                // 回退：URLSession 直连
+                if let h = await fetchHTML(url) { html = h }
             }
+
+            guard let html else { continue }
             fetchedAny = true
 
             // 挑战页检测：有挑战标记说明没拿到正文
-            if html.contains("jsl_clearance") || html.contains("_0x") {
+            if html.contains("jsl_clearance") || html.contains("var _0x") {
                 lastErr = "站点启用了 JS 验证，需手动核对"
                 continue
             }
@@ -221,7 +236,13 @@ final class CameraSyncService: ObservableObject {
 
             for item in recent {
                 guard let detailURL = URL(string: item.url) else { continue }
-                guard let detail = await fetchHTML(detailURL) else { continue }
+                // 详情页同样优先走 WKWebView
+                var detail: String? = nil
+                switch await WebPageFetcher.shared.fetch(detailURL, timeout: 25, requiresChallenge: true) {
+                case .success(let h): detail = h
+                default: detail = await fetchHTML(detailURL)
+                }
+                guard let detail else { continue }
                 let cams = parseOfficialDetail(detail, source: item.title)
                 // 公示只给路口名，坐标靠高德正向地理编码补齐；
                 // 解析不出坐标的点位直接丢弃（宁可少也不要错点）
@@ -237,7 +258,9 @@ final class CameraSyncService: ObservableObject {
         }
 
         if !fetchedAny {
-            out.error = lastErr.isEmpty ? "官方站点无响应" : lastErr
+            out.error = challengeBlocked
+                ? "官网有 JS 验证，App 无法直接读取（可手动复制公示内容到「我的 → 电警点位 → 导入」）"
+                : (lastErr.isEmpty ? "官方站点无响应" : lastErr)
             return out
         }
         if out.candidates.isEmpty && !out.error.isEmpty {
