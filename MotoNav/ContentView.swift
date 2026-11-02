@@ -4080,6 +4080,24 @@ struct ContentView: View {
         g.impactOccurred()
     }
 
+    /// v2.28 视野档位标题（导航左侧竖排按钮）
+    private var navScaleTitle: String {
+        switch model.navScaleTarget {
+        case ..<40: return "近景"
+        case 40..<120: return "中景"
+        default: return "远景"
+        }
+    }
+
+    /// v2.28 视野档位图标
+    private var navScaleIcon: String {
+        switch model.navScaleTarget {
+        case ..<40: return "plus.magnifyingglass"
+        case 40..<120: return "circle.lefthalf.filled"
+        default: return "minus.magnifyingglass"
+        }
+    }
+
     /// v1.63 导航态左侧竖排按钮（高德式）：刷新（重新规划路线）/ 极简（隐藏兴趣点）
     private var navSideOverlay: some View {
         VStack {
@@ -4118,6 +4136,28 @@ struct ContentView: View {
                         .padding(.vertical, 8)
                         .background(minimalMap ? Color.blue : Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
                         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    // v2.28 视野档位切换（高德/百度导航标配）
+                    //
+                    // 三档：近（1cm:30m，看路口细节）/ 中（1cm:50m，默认）/ 远（1cm:200m，看前方路况）
+                    // 骑行时最常要的是"看清下一个路口"和"看清前方堵不堵"，
+                    // 这两个需求对应完全不同的视野，所以做成随时可切的一键按钮。
+                    Button {
+                        haptic()
+                        model.cycleNavScale()
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: navScaleIcon)
+                                .font(.body.bold())
+                            Text(navScaleTitle)
+                                .font(.caption2.bold())
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }

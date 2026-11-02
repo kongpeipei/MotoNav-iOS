@@ -3489,6 +3489,26 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         navScaleTick += 1
     }
 
+    /// v2.28 循环切换导航视野档位（近 / 中 / 远）
+    ///
+    /// 三档对应骑行时三种真实需求：
+    /// · 近景 30m/cm —— 看清下一个路口的转向细节（路口密集的老城区）
+    /// · 中景 50m/cm —— 默认档，兼顾路口与前方路况
+    /// · 远景 200m/cm —— 看前方几百米的排队情况（大路/高架）
+    ///
+    /// 骑行中单手操作，所以只做一个循环按钮而不是分段控件：
+    /// 按一次切到下一档，不用瞄准。
+    func cycleNavScale() {
+        let next: Int
+        switch navScaleTarget {
+        case ..<40: next = 50      // 近 → 中
+        case 40..<120: next = 200  // 中 → 远
+        default: next = 30         // 远 → 近
+        }
+        setNavScale(next)
+        status = "视野：\(next) 米/厘米"
+    }
+
     /// v2.01 下一个信号灯（导航中做红绿灯倒计时）：260 米内的第一个灯
     var nextTrafficLight: (light: TrafficLight, dist: Int)? {
         guard navigating, !trafficLights.isEmpty,
