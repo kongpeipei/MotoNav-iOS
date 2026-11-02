@@ -2799,8 +2799,34 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         camArmed.insert(cam.id)
         camSpokenAt[cam.id] = Date()
         hotCameraId = cam.id
-        let meters = max(10, Int((d / 10).rounded()) * 10)
-        speak("前方\(meters)米，\(cam.spokenName)，\(cam.type.voiceAction)", priority: 1)
+
+        // v2.27（优化建议 #7）按坐标精度分级提醒：
+        //   · 路口POI（±30m）→ 正常 260m 内提醒
+        //   · 交点推算/近似（±100m）→ 提前到 350m 提醒（免得骑过了才发现）
+        //   · 地理编码（±300m）→ 提前到 420m 提醒，并在语音里说明"位置为估算"
+        // 为什么要分级：内置库里"地理编码(待校准)"的点位误差可达 ±300 米，
+        // 用同样的 260m 提醒，骑手会先收到提醒、真正到路口时却已经过去了 ——
+        // 这种"假提醒"比不提醒更让人不信任。
+        let grade = cam.accuracyGrade
+        let triggerM = grade.triggerRadiusM
+        // 重新按分级阈值找最近点（上面已按 260m 找过，这里放宽）
+        var picked: (PoliceCamera, Double)?
+        if triggerM > 260 {
+            for c in store.all {
+                let dd = distanceM(coord, c.coordinate)
+                if dd <= triggerM, camArmed.contains(c.id) == false {
+                    if picked == nil || dd < picked!.1 { picked = (c, dd) }
+                }
+            }
+        }
+        let (finalCam, finalD) = picked ?? (cam, d)
+        let meters = max(10, Int((finalD / 10).rounded()) * 10)
+        var msg = "前方\(meters)米，\(finalCam.spokenName)，\(finalCam.type.voiceAction)"
+        // 估算位置要明说，让骑手心里有数
+        if finalCam.accuracyGrade.isEstimated {
+            msg += "，位置为估算"
+        }
+        speak(msg, priority: 1)
         showCameraBanner("\(cam.type.title) · \(cam.spokenName) · \(meters) 米")
     }
 

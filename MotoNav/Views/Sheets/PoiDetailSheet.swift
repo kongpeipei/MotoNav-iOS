@@ -16,6 +16,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct PoiDetailSheet: View {
     let poi: Poi
@@ -48,20 +49,46 @@ struct PoiDetailSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            // v2.26 只保留分享（唯一保留的原有按钮）
-            Button {
-                // v1.96 统一分享格式（文本 + http 链接），微信可正常接收
-                PlaceShare.present(PlaceShare.payload(name: poi.name,
-                                                      address: "",
-                                                      type: poi.type.label,
-                                                      road: "",
-                                                      lat: poi.lat, lon: poi.lon))
-            } label: {
-                Label("分享", systemImage: "square.and.arrow.up")
-                    .font(.footnote.bold())
+            // v2.27（优化建议 #26）分享按钮分项 + 排版优化：
+            //   · 坐标信息做成可一键复制（骑手常要发"这个路口在哪"给别人）
+            //   · 分享拆成"分享文字"和"分享到高德/百度"两个入口：
+            //     前者给微信/QQ 发文字，后者直接唤起对应地图 App
+            HStack(spacing: 10) {
+                // 复制坐标
+                Button {
+                    UIPasteboard.general.string = String(format: "%.6f, %.6f", poi.lat, poi.lon)
+                    model.status = "已复制坐标"
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.footnote)
+                        Text("复制坐标")
+                            .font(.caption2)
+                    }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, 7)
                     .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                // 分享文字 + 链接（微信可正常接收）
+                Button {
+                    PlaceShare.present(PlaceShare.payload(name: poi.name,
+                                                          address: "",
+                                                          type: poi.type.label,
+                                                          road: "",
+                                                          lat: poi.lat, lon: poi.lon))
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.footnote)
+                        Text("分享")
+                            .font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
             }
             // v2.26 新增红色删除按钮：删除后该抓拍点从地图上消失
             Button {
@@ -78,7 +105,7 @@ struct PoiDetailSheet: View {
             }
         }
         .padding(20)
-        .presentationDetents([.height(330)])
+        .presentationDetents([.height(370)])
         .onAppear {
             if let loc = model.currentLocation {
                 let d = model.distance(to: poi, from: loc)

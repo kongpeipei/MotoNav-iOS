@@ -101,6 +101,61 @@ struct PoliceCamera: Codable, Identifiable, Equatable {
         if !acc.isEmpty { parts.append(acc) }
         return parts.joined(separator: " · ")
     }
+
+    // MARK: - v2.27 坐标精度分级（优化建议 #7）
+
+    /// 坐标精度等级
+    ///
+    /// 内置库里的坐标来源不同，误差差一个数量级：
+    ///   · 路口POI      ±30 米  → 直接按 260m 提醒
+    ///   · 交点推算/近似  ±100 米 → 提前到 350m 提醒
+    ///   · 地理编码      ±300 米 → 提前到 420m 提醒，并说明"位置为估算"
+    ///
+    /// 为什么要分级：以前所有点位一律 260m 提醒，
+    /// 结果地理编码来的点位（误差 ±300m）经常"提醒了但骑过了还没到路口" ——
+    /// 这种假提醒比不提醒更让人不信任。
+    enum AccuracyGrade {
+        /// 路口 POI，精度高
+        case precise
+        /// 交点推算或近似，中等精度
+        case approximate
+        /// 地理编码，精度低（可能偏差数百米）
+        case estimated
+
+        /// 触发提醒的距离（米）
+        var triggerRadiusM: Double {
+            switch self {
+            case .precise: return 260
+            case .approximate: return 350
+            case .estimated: return 420
+            }
+        }
+
+        /// 是否为"估算位置"（需要在语音里说明）
+        var isEstimated: Bool { self == .estimated }
+
+        /// 界面上的说明文字
+        var note: String {
+            switch self {
+            case .precise: return "路口精确位置"
+            case .approximate: return "位置为推算"
+            case .estimated: return "位置为估算"
+            }
+        }
+    }
+
+    /// 本点位的精度等级（按 acc 字段判定）
+    var accuracyGrade: AccuracyGrade {
+        let a = acc
+        if a.contains("地理编码") { return .estimated }
+        if a.contains("推算") || a.contains("近似") || a.contains("周边") { return .approximate }
+        return .precise
+    }
+
+    /// 是否是网络同步来的点位（与官方公示区分开，建议 #28）
+    var isFromWeb: Bool {
+        source.contains("网络") || acc.contains("网络") || acc.contains("导入")
+    }
 }
 
 // MARK: - 数据仓库
@@ -150,6 +205,11 @@ final class PoliceCameraStore: ObservableObject {
         if let arr = UserDefaults.standard.array(forKey: deletedKey) as? [Int] {
             deletedIds = Set(arr)
         }
+        // v2.27 读回已删除点位的档案（供"最近删除"逐条恢复）
+        if let data = UserDefaults.standard.data(forKey: archiveKey),
+           let arch = try? JSONDecoder().decode([Int: PoliceCamera].self, from: data) {
+            deletedArchive = arch
+        }
         // v2.26 读回手动同步新增的点位
         if let data = UserDefaults.standard.data(forKey: syncedKey),
            let list = try? JSONDecoder().decode([PoliceCamera].self, from: data) {
@@ -184,6 +244,12 @@ final class PoliceCameraStore: ObservableObject {
 
     /// v2.26 删除点位：从地图上消失，重启也不复活
     func delete(id: Int) {
+        // v2.27：先记下完整信息，供"最近删除"列表逐条恢复
+        // （网络同步来的点位不在内置库里，光靠 id 找不到原始信息）
+        if let c = all.first(where: { $0.id == id }) {
+            deletedArchive[id] = c
+            saveDeletedArchive()
+        }
         deletedIds.insert(id)
         UserDefaults.standard.set(Array(deletedIds), forKey: deletedKey)
         // 同步新增的点位被删掉后，从本地副本里也移除（避免"删除→恢复"时又冒出来）
@@ -271,6 +337,8 @@ final class PoliceCameraStore: ObservableObject {
     func restoreAllDeleted() {
         deletedIds.removeAll()
         UserDefaults.standard.set(Array(deletedIds), forKey: deletedKey)
+        deletedArchive.removeAll()
+        saveDeletedArchive()
         applyOverrides()
     }
 
@@ -278,13 +346,36 @@ final class PoliceCameraStore: ObservableObject {
     func restoreOne(id: Int) {
         deletedIds.remove(id)
         UserDefaults.standard.set(Array(deletedIds), forKey: deletedKey)
+        deletedArchive.removeValue(forKey: id)
+        saveDeletedArchive()
         applyOverrides()
     }
 
     /// v2.27 被删除的点位列表（供"最近删除"逐条恢复）
     /// 从内置库里按 id 找出原始点位信息（内置库不会被删除，只是被标记隐藏）
     var deletedCameras: [PoliceCamera] {
-        raw.filter { deletedIds.contains($0.id) }
+        var out: [PoliceCamera] = []
+        var seen = Set<Int>()
+        // 先取档案（含网络同步来的点位）
+        for (id, c) in deletedArchive.sorted(by: { $0.key < $1.key }) {
+            out.append(c)
+            seen.insert(id)
+        }
+        // 再补内置库里没在档案中的（旧版本删的）
+        for c in raw where deletedIds.contains(c.id) && !seen.contains(c.id) {
+            out.append(c)
+        }
+        return out
+    }
+
+    /// v2.27 已删除点位的档案（id → 点位信息），持久化
+    private var deletedArchive: [Int: PoliceCamera] = [:]
+    private let archiveKey = "pcDeletedArchive"
+
+    private func saveDeletedArchive() {
+        if let data = try? JSONEncoder().encode(deletedArchive) {
+            UserDefaults.standard.set(data, forKey: archiveKey)
+        }
     }
 
     private func saveOverrides() {

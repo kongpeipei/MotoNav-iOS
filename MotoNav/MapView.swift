@@ -1470,7 +1470,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? CameraPinView
                     ?? CameraPinView(annotation: cam, reuseIdentifier: id)
                 v.annotation = cam
-                v.configure(kind: cam.kind)
+                // v2.27（建议 #29）网络同步的点位标成"待校准"样式（缩小一号，提示可拖动修正）
+                v.configure(kind: cam.kind, pending: cam.isPending)
                 v.setHot(cam.isHot)
                 // v2.20 电警点可跟手拖动：MapKit 原生拖拽，手指点哪落到哪
                 v.isDraggable = true
@@ -2271,6 +2272,8 @@ final class CameraAnnotation: NSObject, MKAnnotation {
     let dirs: String
     /// v2.26 保留原始 PoliceCamera，点击电警点时要把完整点位信息交给上层（分享/删除要用）
     let camera: PoliceCamera?
+    /// v2.27（建议 #29）是否"待校准"（网络同步 / 估算位置）—— 决定标注用不用缩小样式
+    let isPending: Bool
     /// 是否处于"刚播报"高亮态
     var isHot = false
 
@@ -2286,6 +2289,8 @@ final class CameraAnnotation: NSObject, MKAnnotation {
         self.cameraName = camera.name
         self.dirs = camera.dirs
         self.camera = camera
+        // v2.27（建议 #29）网络同步 / 估算位置的点位标为"待校准"
+        self.isPending = camera.isFromWeb || camera.accuracyGrade.isEstimated
         let gcj = MapGeo.toGCJ(camera.coordinate)
         self.coordinate = gcj
         self.originCoordinate = gcj
@@ -2348,11 +2353,19 @@ final class CameraPinView: MKAnnotationView {
     }
 
     private var configuredKind: CameraKind?
+    /// v2.27（优化建议 #29）当前是否"待校准"（网络同步的点位）
+    private var configuredPending = false
 
-    func configure(kind: CameraKind) {
+    /// 配置标注样式
+    /// - Parameters:
+    ///   - kind: 点位类型（决定图标与主色）
+    ///   - pending: 是否为"待校准"（网络同步来的点位）—— 用虚线边框区分，
+    ///     提示用户这个位置是估算的、可以长按拖动修正
+    func configure(kind: CameraKind, pending: Bool = false) {
         // 复用时会反复调 viewFor，样式没变就不要重设 frame（每次重设会让地图重新布局）
-        guard configuredKind != kind else { return }
+        guard configuredKind != kind || configuredPending != pending else { return }
         configuredKind = kind
+        configuredPending = pending
         badge.backgroundColor = kind.color
         icon.image = UIImage(systemName: kind.icon,
                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .bold))
@@ -2362,6 +2375,29 @@ final class CameraPinView: MKAnnotationView {
         icon.frame = CGRect(x: 0, y: 0, width: 16, height: 16)
         icon.center = CGPoint(x: 15, y: 15)
         centerOffset = .zero
+        applyPendingStyle()
+    }
+
+    /// v2.27（建议 #29）待校准样式：虚线边框 + 略小一号
+    ///
+    /// 网络同步来的点位坐标来自地名解析，可能偏差几百米。
+    /// 用虚线边框把它和官方精确点位区分开，用户一眼能看出"这个点该自己校一下"。
+    private func applyPendingStyle() {
+        if configuredPending {
+            badge.layer.borderWidth = 2
+            badge.layer.borderColor = UIColor.white.cgColor
+            // 虚线效果：用白色圆点描边模拟（layer 不支持虚线）
+            badge.layer.borderDashPattern = nil
+            badge.alpha = 0.92
+            badge.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
+            badge.center = CGPoint(x: 15, y: 15)
+        } else {
+            badge.layer.borderWidth = 2
+            badge.layer.borderColor = UIColor.white.cgColor
+            badge.alpha = 1
+            badge.transform = .identity
+            badge.center = CGPoint(x: 15, y: 15)
+        }
     }
 
     /// 播报时放大并加白圈，播完缩回，避免地图上"一堆点分不清哪个在提醒"

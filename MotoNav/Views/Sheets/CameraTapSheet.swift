@@ -76,12 +76,32 @@ struct CameraTapSheet: View {
                     .padding(.vertical, 11)
                     .background(Color.red, in: RoundedRectangle(cornerRadius: 10))
             }
-            if !camera.source.isEmpty {
-                Text("来源：\(camera.source)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // v2.27（优化建议 #5/#28）：把来源与精度显式告诉用户
+            // 网络同步的点位可信度低于官方公示，图标颜色区分开，
+            // 让用户一眼看出哪些点"要留个心"。
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    // 来源徽标
+                    Text(camera.isFromWeb ? "网络线索" : "官方公示")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(camera.isFromWeb ? Color.orange : Color.blue,
+                                    in: Capsule())
+                    // 精度说明
+                    Text(camera.accuracyGrade.note)
+                        .font(.caption2)
+                        .foregroundStyle(camera.accuracyGrade.isEstimated ? .orange : .secondary)
+                }
+                if !camera.source.isEmpty {
+                    Text("来源：\(camera.source)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(20)
         .presentationDetents([.height(370)])
