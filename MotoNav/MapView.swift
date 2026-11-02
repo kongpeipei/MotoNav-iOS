@@ -767,7 +767,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                     map.userTrackingMode = .followWithHeading
                     var cam = map.camera
                     cam.centerCoordinate = MapGeo.toGCJ(loc)
-                    cam.altitude = altitude
+                    // v2.28：用 centerCoordinateDistance（相机到地图中心的地面距离），
+                    // 不用 altitude（相机到地面的垂直高度）——
+                    // 有俯角（pitch=45°）时两者不相等，而 altitudeForScale
+                    // 算出来的是"中心点的地面距离"，必须用同一个量才准。
+                    cam.centerCoordinateDistance = altitude
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
                     map.camera = cam
                 }
@@ -1095,12 +1099,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// 1 厘米 = 1/2.54 英寸，据此算出屏幕物理高度（厘米），
         /// 再推出"每 pt 对应多少米"。任何机型都对得上。
         func altitudeForScale(_ metersPerCm: Int, screenH: CGFloat) -> Double {
-            let nativeScale = UIScreen.main.nativeScale
-            // 屏幕物理高度（厘米）：points 本身就是物理单位（1pt = 1/scale 英寸）
-            let physicalHeightCm = Double(screenH) / nativeScale / 2.54
-            let metersPerPoint = Double(metersPerCm) / max(physicalHeightCm, 1)
-            // 相机到地图中心的地面距离 ≈ 屏幕半高对应的地面距离
-            return max(metersPerPoint * Double(screenH) / 2.0, 50)
+            // ① 屏幕物理高度（厘米）
+            //    pt 本身就是物理单位（1 pt = 1/72 英寸），与 nativeScale 无关。
+            //    注意：不能写成 screenH / nativeScale / 2.54 —— 那会多除了一个缩放倍数，
+            //    iPhone 14（844pt @3x）会算成 110cm（真实 29.8cm），差 3.7 倍。
+            let physicalHeightCm = Double(screenH) / 72.0 * 2.54
+            // ② 「1 厘米 = N 米」→ 屏幕竖直方向张开的地面距离
+            let spanMeters = physicalHeightCm * Double(metersPerCm)
+            // ③ 俯视 45°（导航态）时，屏幕张开地面距离 ≈ 1.689 × 相机到中心的地面距离，
+            //    所以 D = span / 1.689 ≈ span × 0.592。
+            //    这个系数由相机几何推导（俯角 45°、垂直视场 45°）：
+            //      顶边射线水平距 + 底边射线水平距 = 1.689 × D
+            //    旧代码用的 0.62 恰好接近，但它是设给 altitude（垂直高度）用的，
+            //    而 altitude = D × sin(45°) = 0.707D，两者是不同的量。
+            return max(spanMeters * 0.592, 50)
         }
 
         /// v1.98 统一缩放入口：先脱离跟随（否则 MapKit 会立刻回中，表现为按钮点了没反应）
@@ -1125,14 +1137,22 @@ struct MapViewRepresentable: UIViewRepresentable {
             setRegionProgrammatically {
                 var cam = map.camera
                 // 相机高度：点 + 用当前值，点 - 用当前值；factor < 1 = 放大
-                let current = cam.altitude > 0 ? cam.altitude : 2000
+                // v2.28：用 centerCoordinateDistance 作缩放基准（与导航视野换算同一个量）。
+                // altitude 是垂直高度，有俯角时与"到中心的地面距离"不等，
+                // 两者混用会让"点 + 之后画面变化幅度"忽大忽小。
+                let current = cam.centerCoordinateDistance > 0 ? cam.centerCoordinateDistance : 2000
                 var target = current * factor
                 // v2.28 上下限：50m ~ 60km
                 // 下限 50m：再近也看不出更多细节（瓦片最小层级约 50m）
                 // 上限 60km：再远瓦片层级不够，会出现模糊/白块
                 target = min(60_000, max(50, target))
-                cam.altitude = target
-                cam.centerCoordinate = MapGeo.toGCJ(center)
+                cam.centerCoordinateDistance = target
+                // v2.28 坐标系修正：center 参数**已经是 GCJ-02**（MapKit 坐标系）——
+                // 两个调用点传的都是 map.region.center 或 map.convert(...)，都是 GCJ。
+                // 旧版用 setRegion 时 MapKit 自己会处理坐标，
+                // 改成直接设 camera.centerCoordinate 后就**不能再转一次**，
+                // 否则会二次偏移（合肥约 500 米）—— 表现为"点缩放按钮地图跳到别处"。
+                cam.centerCoordinate = center
                 map.camera = cam
             }
         }
@@ -1142,7 +1162,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             guard gesture.state == .ended, let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
             let center = map.convert(pt, toCoordinateFrom: map)
-            zoom(map, by: 0.55, center: center)
+            // v2.28 倍率与 +/- 按钮统一（altitude 语义）
+            zoom(map, by: 0.62, center: center)
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
