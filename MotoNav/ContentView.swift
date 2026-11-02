@@ -3306,19 +3306,53 @@ struct ContentView: View {
     /// · 行驶中 → "前方xx米路口直行/右转/左转"，xx = 当前位置到该路口的距离
     ///   距离 > 60 米时只报动作不报米数（米数每秒都在变，读起来跳）
     private var navTopHintBar: some View {
-        let hint = model.navTopHintText()
+        // v2.27（优化建议 #8/#9/#10）：
+        //   · 数据源从 navTopHintText 换成 currentGuidanceEvent()，
+        //     与语音播报共用同一份事件（两者不会再出现"说的和显示的不一样"）；
+        //   · 距离分级：>300 米不显示米数；60~300 米取整到 10 米；≤60 米精确；
+        //   · 副行显示「进入 XX 路 · 走第 N 车道」（车道数据高德本来就有，之前没用上）。
+        let event = model.currentGuidanceEvent()
         return Group {
-            if !hint.text.isEmpty {
+            if !event.text.isEmpty {
                 HStack(spacing: 10) {
-                    Image(systemName: hint.icon)
+                    Image(systemName: event.icon)
                         .font(.system(size: 19, weight: .bold))
                         .foregroundStyle(.white)
-                    Text(hint.text)
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(event.text)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        // 副行：进入哪条路 + 走第几车道
+                        if !event.subtitle.isEmpty || !event.laneHint.isEmpty {
+                            HStack(spacing: 6) {
+                                if !event.subtitle.isEmpty {
+                                    Text(event.subtitle)
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.82))
+                                        .lineLimit(1)
+                                }
+                                if !event.laneHint.isEmpty {
+                                    Text("· \(event.laneHint)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.green.opacity(0.95))
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
                     Spacer(minLength: 0)
+                    // 车道图标（推荐车道高亮）
+                    if !event.laneIcons.isEmpty {
+                        HStack(spacing: 3) {
+                            ForEach(Array(event.laneIcons.enumerated()), id: \.offset) { idx, icon in
+                                Image(systemName: icon)
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(idx == event.recommendedLane ? Color.green : .white.opacity(0.45))
+                            }
+                        }
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)

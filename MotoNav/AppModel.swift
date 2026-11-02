@@ -2962,11 +2962,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let text = turnText(t)
             // 高德式两段播报：远提示（800 米级，含路名）→ 近提示（150 米内）
             // v1.99 播报分级：简洁只报近点；标准/详细保留 800 米远提示，详细再加剩余里程
+            //
+            // v2.27（优化建议 #10）：远提示改用 GuidanceEvent 的距离分级，
+            // 与顶部提示卡共用同一套取整规则 —— 以前这里报"前方 137 米"、
+            // 卡片显示"前方 140 米"，同一件事两个数字。现在两者完全一致。
             if speechMode.farPrompt && best < 900 && !farAnnounced.contains(idx) {
                 farAnnounced.insert(idx)
                 let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
-                speak("前方\(Int(best))米\(text)\(road)")
-                status = "导航：前方\(Int(best))米\(text)\(road) · 余\(Int(toDest / 1000))公里"
+                // 用事件里的分级距离（>300 米不报米数）
+                let d = GuidanceEventBuilder.formatDistance(Int(best))
+                let speakText = d.map { "前方\($0)\(text)\(road)" } ?? "前方\(text)\(road)"
+                speak(speakText)
+                status = "导航：\(speakText) · 余\(Int(toDest / 1000))公里"
             } else if best < 150 {
                 lastTurnSpoken = idx
                 if speechMode.verbose {
@@ -3036,23 +3043,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// v2.22 转向图标（全局唯一实现，ContentView 也复用）
     func navTurnIcon(_ t: RouteTurn) -> String {
-        if !t.modifier.isEmpty {
-            switch t.modifier {
-            case "left": return "arrow.turn.up.left"
-            case "right": return "arrow.turn.up.right"
-            case "slight left": return "arrow.up.left"
-            case "slight right": return "arrow.up.right"
-            case "sharp left": return "arrow.turn.up.left"
-            case "sharp right": return "arrow.turn.up.right"
-            case "uturn": return "arrow.uturn.up.left"
-            default: break
-            }
-        }
-        let a = t.action
-        if a.contains("掉头") { return "arrow.uturn.up.left" }
-        if a.contains("左") { return "arrow.turn.up.left" }
-        if a.contains("右") { return "arrow.turn.up.right" }
-        return "arrow.up"
+        // v2.27：转调 GuidanceEventBuilder.turnIcon —— 图标规则的唯一权威实现
+        // （优化建议 #10：同一件事只有一套规则）
+        GuidanceEventBuilder.turnIcon(t)
     }
 
     /// v2.22 顶部路线提示卡文案（高德式）
@@ -3063,27 +3056,35 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ///   其中 xx = 当前位置到该路口的距离（沿路线里程差）
     /// · 前方 60 米内才显示具体路口动作，避免频繁跳动
     func navTopHintText() -> (text: String, icon: String) {
-        guard navigating, let loc = currentLocation, !route.isEmpty else { return ("", "straight.up") }
+        let e = currentGuidanceEvent()
+        return (e.text, e.icon)
+    }
+
+    /// v2.27 当前导航事件（顶部提示与语音播报的**唯一**数据源）
+    ///
+    /// 优化建议 #10：以前语音和顶部提示是两条独立链路，各自算"前方多少米、什么动作"，
+    /// 于是可能出现「语音说右转、卡片显示左转」「语音报 120 米、卡片显示 80 米」。
+    ///
+    /// 现在两者都从 GuidanceEvent 派生 —— 事件里已经算好距离、动作、进入道路、车道建议，
+    /// UI 只负责显示、语音只负责念，物理上杜绝不一致。
+    func currentGuidanceEvent() -> GuidanceEvent {
+        guard navigating, let loc = currentLocation, !route.isEmpty else {
+            return GuidanceEvent(kind: .straightToEnd, icon: "straight.up",
+                                 text: "", subtitle: "", laneHint: "",
+                                 laneIcons: [], recommendedLane: -1, distanceM: 0,
+                                 action: "直行", roadName: "")
+        }
         let traveled = traveledM(route, loc)
-        // 起步：还没进入主线（离折线较远）→ 提示先往出口走
-        if traveled < 30 {
-            var minD = Double.greatestFiniteMagnitude
-            for p in route { minD = min(minD, distanceM(loc, p)) }
-            if minD > 25 {
-                return ("请先去往出口", "arrow.turn.up.right")
-            }
-        }
-        guard let t = routeTurns.first(where: { $0.fromStartM > traveled }) else {
-            return ("前方直行到达终点", "straight.up")
-        }
-        let d = t.fromStartM - traveled
-        guard d > 0 else { return ("前方直行到达终点", "straight.up") }
-        let act = turnText(t)
-        if d <= 60 {
-            return ("前方\(d)米\(act)", navTurnIcon(t))
-        }
-        // 远距离时只报动作，不报具体米数（米数变化太频繁，读起来跳）
-        return ("前方\(act)", navTurnIcon(t))
+        // 当前位置到路线折线的最近距离（判断"还没上主线"）
+        var minD = Double.greatestFiniteMagnitude
+        for p in route { minD = min(minD, distanceM(loc, p)) }
+        // 车道建议：用 LaneGuideBuilder 生成（高德没给车道数据时按动作合成）
+        let nextTurn = routeTurns.first { $0.fromStartM > traveled }
+        let guides = LaneGuideBuilder.guides(turn: nextTurn)
+        return GuidanceEventBuilder.make(turns: routeTurns,
+                                         traveledM: traveled,
+                                         minDistanceToRouteM: minD,
+                                         laneGuides: guides)
     }
 
     /// v2.22 起点内部道路连接：定位点 → 路线起点（道路入口）
@@ -3222,29 +3223,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return Int(acc + bestD / 2)
     }
 
-    private func turnText(_ t: RouteTurn) -> String {
-        switch t.action {
-        case "turn":
-            switch t.modifier {
-            case "left": return "左转"
-            case "right": return "右转"
-            case "slight left": return "稍向左转"
-            case "slight right": return "稍向右转"
-            case "sharp left": return "急左转"
-            case "sharp right": return "急右转"
-            default: return "转弯"
-            }
-        case "new name": return "继续直行，进入新路段"
-        case "merge": return "并入主路"
-        case "on ramp": return "驶入匝道"
-        case "off ramp": return "驶出匝道"
-        case "fork": return t.modifier.contains("left") ? "前方分岔，靠左" : t.modifier.contains("right") ? "前方分岔，靠右" : "前方分岔，请减速选择车道"
-        case "end of road": return t.modifier.contains("left") ? "前方道路尽头，左转" : "前方道路尽头，右转"
-        case "continue": return "继续直行"
-        case "roundabout": return "进入环岛，按指示方向行驶"
-        case "uturn": return "前方掉头"
-        case "arrive": return "即将到达目的地"
-        default: return "前方注意路况"
-        }
+    /// 转向动作的中文描述
+    ///
+    /// v2.27：转调 GuidanceEventBuilder.actionText —— 那是动作文案的**唯一权威实现**。
+    /// 优化建议 #10：语音与顶部提示共用同一份数据源，
+    /// 动作文案只能有一处规则（早期版本这里和 NavEvent 各写一份，
+    /// 结果"急左转"和"向左急转"两种说法并存）。
+    func turnText(_ t: RouteTurn) -> String {
+        GuidanceEventBuilder.actionText(t)
     }
 }
