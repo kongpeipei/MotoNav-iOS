@@ -29,6 +29,40 @@ enum MapGeo {
 
 /// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
+    /// v2.28 「1 厘米 = N 米」→ 相机到地图中心的地面距离（米）
+    ///
+    /// 老实现用 `ptPerCm = 38.0` 硬编码 —— 但"1 厘米对应多少点"取决于
+    /// 设备的物理尺寸与缩放（iPhone SE 约 38pt/cm，iPhone Pro Max 约 34pt/cm），
+    /// 硬编码在不同机型上比例尺会差 10% 以上，用户看到的"1厘米=50米"名不副实。
+    ///
+    /// 现在用真实物理尺寸换算：pt 本身就是物理单位（1 pt = 1/72 英寸），
+    /// 按 2.54 cm/英寸 算出屏幕物理高度（厘米），再推出"每 pt 对应多少米"。
+    /// 任何机型都对得上。
+    ///
+    /// 系数说明：俯视 45°（导航态）时，屏幕竖直张开的地面距离 ≈ 1.689 × D
+    ///（D = 相机到地图中心的地面距离），所以 D = span × 0.592。
+    /// 旧代码用的 0.62 恰好接近，但它是设给 altitude（垂直高度）用的，
+    /// 而 altitude = D × sin(45°) = 0.707D，两者是不同的量。
+    ///
+    /// 注：这里必须是 **static** —— 调用点在 MapViewRepresentable.updateUIView 里，
+    /// 而 Coordinator 是它的嵌套类，Coordinator 的实例方法在 struct 层不可见。
+    static func altitudeForScale(_ metersPerCm: Int, screenH: CGFloat) -> Double {
+        // ① 屏幕物理高度（厘米）
+        //    pt 本身就是物理单位（1pt = 1/72 英寸），与 nativeScale 无关。
+        //    注意：不能写成 screenH / nativeScale / 2.54 —— 那会多除了一个缩放倍数，
+        //    iPhone 14（844pt @3x）会算成 110cm（真实 29.8cm），差 3.7 倍。
+        let physicalHeightCm = Double(screenH) / 72.0 * 2.54
+        // ② 「1 厘米 = N 米」→ 屏幕竖直方向张开的地面距离
+        let spanMeters = physicalHeightCm * Double(metersPerCm)
+        // ③ 俯视 45°（导航态）时，屏幕张开地面距离 ≈ 1.689 × 相机到中心的地面距离，
+        //    所以 D = span / 1.689 ≈ span × 0.592。
+        //    这个系数由相机几何推导（俯角 45°、垂直视场 45°）：
+        //      顶边射线水平距 + 底边射线水平距 = 1.689 × D
+        //    旧代码用的 0.62 恰好接近，但它是设给 altitude（垂直高度）用的，
+        //    而 altitude = D × sin(45°) = 0.707D，两者是不同的量。
+        return max(spanMeters * 0.592, 50)
+    }
+
     /// v2.12 外观跟随：手动浅色/深色时地图底图一起切（导航中始终深色）
     @Environment(\.colorScheme) private var colorScheme
     let pois: [Poi]
@@ -762,7 +796,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.userMoved = false
                 let screenH = map.bounds.height
                 // v2.28：用真实物理尺寸换算（不再用 ptPerCm=38 硬编码）
-                let altitude = altitudeForScale(navScaleTarget, screenH: screenH)
+                let altitude = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: screenH)
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .followWithHeading
                     var cam = map.camera
@@ -791,7 +825,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     var cam = map.camera
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
                     // v2.28：与 navScaleTick 用同一套换算（真实物理尺寸）
-                    cam.centerCoordinateDistance = altitudeForScale(navScaleTarget,
+                    cam.centerCoordinateDistance = MapViewRepresentable.altitudeForScale(navScaleTarget,
                                                                            screenH: map.bounds.height)
                 }
             }
@@ -1087,32 +1121,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         func setRegionProgrammatically(_ block: () -> Void) {
             programmaticMove = true
             block()
-        }
-
-        /// v2.28 「1 厘米 = N 米」→ 相机到地图中心的地面距离（米）
-        ///
-        /// 老实现用 `ptPerCm = 38.0` 硬编码 —— 但"1 厘米对应多少点"取决于
-        /// 设备的物理尺寸与缩放（iPhone SE 约 38pt/cm，iPhone Pro Max 约 34pt/cm），
-        /// 硬编码在不同机型上比例尺会差 10% 以上，用户看到的"1厘米=50米"名不副实。
-        ///
-        /// 现在用真实物理尺寸换算：UIScreen.nativeScale 给出像素密度，
-        /// 1 厘米 = 1/2.54 英寸，据此算出屏幕物理高度（厘米），
-        /// 再推出"每 pt 对应多少米"。任何机型都对得上。
-        func altitudeForScale(_ metersPerCm: Int, screenH: CGFloat) -> Double {
-            // ① 屏幕物理高度（厘米）
-            //    pt 本身就是物理单位（1 pt = 1/72 英寸），与 nativeScale 无关。
-            //    注意：不能写成 screenH / nativeScale / 2.54 —— 那会多除了一个缩放倍数，
-            //    iPhone 14（844pt @3x）会算成 110cm（真实 29.8cm），差 3.7 倍。
-            let physicalHeightCm = Double(screenH) / 72.0 * 2.54
-            // ② 「1 厘米 = N 米」→ 屏幕竖直方向张开的地面距离
-            let spanMeters = physicalHeightCm * Double(metersPerCm)
-            // ③ 俯视 45°（导航态）时，屏幕张开地面距离 ≈ 1.689 × 相机到中心的地面距离，
-            //    所以 D = span / 1.689 ≈ span × 0.592。
-            //    这个系数由相机几何推导（俯角 45°、垂直视场 45°）：
-            //      顶边射线水平距 + 底边射线水平距 = 1.689 × D
-            //    旧代码用的 0.62 恰好接近，但它是设给 altitude（垂直高度）用的，
-            //    而 altitude = D × sin(45°) = 0.707D，两者是不同的量。
-            return max(spanMeters * 0.592, 50)
         }
 
         /// v1.98 统一缩放入口：先脱离跟随（否则 MapKit 会立刻回中，表现为按钮点了没反应）

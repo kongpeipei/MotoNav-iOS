@@ -440,6 +440,81 @@ def lint_duplicate_filenames(root):
     return problems
 
 
+
+def lint_nested_scope_visibility(lines):
+    """检查「嵌套类型里定义的方法被外层调用」——本轮真实踩过
+
+    v2.28 踩坑：altitudeForScale 定义在 MapViewRepresentable 的嵌套类
+    Coordinator 里，但调用点在 MapViewRepresentable.updateUIView（struct 层）。
+    Swift 里嵌套类的实例方法在 struct 层不可见 →
+    "cannot find 'altitudeForScale' in scope"。
+
+    本地无 Swift 编译器，这类错误只能靠 CI 发现（4~6 分钟一轮）。
+    这里做静态检测：
+      1. 找出所有嵌套 class/struct 里定义的方法（记录其"容器深度"）
+      2. 找出所有调用点
+      3. 如果调用点所在深度比定义浅，且调用处没有类型前缀限定 → 报错
+    """
+    problems = []
+    # ── 收集定义：name -> 定义的容器深度（1 = 顶层类型内）──
+    # 用栈跟踪当前所处的类型
+    type_stack = []   # [(类型名, 该类型体起始深度)]
+    depth = 0
+    definitions = {}  # name -> (容器类型名 or None, 容器起始深度)
+    for i, l in enumerate(lines):
+        m = re.match(r"\s*(?:final\s+)?(?:class|struct|enum|extension)\s+(\w+)", l)
+        if m and "{" in l:
+            type_stack.append((m.group(1), depth))
+            depth += l.count("{") - l.count("}")
+            continue
+        # 方法定义
+        mf = re.match(r"\s*(?:private\s+|fileprivate\s+|internal\s+|public\s+|static\s+)*func\s+(\w+)\s*\(", l)
+        if mf:
+            name = mf.group(1)
+            container = type_stack[-1][0] if type_stack else None
+            definitions.setdefault(name, []).append((i, container, depth))
+        depth += l.count("{") - l.count("}")
+        while type_stack and depth <= type_stack[-1][1]:
+            type_stack.pop()
+    if not definitions:
+        return problems
+
+    # ── 找调用点 ──
+    for i, l in enumerate(lines):
+        # 排除定义行自身
+        if re.match(r"\s*(?:private\s+|fileprivate\s+|internal\s+|public\s+|static\s+)*func\s+\w+\s*\(", l):
+            continue
+        for name, defs in definitions.items():
+            if not re.search(r"(?<![\w.])" + re.escape(name) + r"\s*\(", l):
+                continue
+            # 调用处带了类型前缀（X.name(）→ 一定可见
+            if re.search(r"\w+\." + re.escape(name) + r"\s*\(", l):
+                continue
+            # 计算调用点的容器深度
+            d = 0
+            stack = []
+            for x in range(0, i):
+                mm = re.match(r"\s*(?:final\s+)?(?:class|struct|enum|extension)\s+(\w+)", lines[x])
+                if mm and "{" in lines[x]:
+                    stack.append((mm.group(1), d))
+                d += lines[x].count("{") - lines[x].count("}")
+                while stack and d <= stack[-1][1]:
+                    stack.pop()
+            caller_container = stack[-1][0] if stack else None
+            for (di, dcontainer, ddepth) in defs:
+                if dcontainer is None:
+                    continue  # 顶层类型里的方法，任何地方都能调
+                # 定义的容器必须在调用点的容器链上
+                chain = [n for (n, _) in stack]
+                if dcontainer not in chain:
+                    problems.append((i + 1, caller_container or "顶层",
+                                     f"'{name}' 定义在嵌套类型 '{dcontainer}' 内，"
+                                     f"但此处不在该类型作用域内 —— Swift 会报 "
+                                     f"cannot find '{name}' in scope"))
+                    break
+    return problems
+
+
 def main():
     files = [f for f in os.listdir(SRC) if f.endswith(".swift")]
     all_problems = []
@@ -453,13 +528,15 @@ def main():
         if not find_modifier_structs(lines):
             # 非修饰符文件也要查重复定义 / 闭包标签 / 字符串 / if let
             for prob in (lint_duplicate_members(lines, f) + lint_closure_labels(lines)
-                         + lint_unescaped_quote(lines) + lint_if_let_nonoptional(lines)):
+                         + lint_unescaped_quote(lines) + lint_if_let_nonoptional(lines)
+                         + lint_nested_scope_visibility(lines)):
                 all_problems.append((f,) + prob)
             continue
         for prob in (lint_binding_dollar(lines) + lint_undeclared_refs(lines)
                      + lint_modifier_calls(lines) + lint_duplicate_members(lines, f)
                      + lint_closure_labels(lines) + lint_unescaped_quote(lines)
-                     + lint_if_let_nonoptional(lines)):
+                     + lint_if_let_nonoptional(lines)
+                     + lint_nested_scope_visibility(lines)):
             all_problems.append((f,) + prob)
 
     seen = set()
