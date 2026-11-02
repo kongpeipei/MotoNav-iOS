@@ -185,7 +185,10 @@ struct ContentView: View {
                 AnyView(mapLayer)
                 // v1.81.4 全屏天气动画（高德同款）：下雨雨丝/下雪飘雪，透明覆盖不拦截手势
                 // v1.86 仅初始地图页/导航态渲染：沉浸模式与巡航模式暂停（省电、不挡视野）
-                if !uiHidden && !model.cruiseMode {
+                // v2.27 优化建议 #23：巡航模式也停掉。
+                // 巡航是"看路"的场景（骑手正在找路），任何全屏动画都是干扰，
+                // 之前只停了导航态，漏了巡航态。
+                if !uiHidden && !model.cruiseMode && !model.navigating {
                     AnyView(weatherFX)
                 }
                 // v1.92 省电调暗：仅非导航态盖轻黑罩（OLED 上省电），
@@ -928,8 +931,9 @@ struct ContentView: View {
 
     /// v2.27 同步失败时的人话提示 + 下一步指引（建议 #20）
     private var syncFailureHint: String? {
-        guard let err = lastSyncOfficialError, !err.isEmpty else { return nil }
-        return "官方站点读取失败：" + err + "\n可在浏览器打开合肥市公安局网站，复制新增点位列表，到「电警点位管理」里粘贴导入。"
+        guard !lastSyncOfficialError.isEmpty else { return nil }
+        return "官方站点读取失败：" + lastSyncOfficialError
+            + "\n可在浏览器打开合肥市公安局网站，复制新增点位列表，到「电警点位管理」里粘贴导入。"
     }
 
     /// v1.99 骑行偏好：播报分级 + 摩托车优先（避开高速/高架）

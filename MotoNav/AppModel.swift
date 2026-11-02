@@ -419,11 +419,77 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.12：旧实现把 `baseDistanceFilter = lm.distanceFilter` 写在"进入省电"分支里，
     /// 第二次进入省电时基准值已经被改成 50，退出省电就永远停在 50 米——反过来更耗电
     /// （导航时 50 米才回调一次，转弯提示会明显滞后）。现在直接按状态算，不留隐式基准。
+    ///
+    /// v2.27（优化建议 #22）：再叠加一层「运动状态」分级：
+    ///   · 静止（速度 < 0.5 m/s 持续 2 分钟）→ 25 米过滤（省电，但比 50 米跟手）
+    ///   · 骑行中（速度 > 3 m/s）→ 恢复 8 米
+    ///   · 隧道/无定位 → 主动提示"定位可能不准"
     private func updateLocationFilter() {
-        if powerSaving && !navigating {
+        // 导航中一律高频（转向/电子眼提醒不能延迟）
+        if navigating {
+            lm.distanceFilter = 2
+            return
+        }
+        if powerSaving {
             lm.distanceFilter = 50
-        } else {
-            lm.distanceFilter = navigating ? 2 : 8
+            return
+        }
+        // 非导航、非省电：按是否在移动分级
+        lm.distanceFilter = isMoving ? 8 : 25
+    }
+
+    /// v2.27（优化建议 #22）运动状态判定
+    ///
+    /// 静止（速度 < 0.5 m/s）持续 2 分钟 → 降频省电；
+    /// 速度 > 3 m/s（骑行）→ 恢复高频。
+    /// 阈值取 0.5 / 3 m/s：0.5 m/s ≈ 1.8 km/h（走路速度以下算静止），
+    /// 3 m/s ≈ 10.8 km/h（低于此速度的"移动"多半是推车等，不需要高精度）。
+    @Published private(set) var isMoving = false
+    private var stillSince: Date?
+    /// v2.27 隧道/失定位提示（连续多久没有新定位算"进入隧道"）
+    private var lastLocationAt = Date()
+    private var tunnelHinted = false
+
+    /// v2.27 根据速度更新运动状态与定位频率
+    private func updateMotionState() {
+        let speed = currentSpeed
+        let now = Date()
+        if speed > 3.0 {
+            if !isMoving {
+                isMoving = true
+                stillSince = nil
+                updateLocationFilter()
+            }
+        } else if speed < 0.5 {
+            if isMoving {
+                isMoving = false
+                stillSince = now
+                updateLocationFilter()
+            } else if let s = stillSince {
+                // 静止满 2 分钟 → 再降一档频率
+                if now.timeIntervalSince(s) > 120 {
+                    stillSince = now
+                    lm.distanceFilter = 25
+                }
+            } else {
+                stillSince = now
+            }
+        }
+    }
+
+    /// v2.27 隧道提示：连续 30 秒没有新定位 → 提示定位可能不准
+    ///
+    /// 检查时机放在 navigationStatus（导航中 UI 每次刷新都会调它），
+    /// 而不是只放在定位回调里 —— 因为"失去定位"的特征恰恰是**不再有回调**，
+    /// 只在回调里检查就永远触发不了。
+    private func checkTunnelSignal() {
+        let idle = Date().timeIntervalSince(lastLocationAt)
+        if idle > 30, !tunnelHinted, navigating {
+            tunnelHinted = true
+            speak("已进入隧道或遮挡区域，定位可能暂时不准确")
+            status = "定位信号丢失，注意安全"
+        } else if idle < 10 {
+            tunnelHinted = false
         }
     }
 
@@ -1268,6 +1334,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 locationAccuracy = loc.horizontalAccuracy
                 currentSpeed = speed
             }
+            // v2.27（优化建议 #22）：运动状态分级（静止降频 / 骑行恢复）+ 隧道信号丢失检测
+            lastLocationAt = Date()
+            updateMotionState()
+            checkTunnelSignal()
             // v1.99 足迹轨迹 + 最高速（仅导航中记录，避免无意义点位）
             if navigating {
                 trackPoints.append(coord)
@@ -3001,6 +3071,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard !route.isEmpty, let start = route.first, let end = route.last else { return nil }
         let loc = coord ?? currentLocation
         guard let loc = loc else { return nil }
+        // v2.27（优化建议 #22）：隧道/失定位检测。
+        // 放在这里是因为导航中 UI 每次刷新都会调它 —— 失去定位的特征就是
+        // "不再有定位回调"，只在回调里检查永远触发不了。
+        checkTunnelSignal()
         let traveled = traveledM(route, loc)
         let total = routeDistanceM > 0 ? routeDistanceM : Int(distanceM(start, end))
         let remainM = max(0, total - traveled)

@@ -60,7 +60,9 @@ final class WebPageFetcher: NSObject {
     private var currentURL: URL?
     private var timeoutTask: Task<Void, Never>?
     /// 挑战页特征串（命中即认为还没过）
-    private static let challengeMarkers = ["jsl_clearance", "__jsl_", "var _0x", "document.cookie=('")
+    /// 注意：这里不能出现未转义的单引号 —— Swift 会把它当成字符串结束符，
+    /// 报 "expected ',' separator"。v2.27 首次提交就踩了这个坑。
+    private static let challengeMarkers = ["jsl_clearance", "__jsl_", "var _0x", "document.cookie="]
 
     private override init() {
         super.init()

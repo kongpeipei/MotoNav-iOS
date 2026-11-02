@@ -338,6 +338,81 @@ def lint_duplicate_members(lines, filename):
     return problems
 
 
+def lint_unescaped_quote(lines):
+    """F. 检查 Swift 字符串字面量里未转义的单引号。
+
+    v2.27 真实踩过：数组里的字符串含 `document.cookie=('`，
+    单引号被 Swift 当成字符串结束符 → "expected ',' separator"。
+
+    判据：一行里出现 `"` 开头的字符串后，在同一对引号内又出现裸 `'`
+    （不在注释里、也不在转义序列 \\' 里）。
+    """
+    problems = []
+    for i, l in enumerate(lines):
+        s = l.strip()
+        if s.startswith("//") or s.startswith("///") or s.startswith("*"):
+            continue
+        # 找出所有双引号字符串段
+        idx = 0
+        segs = []
+        while True:
+            a = s.find('"', idx)
+            if a == -1:
+                break
+            b = s.find('"', a + 1)
+            if b == -1:
+                break
+            segs.append(s[a + 1:b])
+            idx = b + 1
+        for seg in segs:
+            # 段内出现未被转义的单引号
+            j = 0
+            while j < len(seg):
+                if seg[j] == "\\":
+                    j += 2
+                    continue
+                if seg[j] == "'":
+                    problems.append((i + 1, "-", "字符串里有未转义的单引号 '（Swift 会当成字符串结束符）"))
+                    break
+                j += 1
+    return problems
+
+
+def lint_if_let_nonoptional(lines):
+    """G. 检查 `if let x = y` 中 y 是非可选类型的情况。
+
+    v2.27 真实踩过：`guard let err = lastSyncOfficialError`，
+    但 lastSyncOfficialError 声明成非可选 String
+    → "initializer for conditional binding must have Optional type"。
+
+    判据：找 @State/@Published 里声明为非可选的 String / Bool / Int / Double 变量，
+    再检查有没有对它们做 `if let x = var` / `guard let x = var`。
+    """
+    problems = []
+    nonoptional = {}
+    for i, l in enumerate(lines):
+        # 匹配 @State / @Published 声明，捕获类型名；
+        # 类型后面带 ? 表示可选，不能算进"非可选"表
+        m = re.match(r"\s*(?:@State|@Published(?:\([^)]*\))?)\s+(?:private\s+)?var\s+(\w+)\s*:\s*([A-Za-z_][A-Za-z0-9_]*)(\?)?", l)
+        if m:
+            name, typ, opt = m.group(1), m.group(2), m.group(3)
+            # 类型后面带 ? → 可选，不算非可选
+            # 注意：有默认值（= ""）不代表可选 —— `var x: String = ""` 仍是非可选
+            if not opt and typ in ("String", "Bool", "Int", "Double", "Int64", "CGFloat"):
+                nonoptional[name] = typ
+    if not nonoptional:
+        return problems
+    for i, l in enumerate(lines):
+        if l.strip().startswith("//"):
+            continue
+        for m in re.finditer(r"(?:if|guard)\s+let\s+\w+\s*=\s*(\w+)\b", l):
+            name = m.group(1)
+            if name in nonoptional:
+                problems.append((i + 1, "-",
+                                 f"'{name}' 是非可选 {nonoptional[name]}，不能用 if let 解包"))
+    return problems
+
+
 def main():
     files = [f for f in os.listdir(SRC) if f.endswith(".swift")]
     all_problems = []
@@ -346,13 +421,15 @@ def main():
         raw = open(path, encoding="utf-8").read()
         lines = strip_comments(raw).split("\n")
         if not find_modifier_structs(lines):
-            # 非修饰符文件也要查重复定义
-            for prob in lint_duplicate_members(lines, f) + lint_closure_labels(lines):
+            # 非修饰符文件也要查重复定义 / 闭包标签 / 字符串 / if let
+            for prob in (lint_duplicate_members(lines, f) + lint_closure_labels(lines)
+                         + lint_unescaped_quote(lines) + lint_if_let_nonoptional(lines)):
                 all_problems.append((f,) + prob)
             continue
         for prob in (lint_binding_dollar(lines) + lint_undeclared_refs(lines)
                      + lint_modifier_calls(lines) + lint_duplicate_members(lines, f)
-                     + lint_closure_labels(lines)):
+                     + lint_closure_labels(lines) + lint_unescaped_quote(lines)
+                     + lint_if_let_nonoptional(lines)):
             all_problems.append((f,) + prob)
 
     seen = set()
