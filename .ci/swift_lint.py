@@ -414,9 +414,38 @@ def lint_if_let_nonoptional(lines):
     return problems
 
 
+def lint_duplicate_filenames(root):
+    """H. 检查同名 .swift 文件是否在多个目录里各有一份。
+
+    v2.27 真实踩过：把 CameraManageSheet.swift 从 MotoNav/ 移到 MotoNav/Views/Sheets/，
+    但推送脚本只推了新路径，旧文件还留在远端 —— 两份同名文件被 Xcode 同时编译，
+    报 "Multiple commands produce '...CameraManageSheet.stringsdata'"。
+
+    触发条件是「两个不同目录下同名 .swift 文件」，它们会被编译进同一个 target，
+    必然冲突。
+    """
+    problems = []
+    moto = os.path.join(root, "MotoNav")
+    by_name = {}
+    for dirpath, dirnames, filenames in os.walk(moto):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "Assets.xcassets"]
+        for fn in filenames:
+            if not fn.endswith(".swift"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), root)
+            by_name.setdefault(fn, []).append(rel)
+    for fn, paths in sorted(by_name.items()):
+        if len(paths) > 1:
+            problems.append((0, "-", f"同名文件 '{fn}' 存在于多个目录：{paths}（会重复编译报错）"))
+    return problems
+
+
 def main():
     files = [f for f in os.listdir(SRC) if f.endswith(".swift")]
     all_problems = []
+    # 先查跨目录同名文件（这是全局性问题，放在最前面）
+    for prob in lint_duplicate_filenames(ROOT):
+        all_problems.append(("-",) + prob)
     for f in sorted(files):
         path = os.path.join(SRC, f)
         raw = open(path, encoding="utf-8").read()
