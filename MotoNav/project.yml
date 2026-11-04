@@ -1,0 +1,67 @@
+name: MotoNav
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  MotoNav:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - "project.yml"
+          - ".github"
+          - "Info.plist"
+          - "MotoNav.xcodeproj"
+          - ".git"
+          - ".DS_Store"
+          - "*.ipa"
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: 骑士地图
+        CFBundleShortVersionString: "2.30"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UIRequiresFullScreen: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocationWhenInUseUsageDescription: 需要获取位置以提供导航和附近地点搜索服务
+        NSLocationAlwaysAndWhenInUseUsageDescription: 需要在后台持续定位，以便离开应用后继续为您导航
+        UIBackgroundModes:
+          - location
+          - audio
+        CFBundleURLTypes:
+          - CFBundleURLName: com.motonav.app.ios
+            CFBundleURLSchemes:
+              - motonav
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.motonav.app.ios
+        MARKETING_VERSION: "2.30"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Manual
+schemes:
+  MotoNav:
+    build:
+      targets:
+        MotoNav: all
+    run:
+      config: Debug
+    archive:
+      config: Release
