@@ -78,6 +78,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let speech = AVSpeechSynthesizer()
     private var xfyunTTS: XfyunTTS?
     private let haptic = UINotificationFeedbackGenerator()
+    private var isTestingSpeech = false          // 测试按钮防重入
 
     /// 优化 D：纬度分桶索引（每 0.01° ≈ 1.11km，一个桶覆盖约 1.1km×1km 区域）
     private var latBuckets: [Int: [Poi]] = [:]
@@ -418,7 +419,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 测试
 
     func testSpeak() {
-        guard !speech.isSpeaking || canSpeakNow() else { return }
+        guard !isTestingSpeech else { return }
+        isTestingSpeech = true
+        defer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.isTestingSpeech = false
+            }
+        }
         let text = "前方300米，有摩托车闯红灯拍照，请谨慎行驶！"
         speak(text)
         vibrate()
