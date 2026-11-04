@@ -201,7 +201,7 @@ enum GuidanceEventBuilder {
             return t.modifier.contains("left") ? "前方道路尽头，左转" : "前方道路尽头，右转"
         case "continue": return "继续直行"
         case "roundabout": return "进入环岛，按指示方向行驶"
-        case "uturn": return "前方掉头"
+        case "uturn": return "掉头"
         case "arrive": return "即将到达目的地"
         default: return "前方注意路况"
         }

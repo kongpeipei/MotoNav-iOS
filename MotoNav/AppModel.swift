@@ -57,6 +57,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var status = "等待定位…"
     @Published var route: [CLLocationCoordinate2D] = []
     @Published var routePois: [Poi] = []
+    /// v2.30 真实矢量路网（WGS-84；导航时画成黑色细线，退出导航清空）
+    @Published var roadNetLines: [[CLLocationCoordinate2D]] = []
     /// 多路线方案（点"去这里"后展示，选择后应用）
     @Published var routeChoices: [RouteChoice] = []
     @Published var selectedPoi: Poi?
@@ -2762,6 +2764,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return hypot(xp - cx, yp - cy)
     }
 
+    // MARK: - v2.30 真实矢量路网（全黑道路）
+
+    /// 导航中拉取路线周边的真实道路网络，画成黑色细线（全黑道路风格）。
+    /// 异步拉取不阻塞主线程；退出导航时清空。
+    func refreshRoadNetwork() {
+        let rt = route
+        guard navigating, rt.count >= 1 else { roadNetLines = []; return }
+        Task { [weak self] in
+            let lines = await RoadNetworkFetcher.fetch(around: rt)
+            guard let self, self.navigating else { return }
+            self.roadNetLines = lines
+        }
+    }
+
     // MARK: - 实时导航播报
 
     func toggleNavigation() {
@@ -2774,6 +2790,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             routeChoices = [] // v1.85 结束导航隐藏路线推荐卡，只保留行程卡（轻点卡片外任意处回首页）
             selectedRouteIdx = 0
             navStatusCache = nil // v2.28 清缓存，避免下次进入导航时先显示上一条路线的余量
+            roadNetLines = []    // v2.30 退出导航清掉黑色路网
             finishTrip()
             endLiveActivity()
             speak("导航结束")
@@ -2820,6 +2837,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             scheduleLiveActivityStart(destName: destName)
             speak("开始导航到\(destName)，请按路线行驶")
             status = "导航中 → \(destName)"
+            // v2.30 异步拉取路线周边真实路网（黑色道路），拉好自动叠到地图底层
+            refreshRoadNetwork()
         }
     }
 
@@ -2925,6 +2944,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
                 trafficSpans = r.traffic
                 trafficLights = TrafficLightBuilder.lights(turns: r.turns)
+                // v2.30 偏航重规划后，重新拉取新路线周边的真实路网
+                refreshRoadNetwork()
             }
         }
     }
@@ -3799,10 +3820,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// · 18~38 km/h → 中景 50：市区常规骑行
     /// · > 38 km/h → 远景 200：快速路，要看前方排队
     func autoNavScaleTarget() -> Int {
-        let kph = currentSpeed * 3.6
-        if kph < 18 { return 30 }
-        if kph < 38 { return 50 }
-        return 200
+        // v2.30 用户要求：导航中比例尺固定 50 米（看清转弯方向）。
+        // 关闭原先按速度在 30/50/200 之间自动切换的逻辑，统一锁定中景 50。
+        return 50
     }
 
     /// v2.29 在定位回调里调用：按速度自动切视野

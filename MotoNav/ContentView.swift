@@ -518,6 +518,7 @@ struct ContentView: View {
             trafficSpans: model.trafficSpans,
             footprint: model.footprintPreview,
             teamMembers: team.others,
+            roadNetLines: model.roadNetLines,
             onMapLoad: { ok, err in
                 if ok {
                     // v2.14 相同值不再赋值：@State 赋相同值同样会让 body 全量重算
@@ -673,19 +674,29 @@ struct ContentView: View {
     }
 
     /// v2.01 右上角比例尺：白底半透明胶囊 + 一段 58pt 比例尺线（数值随缩放变化）
+    /// v2.30 导航中比例尺线长：解锁 50 米/厘米视野后，50 米实际对应的屏幕点数（让"50 米"名副其实）
+    private var navScaleLinePts: CGFloat {
+        let h = UIScreen.main.bounds.height
+        let alt = MapViewRepresentable.altitudeForScale(50, screenH: h)
+        let metersPerPt = alt / (Double(h) / 2.0)
+        return CGFloat(max(50.0 / metersPerPt, 14.0))
+    }
+
     private var scaleOverlay: some View {
-        VStack {
+        let lineLen: CGFloat = model.navigating ? navScaleLinePts : 58
+        return VStack {
             HStack {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(model.scaleText)
+                    // v2.30 导航中比例尺固定显示 50 米（看清转弯方向）
+                    Text(model.navigating ? "50 米" : model.scaleText)
                         .font(.caption2.bold())
                         .foregroundStyle(.primary)
                     ZStack(alignment: .bottomTrailing) {
-                        // 比例尺线（固定 58pt，右侧加两个端点竖线）
+                        // 比例尺线（导航中按 50 米真实长度缩短，非导航保持 58pt）
                         Rectangle()
                             .fill(Color.primary.opacity(0.75))
-                            .frame(width: 58, height: 2)
+                            .frame(width: lineLen, height: 2)
                             .overlay(alignment: .leading) {
                                 Rectangle().fill(Color.primary.opacity(0.75))
                                     .frame(width: 2, height: 7)
@@ -695,7 +706,7 @@ struct ContentView: View {
                                     .frame(width: 2, height: 7)
                             }
                     }
-                    .frame(width: 58, height: 7)
+                    .frame(width: lineLen, height: 7)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
@@ -3489,92 +3500,6 @@ struct ContentView: View {
         .position(x: UIScreen.main.bounds.width / 2, y: 150)
     }
 
-    private var navTopBar: some View {
-        VStack {
-            if model.navigating, let ns = model.navStatusCache, ns.remainM > 0 {
-                VStack(spacing: 8) {
-                    // 第一行：剩余距离 / 剩余时间 / 速度
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
-                                .font(.system(size: 34, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("剩余公里")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(durationTxt(max(ns.remainS, 0)))
-                                .font(.system(size: 24, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("剩余时间")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        // v1.82 顶部当前道路名（高德式，随导航推进更新）
-                        VStack(spacing: 2) {
-                            Text(model.currentRoadName.isEmpty ? "导航中" : model.currentRoadName)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Text("当前道路")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
-                        .frame(maxWidth: .infinity)
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 0) {
-                            Text("\(Int(ns.speedKph))")
-                                .font(.system(size: 34, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("km/h")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                    }
-                    // v1.81.4 车道卡（<500米时显示，高德同款）：左侧上方动作文字+车道图标(需走车道绿色高亮)，右侧距离+道路名称
-                    if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
-                        HStack(alignment: .top, spacing: 14) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(navTurnText(t))
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.white.opacity(0.72))
-                                HStack(spacing: 5) {
-                                    let lanes = t.lanes.isEmpty ? navLaneFallback(t.modifier) : t.lanes
-                                    ForEach(Array(lanes.enumerated()), id: \.offset) { idx, lane in
-                                        Image(systemName: navLaneIcon(lane))
-                                            .font(.subheadline.bold())
-                                            .foregroundStyle(idx == 0 ? Color.green : .white.opacity(0.42))
-                                    }
-                                }
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 0) {
-                                Text("\(navDist(ns.distToTurnM))")
-                                    .font(.system(size: 24, weight: .heavy))
-                                    .foregroundStyle(.white)
-                                if !t.roadName.isEmpty {
-                                    Text(t.roadName)
-                                        .font(.caption)
-                                        .foregroundStyle(.white.opacity(0.92))
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal)
-                .padding(.top, 52)
-            }
-            Spacer()
-        }
-    }
-
     /// v2.25 底部浮层组（候选途经点卡 / 底部overlay / 沉浸卡层 / 行程卡 / 地图错误条）
     @ViewBuilder
     private var bottomLayerGroup: some View {
@@ -3677,63 +3602,44 @@ struct ContentView: View {
         }
     }
 
-    /// v2.22 导航顶部路线提示卡（高德式）
+    /// v2.30 导航顶部提示卡（纯图标，去掉文字提示）
     ///
-    /// 文案规则（自定义刷新）：
-    /// · 起步阶段（还没驶入主线）→ "请先去往出口"
-    /// · 行驶中 → "前方xx米路口直行/右转/左转"，xx = 当前位置到该路口的距离
-    ///   距离 > 60 米时只报动作不报米数（米数每秒都在变，读起来跳）
+    /// 用户要求：
+    /// · 去掉「前方 xx 米右转」等文字，只留图案；
+    /// · 左侧大图标重点标注转向方向（左转/右转/掉头/直行），转弯时绿色底高亮；
+    /// · 右侧显示车道图标（车道数量），推荐车道绿色高亮。
     private var navTopHintBar: some View {
-        // v2.27（优化建议 #8/#9/#10）：
-        //   · 数据源从 navTopHintText 换成 currentGuidanceEvent()，
-        //     与语音播报共用同一份事件（两者不会再出现"说的和显示的不一样"）；
-        //   · 距离分级：>300 米不显示米数；60~300 米取整到 10 米；≤60 米精确；
-        //   · 副行显示「进入 XX 路 · 走第 N 车道」（车道数据高德本来就有，之前没用上）。
         let event = model.currentGuidanceEvent()
+        let isTurn = event.kind == .turn
+        let hasLanes = !event.laneIcons.isEmpty
         return Group {
-            if !event.text.isEmpty {
+            if !event.icon.isEmpty || hasLanes {
                 HStack(spacing: 10) {
+                    // 转向大图标：重点标注下个路口左转/右转/掉头
                     Image(systemName: event.icon)
-                        .font(.system(size: 19, weight: .bold))
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(event.text)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                        // 副行：进入哪条路 + 走第几车道
-                        if !event.subtitle.isEmpty || !event.laneHint.isEmpty {
-                            HStack(spacing: 6) {
-                                if !event.subtitle.isEmpty {
-                                    Text(event.subtitle)
-                                        .font(.caption2)
-                                        .foregroundStyle(.white.opacity(0.82))
-                                        .lineLimit(1)
-                                }
-                                if !event.laneHint.isEmpty {
-                                    Text("· \(event.laneHint)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.green.opacity(0.95))
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    // 车道图标（推荐车道高亮）
-                    if !event.laneIcons.isEmpty {
+                        .frame(width: 34, height: 34)
+                        .background(isTurn ? Color(red: 0.13, green: 0.62, blue: 0.30)
+                                           : Color.white.opacity(0.16), in: Circle())
+                    // 车道图标：显示车道数量，推荐车道绿色高亮
+                    if hasLanes {
                         HStack(spacing: 3) {
                             ForEach(Array(event.laneIcons.enumerated()), id: \.offset) { idx, icon in
                                 Image(systemName: icon)
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(idx == event.recommendedLane ? Color.green : .white.opacity(0.45))
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(idx == event.recommendedLane ? .white : .white.opacity(0.45))
+                                    .frame(width: 22, height: 22)
+                                    .background(idx == event.recommendedLane
+                                                ? Color.green
+                                                : Color.white.opacity(0.12),
+                                                in: RoundedRectangle(cornerRadius: 5))
                             }
                         }
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
                 .background(Color.black.opacity(0.72), in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
                 .padding(.horizontal, 16)
@@ -4312,7 +4218,7 @@ struct ContentView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
                     .background(Color.black.opacity(0.55), in: Capsule())
-                    .padding(.top, 58)
+                    .padding(.top, 64)
             }
             Spacer()
         }

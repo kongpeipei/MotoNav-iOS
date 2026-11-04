@@ -133,6 +133,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var trafficSpans: [TrafficSpan] = []
     /// v1.99 足迹回放轨迹（我的-足迹 → 点一条记录）
     var footprint: [CLLocationCoordinate2D] = []
+    /// v2.30 真实矢量路网（WGS-84，导航时画成黑色细线；OSM Overpass 拉取）
+    var roadNetLines: [[CLLocationCoordinate2D]] = []
     /// v1.99 组队队友位置
     var teamMembers: [TeamMember] = []
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
@@ -233,7 +235,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var parts: [String] = [
             "\(route.count)", navigating ? "nav" : "plan", "\(selectedRouteIdx)",
             "\(choiceRoutes.count)", "\(trafficSpans.count)", "\(footprint.count)",
-            "\(tipPolygon?.count ?? 0)"
+            "\(tipPolygon?.count ?? 0)",
+            "rd\(roadNetLines.count):\(roadNetLines.reduce(0) { $0 + $1.count })"
         ]
         if let f = route.first { parts.append("\(f.latitude),\(f.longitude)") }
         if let l = route.last { parts.append("\(l.latitude),\(l.longitude)") }
@@ -260,6 +263,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.choiceRoutes = choiceRoutes
         context.coordinator.selectedRouteIdx = selectedRouteIdx
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
+        context.coordinator.navigating = navigating
         context.coordinator.onMapLoad = onMapLoad
         // v1.69 地图加载失败重试（v1.78：移除重插瓦片 overlay 强制重绘）
         if reloadTick != context.coordinator.lastReloadTick {
@@ -590,6 +594,20 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.trafficPolylines = []
             context.coordinator.trafficColors = []
             context.coordinator.footprintPolyline = nil
+            context.coordinator.roadMulti = nil
+            // v2.30 真实矢量路网（OSM 道路 → 黑色细线）：先画在底层，绿色导航路线压在上面
+            if navigating && !roadNetLines.isEmpty {
+                let polys = roadNetLines.compactMap { pts -> MKPolyline? in
+                    guard pts.count >= 2 else { return nil }
+                    let g = MapGeo.toGCJ(pts)
+                    return MKPolyline(coordinates: g, count: g.count)
+                }
+                if !polys.isEmpty {
+                    let multi = MKMultiPolyline(polys)
+                    context.coordinator.roadMulti = multi
+                    map.addOverlay(multi)
+                }
+            }
             // v1.81 地点区域多边形（AOI 蓝色虚线框；随 tipPolygon 变化重建，每次重画路线后补加）
             let polyKey = tipPolygon.map { pts in
                 pts.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ":")
@@ -1016,6 +1034,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var selectedRouteIdx = 0
         /// v1.98 规划态：此时轻点地图任何位置（含地名标签）都应退出规划回首页
         var planning = false
+        /// v2.30 导航态（用于路线外观：导航中绿色路线用黑色平行线外壳包裹）
+        var navigating = false
         /// v1.69 地图加载回调（MKMapView 渲染完成/失败）
         var onMapLoad: ((Bool, String) -> Void)?
         /// v1.69 重载计数记忆
@@ -1045,6 +1065,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var traveledPolyline: MKPolyline?
         /// v2.22 起点/终点内部道路的蓝色虚线连接段
         var connectorPolylines: [MKPolyline] = []
+        /// v2.30 真实矢量路网 overlay（一个 MKMultiPolyline 装全部道路，黑色细线）
+        var roadMulti: MKMultiPolyline?
         /// v2.23 搜索选点到我的位置的黑色连线
         var searchLinkPolyline: MKPolyline?
         /// v2.25 搜索选点高亮标注
@@ -1619,6 +1641,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let multi = overlay as? MKMultiPolyline, multi === self.roadMulti {
+                // v2.30 真实矢量路网：黑色细线，构成"全黑道路"底图风格
+                let r = MKMultiPolylineRenderer(multiPolyline: multi)
+                r.strokeColor = UIColor(white: 0.0, alpha: 0.72)
+                r.lineWidth = 2.0
+                r.lineCap = .round
+                return r
+            }
             if let poly = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: poly)
                 r.lineCap = .round
@@ -1655,12 +1685,20 @@ struct MapViewRepresentable: UIViewRepresentable {
                     return r
                 }
                 if poly === self.underPolyline {
-                    // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
-                    r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
-                    r.lineWidth = 9
+                    // v2.30 用户要求：导航时道路用黑色平行线描边，绿色导航线被包裹在两条黑线中间。
+                    // 做法：外壳(under)由深绿改为黑色并加宽，内芯(main)保持绿色，
+                    // 视觉上即「两条黑色平行线夹一条绿色路线」。
+                    // 规划态仍用原来的深绿外壳，只有导航态改成黑边。
+                    if self.navigating {
+                        r.strokeColor = UIColor(white: 0.0, alpha: 0.92)
+                        r.lineWidth = 11
+                    } else {
+                        r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
+                        r.lineWidth = 9
+                    }
                 } else if poly === self.mainPolyline {
-                    // 推荐路线：浅绿内芯（高德绿路线双线效果）
-                    r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
+                    // 推荐路线：绿色内芯（导航中被黑色平行线外壳包裹）
+                    r.strokeColor = UIColor(red: 0.20, green: 0.80, blue: 0.36, alpha: 1.0)
                     r.lineWidth = 5
                 } else if self.alternatePolylines.contains(where: { $0 === poly }) {
                     // v2.01 备选路线：灰色实线（高德同款）——点了哪条，哪条变绿，其余保持灰
