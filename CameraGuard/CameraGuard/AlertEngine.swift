@@ -323,9 +323,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 return
             }
             xfyunTTS = tts
-            tts.speak(text) { [weak self] in
-                self?.xfyunTTS = nil
-            }
+            tts.speak(text,
+                      onFinish: { [weak self] in self?.xfyunTTS = nil },
+                      onNoAudio: { [weak self] in
+                          DispatchQueue.main.async { self?.speakSystem(text) }
+                      })
         }
     }
 
@@ -343,11 +345,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
-    /// 震动反馈（C）：prepare 后再触发，避免首次无感
+    /// 震动反馈（C）：仅使用被持有的通知反馈生成器，避免临时对象
     private func vibrate() {
         haptic.prepare()
         haptic.notificationOccurred(.warning)
-        UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1.0)
     }
 
     // MARK: - 设置持久化

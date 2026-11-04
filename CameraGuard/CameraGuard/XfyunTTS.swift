@@ -17,6 +17,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
     private var audioData = Data()
     private var player: AVAudioPlayer?
     private var onFinish: (() -> Void)?
+    private var onNoAudio: (() -> Void)?
     private var finished = false
 
     init(appID: String, apiKey: String, apiSecret: String, vcn: String) {
@@ -31,8 +32,9 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
         !appID.isEmpty && !apiKey.isEmpty && !apiSecret.isEmpty
     }
 
-    func speak(_ text: String, onFinish: @escaping () -> Void) {
+    func speak(_ text: String, onFinish: @escaping () -> Void, onNoAudio: @escaping () -> Void) {
         self.onFinish = onFinish
+        self.onNoAudio = onNoAudio
         self.finished = false
         audioData = Data()
         player?.stop()
@@ -128,7 +130,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
             receiveLoop(); return
         }
         if let code = json["code"] as? Int, code != 0 {
-            complete(); return
+            failNoAudio(); return
         }
         let d = json["data"] as? [String: Any]
         if let b64 = d?["audio"] as? String, let bytes = Data(base64Encoded: b64) {
@@ -144,7 +146,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
     // MARK: - 播放 & 收尾
 
     private func finishPlay() {
-        guard !audioData.isEmpty else { complete(); return }
+        guard !audioData.isEmpty else { failNoAudio(); return }
         let wav = Self.wrapWAV(pcm: audioData, sampleRate: 16000)
         do {
             player = try AVAudioPlayer(data: wav, fileTypeHint: AVFileType.wav.rawValue)
@@ -176,6 +178,14 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
         guard !finished else { return }
         finished = true
         webSocket?.cancel(with: .goingAway, reason: nil)
+        onFinish?()
+    }
+
+    private func failNoAudio() {
+        guard !finished else { return }
+        finished = true
+        webSocket?.cancel(with: .goingAway, reason: nil)
+        onNoAudio?()
         onFinish?()
     }
 
