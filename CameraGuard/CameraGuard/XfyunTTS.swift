@@ -17,8 +17,9 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
     private var audioData = Data()
     private var player: AVAudioPlayer?
     private var onFinish: (() -> Void)?
-    private var onNoAudio: (() -> Void)?
+    private var onNoAudio: ((String) -> Void)?
     private var finished = false
+    private var errorMessage: String?
 
     init(appID: String, apiKey: String, apiSecret: String, vcn: String) {
         self.appID = appID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -32,10 +33,11 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
         !appID.isEmpty && !apiKey.isEmpty && !apiSecret.isEmpty
     }
 
-    func speak(_ text: String, onFinish: @escaping () -> Void, onNoAudio: @escaping () -> Void) {
+    func speak(_ text: String, onFinish: @escaping () -> Void, onNoAudio: @escaping (String) -> Void) {
         self.onFinish = onFinish
         self.onNoAudio = onNoAudio
         self.finished = false
+        self.errorMessage = nil
         audioData = Data()
         player?.stop()
         guard isConfigured, !text.isEmpty else { complete(); return }
@@ -130,6 +132,9 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
             receiveLoop(); return
         }
         if let code = json["code"] as? Int, code != 0 {
+            let msg = json["message"] as? String ?? ""
+            let desc = json["desc"] as? String ?? ""
+            self.errorMessage = "错误码\(code) \(msg) \(desc)"
             failNoAudio(); return
         }
         let d = json["data"] as? [String: Any]
@@ -185,7 +190,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
         guard !finished else { return }
         finished = true
         webSocket?.cancel(with: .goingAway, reason: nil)
-        onNoAudio?()
+        onNoAudio?(errorMessage ?? "无音频返回")
         onFinish?()
     }
 

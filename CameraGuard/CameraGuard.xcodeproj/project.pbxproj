@@ -16,6 +16,7 @@
 		CA0000000000000000000007 /* PoiEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000009 /* PoiEditorView.swift */; };
 		CA0000000000000000000008 /* AddPoiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000A /* AddPoiView.swift */; };
 		CA0000000000000000000009 /* XfyunTTS.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000B /* XfyunTTS.swift */; };
+		CA0000000000000000000010 /* VoiceEngineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000C /* VoiceEngineView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 		CB0000000000000000000009 /* PoiEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoiEditorView.swift; sourceTree = "<group>"; };
 		CB000000000000000000000A /* AddPoiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPoiView.swift; sourceTree = "<group>"; };
 		CB000000000000000000000B /* XfyunTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XfyunTTS.swift; sourceTree = "<group>"; };
+		CB000000000000000000000C /* VoiceEngineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceEngineView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +63,7 @@
 				CB0000000000000000000009 /* PoiEditorView.swift */,
 				CB000000000000000000000A /* AddPoiView.swift */,
 				CB000000000000000000000B /* XfyunTTS.swift */,
+				CB000000000000000000000C /* VoiceEngineView.swift */,
 				CB0000000000000000000007 /* Assets.xcassets */,
 				CB0000000000000000000006 /* poi.json */,
 				CB0000000000000000000008 /* Info.plist */,
@@ -154,6 +157,7 @@
 				CA0000000000000000000007 /* PoiEditorView.swift in Sources */,
 				CA0000000000000000000008 /* AddPoiView.swift in Sources */,
 				CA0000000000000000000009 /* XfyunTTS.swift in Sources */,
+				CA0000000000000000000010 /* VoiceEngineView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -213,7 +217,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "CameraGuard/Info.plist";
@@ -221,7 +225,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -236,7 +240,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "CameraGuard/Info.plist";
@@ -244,7 +248,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
