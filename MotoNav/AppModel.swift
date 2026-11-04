@@ -2785,8 +2785,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             heading = compass.angle
             UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
             pitchDeg = 45         // v2.01 开始导航：3D 45° 俯视（视野见 MapView）
-            // v2.22 导航开启即切到"比例尺 1 厘米 = 50 米"的视野档位
-            navScaleTarget = 50
+            // v2.22 导航开启即切视野；v2.30 由 50 → 30（近景），开始导航后放大地图，
+            // 先看清起步路口，骑起来后再按速度自动切远。
+            navScaleTarget = 30
             navScaleTick += 1
             navUserMoved = false
             navigateFollowTick += 1

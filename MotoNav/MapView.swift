@@ -2019,8 +2019,14 @@ final class AmapTileRenderer: MKOverlayRenderer {
     private let ioQueue = DispatchQueue(label: "amap.tile.io", qos: .userInitiated,
                                        attributes: .concurrent)
     private static let diskMaxFiles = 1200
-    /// v2.16 并发上限 12 → 24：4 个子域各 6 个并发，正好吃满 URLSession 单域默认连接数
-    private static let maxInflight = 24
+    /// v2.16 并发上限 12 → 24；v2.30 24 → 36：放大地图时要一口气下载一屏新瓦片，
+    /// 并发提高后放大时的「糊→清」恢复明显更快。用独立 session 把单域连接数放宽到 12。
+    private static let maxInflight = 36
+    private static let tileSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.httpMaximumConnectionsPerHost = 12
+        return URLSession(configuration: cfg)
+    }()
 
     // MARK: - v2.29 骑行省电模式
     //
@@ -2047,7 +2053,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
     /// 省电模式下的瓦片层级上限
     private static var effectiveZMax: Int { powerSaveMap ? 17 : zMax }
     /// 省电模式下的并发上限
-    private static var effectiveMaxInflight: Int { powerSaveMap ? 12 : maxInflight }
+    private static var effectiveMaxInflight: Int { powerSaveMap ? 16 : maxInflight }
 
     /// v2.00 瓦片直铺（关键修复）
     ///
@@ -2228,7 +2234,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
         if queuedTiles.contains(key) { lock.unlock(); return }
         queuedTiles.insert(key)
         lock.unlock()
-        ioQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        ioQueue.asyncAfter(deadline: .now() + 0.02) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             self.queuedTiles.remove(key)
@@ -2308,7 +2314,7 @@ final class AmapTileRenderer: MKOverlayRenderer {
             req.timeoutInterval = 8
             req.cachePolicy = .returnCacheDataElseLoad
 
-            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            Self.tileSession.dataTask(with: req) { [weak self] data, _, _ in
                 guard let self else { return }
                 // v2.14 解码放后台：UIImage(data:) 是 CPU 密集操作（PNG 解压 + 位图生成），
                 // 旧实现在主线程的锁内做，一屏几十张同时返回就是几百毫秒的主线程占用。

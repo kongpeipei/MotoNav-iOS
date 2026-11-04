@@ -3645,7 +3645,7 @@ struct ContentView: View {
         }
     }
 
-    /// v2.25 导航浮层组（顶部提示卡 / 右侧进度条 / 退出按钮 / 全览条 / 左侧竖排）
+    /// v2.25 导航浮层组（顶部提示卡 / 退出按钮 / 全览条 / 左侧竖排；v2.30 移除右侧进度条避免"透明竖线"）
     @ViewBuilder
     private var navOverlayGroup: some View {
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
@@ -3655,13 +3655,7 @@ struct ContentView: View {
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
         }
-        // v2.22 右侧竖直绿色路程进度条
-        if model.navigating && !showRouteOverview {
-            AnyView(navProgressBar)
-                .frame(maxHeight: .infinity, alignment: .trailing)
-                .padding(.trailing, 6)
-                .padding(.vertical, 130)
-        }
+        
         // 导航中悬浮退出按钮（仅上下移动；全览时隐藏）
         if model.navigating && !showRouteOverview {
             // v2.02 贴底摆放（高德导航卡片位置）
@@ -3742,34 +3736,7 @@ struct ContentView: View {
         }
     }
 
-    /// v2.22 导航右侧竖直绿色路程进度条（已走比例）
-    private var navProgressBar: some View {
-        let p = max(0, min(1, model.navProgress))
-        return VStack(spacing: 0) {
-            // 剩余部分（灰）
-            GeometryReader { geo in
-                ZStack(alignment: .bottom) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.22))
-                        .frame(width: 5)
-                    // 已走部分（绿）：从下往上生长
-                    Capsule()
-                        .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
-                        .frame(width: 5, height: max(4, geo.size.height * p))
-                }
-                .frame(width: 5)
-                .frame(maxHeight: .infinity)
-            }
-            // 当前位置圆点
-            Circle()
-                .fill(Color.white)
-                .frame(width: 7, height: 7)
-                .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
-                .offset(y: -4)
-        }
-        .frame(width: 7)
-        .allowsHitTesting(false)
-    }
+    
 
     /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
     private var exitNavOverlay: some View {
@@ -3844,14 +3811,12 @@ struct ContentView: View {
         // 而卡内所有文字用的是 Color.black.opacity(0.88)（mainFg/dimFg）——
         // 于是变成"黑底黑字"，一个字都看不见，屏幕上只剩一块纯黑矩形。
         //
-        // 高德的做法是导航底卡**始终用浅色**（夜间也不反色），
-        // 这样骑行时无论系统主题如何，读数都清晰。
-        // 这里跟随外观设置：浅色模式用 systemBackground（白），
-        // 深色模式用固定深灰（不用纯黑，避免和地图底图糊在一起）。
-        let isDark = colorScheme == .dark
-        let cardBg = isDark ? Color(white: 0.16) : Color(.systemBackground)
-        let dimFg = isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.42)
-        let mainFg = isDark ? Color.white.opacity(0.95) : Color.black.opacity(0.88)
+        // v2.30 照搬高德：导航底卡**始终浅色**（夜间也不反色）。
+        // 导航地图本身始终深色，白底黑字底卡对比最强，读数最清晰，
+        // 也不会出现深色模式下「纯黑卡片 / 黑底黑字」的问题。
+        let cardBg = Color(.systemBackground)
+        let dimFg = Color.black.opacity(0.42)
+        let mainFg = Color.black.opacity(0.88)
         // v2.29 骑行极简模式：字号放大（头盔视野窄，字要更大才看得清）
         let minimal = model.ridingMinimalUI
         let actionFontSize: CGFloat = minimal ? 18 : 14
@@ -3989,7 +3954,7 @@ struct ContentView: View {
         }
         .background(cardBg, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
-            isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.07), lineWidth: 1))
+            Color.black.opacity(0.07), lineWidth: 1))
         .shadow(color: .black.opacity(0.28), radius: 12, y: 4)
         .padding(.horizontal, 12)
     }
@@ -3999,10 +3964,9 @@ struct ContentView: View {
     /// v2.29：文字颜色原先硬编码为黑色，深色模式下又是"黑底黑字"。
     /// 改为跟随底卡配色（浅色模式黑字、深色模式白字）。
     private func lightCountdownRow(_ nl: (light: TrafficLight, dist: Int)) -> some View {
-        let isDark = colorScheme == .dark
-        let numFg = isDark ? Color.white.opacity(0.92) : Color.black.opacity(0.78)
-        let subFg = isDark ? Color.white.opacity(0.6) : Color.black.opacity(0.45)
-        let lampBg = isDark ? Color.black.opacity(0.55) : Color.black.opacity(0.85)
+        let numFg = Color.black.opacity(0.78)
+        let subFg = Color.black.opacity(0.45)
+        let lampBg = Color.black.opacity(0.85)
         return TimelineView(.periodic(from: .now, by: 1)) { ctx in
             let st = nl.light.state(at: ctx.date)
             HStack(spacing: 8) {
@@ -4035,7 +3999,7 @@ struct ContentView: View {
                     .foregroundStyle(subFg)
             }
             .padding(.horizontal, 14)
-            .background((st.red ? Color.red : Color.green).opacity(isDark ? 0.16 : 0.07))
+            .background((st.red ? Color.red : Color.green).opacity(0.07))
         }
     }
 
