@@ -517,8 +517,8 @@ struct ContentView: View {
             tipFit: tipCard.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
             trafficSpans: model.trafficSpans,
             footprint: model.footprintPreview,
-            teamMembers: team.others,
             roadNetLines: model.roadNetLines,
+            teamMembers: team.others,
             onMapLoad: { ok, err in
                 if ok {
                     // v2.14 相同值不再赋值：@State 赋相同值同样会让 body 全量重算
