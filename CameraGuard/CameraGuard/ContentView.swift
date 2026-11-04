@@ -82,11 +82,9 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                Text(engine.nearestDistance <= effectiveWarn
-                     ? "⚠️ 即将播报：\(p.type.voiceText)"
-                     : "接近 \(Int(effectiveWarn)) 米内自动语音提醒")
+                Text(hintText(for: p))
                     .font(.footnote)
-                    .foregroundStyle(engine.nearestDistance <= effectiveWarn ? .red : .secondary)
+                    .foregroundStyle(hintColor(for: p))
             } else {
                 Image(systemName: "location.magnifyingglass")
                     .font(.system(size: 36))
@@ -109,6 +107,24 @@ struct ContentView: View {
     private var effectiveWarn: Double {
         AdaptiveWarn.effectiveDistance(base: engine.warnDistance,
                                         speedMetersPerSecond: engine.speedKmh / 3.6)
+    }
+
+    /// v1.4：播报后不再一直显示「即将播报」，改为「已播报」，避免用户以为还没提醒
+    private func hintText(for p: Poi) -> String {
+        let within = engine.nearestDistance <= effectiveWarn
+        if within && engine.announced.contains(p.id) {
+            return "✓ 已播报「\(p.type.voiceText)」，请减速通过"
+        }
+        if within {
+            return "⚠️ 即将播报：\(p.type.voiceText)"
+        }
+        return "接近 \(Int(effectiveWarn)) 米内自动语音提醒"
+    }
+
+    private func hintColor(for p: Poi) -> Color {
+        let within = engine.nearestDistance <= effectiveWarn
+        if within && engine.announced.contains(p.id) { return .secondary }
+        return within ? .red : .secondary
     }
 
     // MARK: - 后台运行提示
@@ -163,16 +179,18 @@ struct ContentView: View {
                                 .foregroundStyle(.tertiary)
                         }
                         Spacer()
-                    }
-                    .padding(.vertical, 4)
-                    // #2 左滑删除单条
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
+                        // v1.4：删除按钮改显式图标（原 swipeActions 在 ScrollView 内不生效，左滑无法删除）
+                        Button {
                             engine.announcements.removeAll { $0.id == a.id }
                         } label: {
-                            Label("删除", systemImage: "trash")
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.tertiary)
+                                .padding(4)
                         }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 4)
                     if a.id != engine.announcements.last?.id {
                         Divider()
                     }
@@ -300,7 +318,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: engine.warnDistance) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.enabledTypes) { _, _ in engine.saveSettings() }
     }
 
     // MARK: - Helpers
@@ -310,7 +327,7 @@ struct ContentView: View {
             get: { engine.enabledTypes.contains(t) },
             set: { on in
                 if on { engine.enabledTypes.insert(t) } else { engine.enabledTypes.remove(t) }
-                engine.saveSettings()
+                engine.saveSettings(rebuildIndex: true)   // 类型开关影响分桶过滤，需要重建索引
             }
         )
     }

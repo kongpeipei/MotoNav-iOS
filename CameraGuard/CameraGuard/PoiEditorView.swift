@@ -191,21 +191,38 @@ final class ImportCoordinator: NSObject, UIDocumentPickerDelegate {
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         guard let url = urls.first else { return }
+        // v1.4：从「文件」/iCloud/第三方网盘选中的文件属于安全作用域资源，
+        // 不申请访问权限时 Data(contentsOf:) 会失败（表现为“选完文件没反应”）
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
             let data = try Data(contentsOf: url)
-            try engine.importPois(from: data)
+            let result = try engine.importPois(from: data)
+            showAlert(title: "导入完成",
+                      message: "新增 \(result.added) 个点位，跳过 \(result.skipped) 条重复或无效数据")
         } catch {
-            let alert = UIAlertController(title: "导入失败", message: error.localizedDescription, preferredStyle: .alert)
+            showAlert(title: "导入失败", message: error.localizedDescription)
+        }
+    }
+
+    /// 选择器还在收起动画中时从根控制器 present 会静默失败，延后到收起完成再弹
+    private func showAlert(title: String, message: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "好", style: .default))
             currentTopViewController()?.present(alert, animated: true)
         }
     }
 }
 
-/// 取当前前台窗口根控制器（替代已废弃的 UIApplication.shared.windows.first），页面与导入协调器共用
+/// 取当前最上层控制器（v1.4：沿 presentedViewController 链向上，避免 sheet/选择器叠层时从根控制器弹出失败），页面与导入协调器共用
 private func currentTopViewController() -> UIViewController? {
     guard let scene = UIApplication.shared.connectedScenes
         .compactMap({ $0 as? UIWindowScene })
         .first(where: { $0.activationState == .foregroundActive }) else { return nil }
-    return (scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first)?.rootViewController
+    var vc = (scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first)?.rootViewController
+    while let presented = vc?.presentedViewController, !presented.isBeingDismissed {
+        vc = presented
+    }
+    return vc
 }

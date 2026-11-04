@@ -106,7 +106,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let lm = CLLocationManager()
     private(set) var bundledPois: [Poi] = []
-    private var announced: Set<String> = []        // 已播报点位 id
+    /// 已播报点位 id（published 供首页显示「已播报」状态，避免播报后仍显示「即将播报」）
+    @Published private(set) var announced: Set<String> = []
+    /// v1.4 功耗自适应：当前是否处于高精度模式（低速/静止时降精度省电）
+    private var highAccuracyMode = true
     private var lastSpeak = Date.distantPast
     private let speech = AVSpeechSynthesizer()
     private var xfyunTTS: XfyunTTS?
@@ -161,9 +164,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         super.init()
 
         lm.delegate = self
-        lm.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        // v1.4：初始按「行驶中」配置；低速/静止后自动切成低精度低频，减少骑行者电池消耗
+        lm.desiredAccuracy = kCLLocationAccuracyBest
         lm.activityType = .otherNavigation
-        lm.distanceFilter = 15   // 更频繁一点，加速时反应及时
+        lm.distanceFilter = 10   // 高速时需要更密的采样，保证预警及时
         lm.pausesLocationUpdatesAutomatically = false
         lm.allowsBackgroundLocationUpdates = true
         lm.showsBackgroundLocationIndicator = true
@@ -282,7 +286,19 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         location = loc
         let speed = loc.speed >= 0 ? loc.speed : 0
         speedKmh = speed * 3.6
+        tuneLocationAccuracy(speedMetersPerSecond: speed)
         evaluateNearest()
+    }
+
+    /// v1.4 功耗优化：只有真正在移动时才需要高精度高频定位。
+    /// 低速/等红灯/停车时切到 10 米精度 + 30 米过滤，显著降低 GPS 与后台唤醒耗电；
+    /// 进入/退出阈值不同（3 m/s 进低速、5 m/s 回高速），避免在阈值附近来回抖动。
+    private func tuneLocationAccuracy(speedMetersPerSecond speed: Double) {
+        let shouldHigh = highAccuracyMode ? speed >= 3.0 : speed >= 5.0
+        guard shouldHigh != highAccuracyMode else { return }
+        highAccuracyMode = shouldHigh
+        lm.desiredAccuracy = shouldHigh ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters
+        lm.distanceFilter = shouldHigh ? 10 : 30
     }
 
     /// 优化 A：速度自适应预警距离按当前速度放大（骑行 1.0× ~ 高速 2.0×）
@@ -318,6 +334,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         speak(text)
         // 优化 C：震动辅助
         vibrate()
+        // v1.4：后台/锁屏时同步推一条本地通知，避免只靠语音导致漏提醒（此前申请了通知权限却从未使用）
+        postBackgroundNotification(distance: Int(bestD), type: best.type, name: best.name)
 
         announcements.insert(
             Announcement(time: Date(), type: best.type, name: best.name,
@@ -368,6 +386,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 ttsFeedback = "讯飞未配置，已用系统语音"
                 return
             }
+            // v1.4：先停掉上一段未播完的讯飞请求，避免两句合成请求叠播、连接与音频资源泄漏
+            xfyunTTS?.stop()
             xfyunTTS = tts
             ttsFeedback = "讯飞合成中 · \(voiceDisplayName)"
             tts.speak(text,
@@ -405,9 +425,23 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         haptic.notificationOccurred(.warning)
     }
 
+    /// 后台本地通知（仅 App 不在前台时发，前台已有界面与语音，不重复打扰）
+    private func postBackgroundNotification(distance: Int, type: PoiType, name: String) {
+        guard UIApplication.shared.applicationState == .background else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "前方 \(distance) 米 · \(type.label)"
+        content.body = name
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
     // MARK: - 设置持久化
 
-    func saveSettings() {
+    /// 保存设置。
+    /// - Parameter rebuildIndex: 仅当点位数据或类型过滤变化时才需要重建分桶索引；
+    ///   只改播报距离、语音引擎/凭证时传 false，避免无意义的全量重算。
+    func saveSettings(rebuildIndex: Bool = false) {
         let defaults = UserDefaults.standard
         defaults.set(enabledTypes.map { $0.rawValue }, forKey: "enabledTypes")
         defaults.set(warnDistance, forKey: "warnDistance")
@@ -419,7 +453,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let data = try? JSONEncoder().encode(userPois) {
             defaults.set(data, forKey: "userPois")
         }
-        rebuildIndex()
+        if rebuildIndex { self.rebuildIndex() }
     }
 
     // MARK: - 用户 POI 管理（#3 点位编辑）
@@ -430,20 +464,21 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
         userPois.append(poi)
-        saveSettings()
+        saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
 
     func deleteUserPoi(id: String) {
         userPois.removeAll { $0.id == id }
-        saveSettings()
+        announced.remove(id)
+        saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
 
     func toggleUserPoi(id: String) {
         guard let idx = userPois.firstIndex(where: { $0.id == id }) else { return }
         userPois[idx].enabled.toggle()
-        saveSettings()
+        saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
 
@@ -461,16 +496,40 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         return try? JSONEncoder().encode(arr)
     }
 
-    /// 导入 JSON（格式兼容 poi.json），合并到 userPois（优化 E）
-    func importPois(from data: Data) throws {
-        let arr = try JSONDecoder().decode([Poi].self, from: data)
-        for p in arr {
-            if !userPois.contains(where: { $0.latitude == p.latitude && $0.longitude == p.longitude && $0.type == p.type }) {
-                userPois.append(p)
+    /// 导入 JSON（格式兼容 poi.json），合并到 userPois。
+    /// v1.4：改为逐条解析 + 坐标/去重校验，单条坏数据只跳过该条，不再让整批导入失败；
+    /// 返回新增与跳过的条数，供界面给出明确结果。
+    @discardableResult
+    func importPois(from data: Data) throws -> (added: Int, skipped: Int) {
+        let obj = try JSONSerialization.jsonObject(with: data)
+        guard let raw = obj as? [[String: Any]] else { throw PoiImportError.invalidFormat }
+
+        var added = 0
+        var skipped = 0
+        for dict in raw {
+            guard let name = dict["name"] as? String,
+                  let typeRaw = dict["type"] as? String,
+                  let type = PoiType(rawValue: typeRaw),
+                  let lat = (dict["lat"] as? NSNumber)?.doubleValue,
+                  let lon = (dict["lon"] as? NSNumber)?.doubleValue,
+                  (-90...90).contains(lat), (-180...180).contains(lon),
+                  !(lat == 0 && lon == 0) else {
+                skipped += 1
+                continue
             }
+            let poi = Poi(name: name, type: type, latitude: lat, longitude: lon,
+                          radiusM: (dict["radiusM"] as? NSNumber)?.doubleValue ?? 500,
+                          enabled: (dict["enabled"] as? Bool) ?? true)
+            if userPois.contains(where: { $0.latitude == poi.latitude && $0.longitude == poi.longitude && $0.type == poi.type }) {
+                skipped += 1
+                continue
+            }
+            userPois.append(poi)
+            added += 1
         }
-        saveSettings()
+        saveSettings(rebuildIndex: true)
         evaluateNearest()
+        return (added, skipped)
     }
 
     // MARK: - 测试
@@ -490,5 +549,14 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             Announcement(time: Date(), type: .CUSTOM, name: "测试", distance: 0, text: text),
             at: 0
         )
+    }
+}
+
+/// 点位导入错误（仅根格式不合法时抛出；单条坏数据按跳过处理）
+enum PoiImportError: LocalizedError {
+    case invalidFormat
+
+    var errorDescription: String? {
+        "JSON 格式不正确：应为点位对象数组（name / type / lat / lon）"
     }
 }

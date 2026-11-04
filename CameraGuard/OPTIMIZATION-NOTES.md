@@ -107,3 +107,38 @@ CameraGuard/
 - `poi.json` 数据、`Info.plist` 权限项、后台 `location/audio` 模式、工程 `pbxproj` 结构与版本号均未改动。
 - 定位精度 `BestForNavigation` 与 `distanceFilter = 15m` 保留（骑行实时导航需要精度），未为省电降级以免延误预警。
 - 未新增第三方依赖，未引入新文件到 Sources 编译阶段（无 pbxproj 变更），降低构建风险。
+
+---
+
+# 第二轮优化（v1.4 · 真实缺陷修复 + 功耗/体验）
+
+本轮不做界面重做，只处理读代码能确认的缺陷与开销。版本号 1.3 → 1.4（`MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` 1.3/4 → 1.4/5）。
+
+## 1. Bug 修复
+
+| # | 问题 | 根因 | 处理 |
+|---|---|---|---|
+| 1 | 「最近播报」左滑删除完全无效 | `swipeActions` 只对 `List` 行生效，页面在 `ScrollView` 里 | 每行改为显式 × 删除按钮，点击即删，功能真正可用 |
+| 2 | 从「文件」/iCloud 导入 JSON 选完没反应 | 文档选择器 URL 是安全作用域资源，未调用 `startAccessingSecurityScopedResource()`，`Data(contentsOf:)` 直接失败 | 读取前申请访问、`defer` 释放；失败/成功都弹明确结果 |
+| 3 | 一条坏记录导致整批导入失败 | 导入用 `JSONDecoder().decode([Poi].self)`，数组任一元素不合法就整体抛错 | 改 `JSONSerialization` 逐条解析，坐标范围校验 + 去重，坏数据只跳过并计数 |
+| 4 | 导入报错弹窗偶发不出现 | 选择器未收起时从根控制器 present 会静默失败；且只取 rootVC，sheet 叠层时弹不出 | 沿 `presentedViewController` 链取最上层控制器；弹窗延后 0.35s 到收起动画结束 |
+| 5 | 讯飞连播时两句叠播/连接泄漏 | 每次播报新建 `XfyunTTS`，不停止上一段进行中的请求 | 新建前 `stop()` 旧实例并置空 |
+| 6 | 播报后首页一直显示「即将播报」 | `announced` 只用于内部节流，未暴露给界面 | `announced` 改 `@Published`，播报后显示「✓ 已播报，请减速通过」 |
+| 7 | 申请了通知权限却从未发过通知 | 后台只靠语音，锁屏/静音时容易漏提醒 | 后台触发播报时同步发一条本地通知（前台不发），权限终于有实际用途 |
+| 8 | 改播报距离/语音设置也重建全量点位索引 | `saveSettings()` 内无条件 `rebuildIndex()` | 增加 `rebuildIndex:` 参数，只有点位增删/开关/导入才重建 |
+
+## 2. 功耗优化
+
+- 原实现始终 `kCLLocationAccuracyBestForNavigation` + `distanceFilter = 15`，等红灯、停车时也在满负荷定位。
+- 现按车速切换：≥ 5 m/s 用 `Best` + 10 m 过滤；低速/静止降到 `NearestTenMeters` + 30 m 过滤；进入 3 m/s / 退出 5 m/s 双阈值做滞回，避免阈值抖动反复切换。
+- 预警逻辑不变：低速时自适应系数本来就是 1.0×（预警距离短），10 米精度足够。
+
+## 3. 兼容性 / 稳定性
+
+- `saveSettings()` 签名变化只影响本工程内部 6 处调用，已全部同步。
+- 未改 `poi.json`、`Info.plist` 权限项与后台模式、未新增源文件、无 `pbxproj` 结构改动（只改版本号）。
+
+## 4. 验证方式
+
+- 推送后由 `.github/workflows/build-camera-guard.yml`（macos-15 + Release，未签名）真实编译，以 CI 结果为准；本机为 Linux，无法本地 `xcodebuild`。
+- 静态自查：全部 Swift 文件花括号/圆括号平衡；`swipeActions` 已无残留；`importPois` / `saveSettings` 调用点全部对齐新签名。
