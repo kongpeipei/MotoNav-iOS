@@ -3111,7 +3111,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 导航中：向前 500 米内出现禁摩/隧道/高架等风险段时播报（每段只报一次）
     /// v2.29 已播报过的风险（记录播报到了哪一档）
-    private var riskSpokenStage: [Int: Int] = [:]
+    private var riskSpokenStage: [String: Int] = [:]
 
     /// 骑行风险提醒（禁摩/限行/隧道/大桥）
     ///
