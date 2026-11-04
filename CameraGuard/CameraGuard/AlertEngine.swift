@@ -346,7 +346,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 震动反馈（C）：prepare 后再触发，避免首次无感
     private func vibrate() {
         haptic.prepare()
-        vibrate()
+        haptic.notificationOccurred(.warning)
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1.0)
     }
 
