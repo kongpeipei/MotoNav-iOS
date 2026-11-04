@@ -161,3 +161,32 @@ CameraGuard/
 
 - 编译由 CI（build-camera-guard.yml，macos-15 / Release）确认。
 - 交互验证清单：① 高级里输入 `xiaoyan` → 列表出现一条 `xiaoyan` 语音包并被选中；② 改名后杀进程重开仍保留；③ 左滑删除 → 列表消失；④ 删除当前项后选中项自动切换。
+
+---
+
+# 第四轮（v1.6 · 可配置震动 + 始终定位引导）
+
+版本 1.5 → 1.6（构建号 6 → 7）。
+
+## 1. 震动提醒（CoreHaptics）
+
+- 高级设置新增两项：
+  - **震动时长**：0 秒 = 关闭，最长 60 秒，0.5 秒步进；
+  - **震动强度**：0~100%，10% 步进。
+- 新增 `HapticsPlayer`：用 `CHHapticEngine` 的 continuous 事件实现「可控时长 + 可控强度」的一次连续触感；每次播放前停掉上一段，避免叠震。
+- 设备不支持 CoreHaptics 或引擎启动失败时，自动回退 `UINotificationFeedbackGenerator` 警告触感，提醒不会完全丢失。
+- 生效范围：**测试按钮**（`testSpeak`）与**抓拍点提醒**（`evaluateNearest` 播报时）共用同一个 `vibrate()`，都按设置执行；时长为 0 时两者都不震。
+- 设置持久化到 `hapticDuration` / `hapticIntensity`。
+
+## 2. 启动询问「始终」定位
+
+- `AlertEngine.begin()` 与授权回调中，若当前仅为「使用期间」授权，置 `showAlwaysPrompt = true`；首页弹出引导：
+  - 「现在允许」→ `requestAlwaysAuthorization()`；
+  - 「去系统设置」→ 跳转本 App 设置页；
+  - 「稍后」→ 关闭。
+- 已授权「始终」时不再打扰。
+
+## 3. 验证
+
+- CI 编译（build-camera-guard.yml，Release）。
+- 真机交互清单：① 时长拖到 0 → 测试按钮只有语音无震动；② 时长 3 秒 + 强度 100% → 测试与接近抓拍点时均为持续 3 秒强震；③ 强度 30% 明显变弱；④ 首次仅授权「使用期间」→ 启动弹「开启始终定位」。

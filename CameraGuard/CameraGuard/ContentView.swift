@@ -22,6 +22,18 @@ struct ContentView: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("电子眼卫士")
+            // v1.6：启动时若只是「使用期间」定位，主动询问是否升级为「始终」，保证锁屏后台继续播报
+            .alert("开启「始终」定位", isPresented: $engine.showAlwaysPrompt) {
+                Button("现在允许") { engine.requestAlwaysAuthorization() }
+                Button("去系统设置") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("稍后", role: .cancel) { }
+            } message: {
+                Text("锁屏或切到后台后仍要语音提醒违法拍照点，需要把定位权限改为「始终允许」。")
+            }
         }
     }
 
@@ -297,6 +309,41 @@ struct ContentView: View {
 
             Divider()
 
+            // v1.6 震动设置：0 秒为关闭，最长 60 秒；强度 0~100%
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: "iphone.radiowaves.left.and.right")
+                        .foregroundStyle(.orange)
+                    Text("震动提醒")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Text(engine.hapticDuration == 0 ? "已关闭"
+                         : String(format: "%.1f 秒", engine.hapticDuration))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(engine.hapticDuration == 0 ? .tertiary : .secondary)
+                }
+                Slider(value: $engine.hapticDuration, in: 0...60, step: 0.5)
+                    .tint(.orange)
+                Text("持续时间：0 秒为关闭，最长 60 秒")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                HStack(spacing: 10) {
+                    Text("强度")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, alignment: .leading)
+                    Slider(value: $engine.hapticIntensity, in: 0...1, step: 0.1)
+                        .tint(.orange)
+                    Text("\(Int(engine.hapticIntensity * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+            }
+
+            Divider()
+
             Button {
                 engine.testSpeak()
             } label: {
@@ -318,6 +365,8 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: engine.warnDistance) { _, _ in engine.saveSettings() }
+        .onChange(of: engine.hapticDuration) { _, _ in engine.saveSettings() }
+        .onChange(of: engine.hapticIntensity) { _, _ in engine.saveSettings() }
     }
 
     // MARK: - Helpers

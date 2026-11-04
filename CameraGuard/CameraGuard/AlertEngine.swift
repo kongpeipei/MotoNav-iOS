@@ -3,6 +3,7 @@ import CoreLocation
 import AVFoundation
 import UIKit
 import UserNotifications
+import CoreHaptics
 
 /// TTS 引擎选择（优化 #1：保留系统默认，给高级用户留讯飞接入点）
 enum TtsProvider: String, CaseIterable, Identifiable, Codable {
@@ -62,6 +63,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var isMonitoring = false
     @Published var enabledTypes: Set<PoiType>
     @Published var warnDistance: Double
+    /// v1.6 震动反馈：持续时间（秒，0 = 关闭）与强度（0~1）
+    @Published var hapticDuration: Double
+    @Published var hapticIntensity: Double
+    /// v1.6 是否弹「改为始终定位」引导（仅当当前授权为「使用期间」时）
+    @Published var showAlwaysPrompt = false
     @Published var ttsProvider: TtsProvider
     @Published var xfAppID: String
     @Published var xfAPIKey: String
@@ -107,7 +113,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastSpeak = Date.distantPast
     private let speech = AVSpeechSynthesizer()
     private var xfyunTTS: XfyunTTS?
-    private let haptic = UINotificationFeedbackGenerator()
+    private let haptics = HapticsPlayer()
     private var isTestingSpeech = false          // 测试按钮防重入
 
     /// 优化 D：纬度分桶索引（每 0.01° ≈ 1.11km，一个桶覆盖约 1.1km×1km 区域）
@@ -126,6 +132,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
+        self.hapticDuration = defaults.object(forKey: "hapticDuration") as? Double ?? 0.4
+        self.hapticIntensity = defaults.object(forKey: "hapticIntensity") as? Double ?? 0.8
         // 默认使用离线系统语音；讯飞凭证一律由用户在「语音引擎」页自行填写，源码不内置任何密钥
         self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
         self.xfAppID = defaults.string(forKey: "xfAppID") ?? ""
@@ -241,9 +249,20 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private func begin() {
         guard !isMonitoring else { return }
+        if needsAlwaysUpgrade { showAlwaysPrompt = true }
         lm.startUpdatingLocation()
         isMonitoring = true
         statusText = "监听中 · 已载入 \(pois.count) 个点位"
+    }
+
+    /// v1.6：当前是否只是「使用期间」授权 —— 是则 App 启动时弹引导，建议升级为「始终」
+    var needsAlwaysUpgrade: Bool {
+        lm.authorizationStatus == .authorizedWhenInUse
+    }
+
+    /// 请求升级为「始终」定位（系统会弹确认）
+    func requestAlwaysAuthorization() {
+        lm.requestAlwaysAuthorization()
     }
 
     func stop() {
@@ -262,6 +281,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 begin()
             case .authorizedWhenInUse:
                 statusText = "仅使用期间定位 · 建议设为“始终”以支持锁屏后台播报"
+                showAlwaysPrompt = true   // v1.6：启动/授权变化时引导升级，避免后台不播报
                 begin()
             case .denied, .restricted:
                 statusText = "定位权限被拒绝，请在系统设置中开启"
@@ -425,8 +445,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 震动反馈（C）：仅使用被持有的通知反馈生成器，避免临时对象
     private func vibrate() {
-        haptic.prepare()
-        haptic.notificationOccurred(.warning)
+        haptics.play(duration: hapticDuration, intensity: hapticIntensity)
     }
 
     /// 后台本地通知（仅 App 不在前台时发，前台已有界面与语音，不重复打扰）
@@ -449,6 +468,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let defaults = UserDefaults.standard
         defaults.set(enabledTypes.map { $0.rawValue }, forKey: "enabledTypes")
         defaults.set(warnDistance, forKey: "warnDistance")
+        defaults.set(hapticDuration, forKey: "hapticDuration")
+        defaults.set(hapticIntensity, forKey: "hapticIntensity")
         defaults.set(ttsProvider.rawValue, forKey: "ttsProvider")
         defaults.set(xfAppID, forKey: "xfAppID")
         defaults.set(xfAPIKey, forKey: "xfAPIKey")
@@ -598,5 +619,51 @@ enum PoiImportError: LocalizedError {
 
     var errorDescription: String? {
         "JSON 格式不正确：应为点位对象数组（name / type / lat / lon）"
+    }
+}
+
+/// v1.6 可配置震动：CoreHaptics 连续触感支持自定义强度与时长（0~60 秒）；
+/// 设备不支持或引擎启动失败时回退系统警告触感，保证提醒不会完全丢失。
+final class HapticsPlayer {
+    private var engine: CHHapticEngine?
+    private var player: CHHapticAdvancedPatternPlayer?
+
+    init() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
+        do {
+            let engine = try CHHapticEngine()
+            engine.playsHapticsOnly = true
+            engine.isAutoShutdownEnabled = true
+            try engine.start()
+            self.engine = engine
+        } catch {
+            self.engine = nil
+        }
+    }
+
+    func play(duration: Double, intensity: Double) {
+        guard duration > 0 else { return }          // 0 秒 = 关闭震动
+        let d = min(max(duration, 0.1), 60)
+        let i = min(max(intensity, 0), 1)
+        guard let engine else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        let params = [
+            CHHapticEventParameter(parameterID: .hapticIntensity, value: Float(i)),
+            CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.6)
+        ]
+        let event = CHHapticEvent(eventType: .hapticContinuous, parameters: params,
+                                  relativeTime: 0, duration: d)
+        do {
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            try? player?.stop(atTime: 0)
+            try engine.start()
+            let newPlayer = try engine.makeAdvancedPlayer(with: pattern)
+            try newPlayer.start(atTime: 0)
+            player = newPlayer
+        } catch {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        }
     }
 }
