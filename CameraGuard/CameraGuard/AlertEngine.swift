@@ -66,6 +66,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v1.6 震动反馈：持续时间（秒，0 = 关闭）与强度（0~1）
     @Published var hapticDuration: Double
     @Published var hapticIntensity: Double
+    /// v1.7 上次开启时的时长：关闭震动后再打开恢复原值，而不是从 1 秒重新开始
+    private var hapticLastDuration: Double
     /// v1.6 是否弹「改为始终定位」引导（仅当当前授权为「使用期间」时）
     @Published var showAlwaysPrompt = false
     @Published var ttsProvider: TtsProvider
@@ -134,6 +136,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
         self.hapticDuration = defaults.object(forKey: "hapticDuration") as? Double ?? 0.4
         self.hapticIntensity = defaults.object(forKey: "hapticIntensity") as? Double ?? 0.8
+        self.hapticLastDuration = defaults.object(forKey: "hapticLastDuration") as? Double ?? 1.0
         // 默认使用离线系统语音；讯飞凭证一律由用户在「语音引擎」页自行填写，源码不内置任何密钥
         self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
         self.xfAppID = defaults.string(forKey: "xfAppID") ?? ""
@@ -443,9 +446,27 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
-    /// 震动反馈（C）：仅使用被持有的通知反馈生成器，避免临时对象
+    /// 震动反馈（C）：支持自定义时长/强度，0 秒即关闭
     private func vibrate() {
         haptics.play(duration: hapticDuration, intensity: hapticIntensity)
+    }
+
+    /// v1.7 震动开关：关闭时记下当前时长（0 秒），重新打开时恢复；开启时若从未设置则用 1 秒
+    func setHapticEnabled(_ on: Bool) {
+        if on {
+            hapticDuration = hapticLastDuration > 0 ? hapticLastDuration : 1.0
+        } else {
+            if hapticDuration > 0 { hapticLastDuration = hapticDuration }
+            hapticDuration = 0
+        }
+        saveSettings()
+    }
+
+    /// 拖动时长滑杆时同步记住“最近一次有效时长”，关掉再开不会丢设置
+    func updateHapticDuration(_ value: Double) {
+        hapticDuration = value
+        if value > 0 { hapticLastDuration = value }
+        saveSettings()
     }
 
     /// 后台本地通知（仅 App 不在前台时发，前台已有界面与语音，不重复打扰）
@@ -470,6 +491,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         defaults.set(warnDistance, forKey: "warnDistance")
         defaults.set(hapticDuration, forKey: "hapticDuration")
         defaults.set(hapticIntensity, forKey: "hapticIntensity")
+        defaults.set(hapticLastDuration, forKey: "hapticLastDuration")
         defaults.set(ttsProvider.rawValue, forKey: "ttsProvider")
         defaults.set(xfAppID, forKey: "xfAppID")
         defaults.set(xfAPIKey, forKey: "xfAPIKey")

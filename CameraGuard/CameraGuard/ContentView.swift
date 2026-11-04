@@ -310,36 +310,47 @@ struct ContentView: View {
 
             Divider()
 
-            // v1.6 震动设置：0 秒为关闭，最长 60 秒；强度 0~100%
+            // v1.6/v1.7 震动设置：开关 + 持续时长（0 秒为关闭，最长 60 秒）+ 强度（0~100%）
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Image(systemName: "iphone.radiowaves.left.and.right")
-                        .foregroundStyle(.orange)
-                    Text("震动提醒")
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
-                    Text(engine.hapticDuration == 0 ? "已关闭"
-                         : String(format: "%.1f 秒", engine.hapticDuration))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(engine.hapticDuration == 0 ? .tertiary : .secondary)
+                Toggle(isOn: Binding(
+                    get: { engine.hapticDuration > 0 },
+                    set: { engine.setHapticEnabled($0) }
+                )) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "iphone.radiowaves.left.and.right")
+                            .foregroundStyle(.orange)
+                        Text("震动提醒")
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text(engine.hapticDuration == 0 ? "已关闭"
+                             : String(format: "%.1f 秒", engine.hapticDuration))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(engine.hapticDuration == 0 ? .tertiary : .secondary)
+                    }
                 }
-                Slider(value: $engine.hapticDuration, in: 0...60, step: 0.5)
-                    .tint(.orange)
-                Text("持续时间：0 秒为关闭，最长 60 秒")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
 
-                HStack(spacing: 10) {
-                    Text("强度")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, alignment: .leading)
-                    Slider(value: $engine.hapticIntensity, in: 0...1, step: 0.1)
+                if engine.hapticDuration > 0 {
+                    Slider(value: Binding(
+                        get: { max(engine.hapticDuration, 0.5) },
+                        set: { engine.updateHapticDuration($0) }
+                    ), in: 0.5...60, step: 0.5)
                         .tint(.orange)
-                    Text("\(Int(engine.hapticIntensity * 100))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 40, alignment: .trailing)
+                    Text("持续时间：0.5 ~ 60 秒（关掉上方开关即 0 秒关闭）")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    HStack(spacing: 10) {
+                        Text("强度")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, alignment: .leading)
+                        Slider(value: $engine.hapticIntensity, in: 0...1, step: 0.1)
+                            .tint(.orange)
+                        Text("\(Int(engine.hapticIntensity * 100))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
                 }
             }
 
@@ -366,8 +377,7 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: engine.warnDistance) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.hapticDuration) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.hapticIntensity) { _, _ in engine.saveSettings() }
+        .onChange(of: engine.hapticIntensity) { _, _ in engine.saveSettings() }   // 时长由 setHapticEnabled/updateHapticDuration 内部落盘
     }
 
     // MARK: - Helpers
