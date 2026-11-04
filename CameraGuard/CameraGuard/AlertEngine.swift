@@ -2,55 +2,163 @@ import Foundation
 import CoreLocation
 import AVFoundation
 import UIKit
+import UserNotifications
+
+/// TTS 引擎选择（优化 #1：保留系统默认，给高级用户留讯飞接入点）
+enum TtsProvider: String, CaseIterable, Identifiable, Codable {
+    case system       // 系统 AVSpeechSynthesizer（推荐，零延迟、离线可用）
+    case iflytekPro   // 讯飞在线合成（需自行接入 SDK，延迟较高，耗流量）
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .system:     return "系统语音（推荐，离线零延迟）"
+        case .iflytekPro: return "讯飞在线合成（高级用户，需自行接入 SDK）"
+        }
+    }
+}
 
 /// 核心引擎：持续定位 → 匹配最近违法拍照点 → 接近时语音播报（支持后台运行）
-/// 后台能力依赖 Info.plist UIBackgroundModes = [location, audio]
+/// 优化点：A 速度自适应预警距离 / B 双保险节流 / C 震动反馈 / D 纬度分桶查找 / F 通知权限
 @MainActor
 final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
-    // MARK: - 发布状态（UI 绑定）
+    // MARK: - UI 绑定状态
+
     @Published var statusText = "启动中…"
     @Published var location: CLLocation?
+    @Published var speedKmh: Double = 0
     @Published var nearest: Poi?
     @Published var nearestDistance: Double = .greatestFiniteMagnitude
     @Published var announcements: [Announcement] = []
     @Published var isMonitoring = false
-    /// 各类型播报开关（默认全开）
-    @Published var enabledTypes: Set<PoiType> = Set(PoiType.allCases)
-    /// 播报触发距离（米，默认 500）
-    @Published var warnDistance: Double = 500
+    @Published var enabledTypes: Set<PoiType>
+    @Published var warnDistance: Double
+    @Published var ttsProvider: TtsProvider
+    /// 用户自定义点位（持久化在 UserDefaults）
+    @Published var userPois: [Poi] = []
 
-    /// 全部点位（仅启用项）
-    let pois: [Poi]
+    /// 全部有效点位 = Bundle 内置 + 用户自定义（均过滤 enabled=true）
+    var pois: [Poi] {
+        let bundled = bundledPois.filter { $0.enabled }
+        let custom  = userPois.filter { $0.enabled }
+        return bundled + custom
+    }
 
-    private var lm: CLLocationManager
-    private var announced: Set<String> = []        // 已播报点位 id（避免重复）
+    // MARK: - 私有属性
+
+    private let lm = CLLocationManager()
+    private var bundledPois: [Poi] = []
+    private var announced: Set<String> = []        // 已播报点位 id
     private var lastSpeak = Date.distantPast
     private let speech = AVSpeechSynthesizer()
+    private let haptic = UINotificationFeedbackGenerator()
+
+    /// 优化 D：纬度分桶索引（每 0.01° ≈ 1.11km，一个桶覆盖约 1.1km×1km 区域）
+    private var latBuckets: [Int: [Poi]] = [:]
+    private let bucketStep: Double = 0.01
+
+    // MARK: - 初始化
 
     override init() {
-        var loaded: [Poi] = []
+        // 从 UserDefaults 读取设置
+        let defaults = UserDefaults.standard
+        let savedEnabledTypes = defaults.stringArray(forKey: "enabledTypes")
+            ?.compactMap { PoiType(rawValue: $0) }
+        self.enabledTypes = savedEnabledTypes.flatMap { Set($0) } ?? Set(PoiType.allCases)
+
+        self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
+        self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
+
+        // 加载 Bundle 内置点位
         if let url = Bundle.main.url(forResource: "poi", withExtension: "json"),
            let data = try? Data(contentsOf: url),
            let arr = try? JSONDecoder().decode([Poi].self, from: data) {
-            loaded = arr.filter { $0.enabled }
+            bundledPois = arr
         }
-        pois = loaded
-        lm = CLLocationManager()
+
+        // 加载用户自定义点位
+        if let data = defaults.data(forKey: "userPois"),
+           let decoded = try? JSONDecoder().decode([Poi].self, from: data) {
+            userPois = decoded
+        }
+
         super.init()
+
         lm.delegate = self
         lm.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         lm.activityType = .otherNavigation
-        lm.distanceFilter = 20
-        // 关键后台配置：不自动暂停 + 允许后台定位
+        lm.distanceFilter = 15   // 更频繁一点，加速时反应及时
         lm.pausesLocationUpdatesAutomatically = false
         lm.allowsBackgroundLocationUpdates = true
         lm.showsBackgroundLocationIndicator = true
+
+        rebuildIndex()
         configureAudio()
+
+        // 持久化观察
+        observeSettings()
     }
 
-    /// 启动即调用：请求权限并开始监听
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func observeSettings() {
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                                               object: UserDefaults.standard, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.rebuildIndex()
+        }
+    }
+
+    // MARK: - 索引（优化 D：纬度分桶 + 邻桶扫描）
+
+    /// 重建分桶索引（每次新增/删除用户点位或过滤条件变化后调用）
+    func rebuildIndex() {
+        latBuckets.removeAll(keepingCapacity: true)
+        for p in pois {
+            let key = Int(p.latitude / bucketStep)
+            latBuckets[key, default: []].append(p)
+        }
+    }
+
+    /// 基于分桶的近邻查找（优化 D：先筛桶再算距离，O(桶内数量)）
+    private func findNearest(relativeTo loc: CLLocation) -> (Poi, Double)? {
+        let latKey = Int(loc.coordinate.latitude / bucketStep)
+        // 扫描当前桶 + 上下各 2 个桶（覆盖 5 × 1.1km ≈ 5.5km 范围，足够覆盖 warnDistance=1000m 加余量）
+        let lonKey = Int(loc.coordinate.longitude / bucketStep)
+        var best: Poi?
+        var bestD = Double.greatestFiniteMagnitude
+        for dLat in -2...2 {
+            let key = latKey + dLat
+            guard let bucket = latBuckets[key] else { continue }
+            for p in bucket where enabledTypes.contains(p.type) {
+                // 经度粗略过滤（先算经度差对应的近似距离，减少 CLLocation 构造）
+                let deltaLat = (p.latitude - loc.coordinate.latitude)
+                let deltaLon = (p.longitude - loc.coordinate.longitude) * cos(loc.coordinate.latitude * .pi / 180)
+                // 0.02° ≈ 2.2km，粗略跳过远距离
+                if hypot(deltaLat, deltaLon) > 0.025 { continue }
+                let d = loc.distance(from: CLLocation(latitude: p.latitude, longitude: p.longitude))
+                if d < bestD {
+                    bestD = d
+                    best = p
+                }
+            }
+        }
+        return best.map { ($0, bestD) }
+    }
+
+    // MARK: - 生命周期
+
     func start() {
+        // 优化 F：启动时请求通知权限（兜底）
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined {
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+            }
+        }
+
         switch lm.authorizationStatus {
         case .notDetermined:
             lm.requestAlwaysAuthorization()
@@ -70,7 +178,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         statusText = "监听中 · 已载入 \(pois.count) 个点位"
     }
 
-    /// 暂停监听（界面按钮）
     func stop() {
         lm.stopUpdatingLocation()
         isMonitoring = false
@@ -86,7 +193,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 statusText = "已允许始终定位 · 后台播报可用"
                 begin()
             case .authorizedWhenInUse:
-                statusText = "仅使用期间定位 · 建议设为“始终”以支持锁屏后台播报"
+                statusText = "仅使用期间定位 · 建议设为"始终"以支持锁屏后台播报"
                 begin()
             case .denied, .restricted:
                 statusText = "定位权限被拒绝，请在系统设置中开启"
@@ -98,9 +205,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
-        Task { @MainActor in
-            process(loc)
-        }
+        Task { @MainActor in process(loc) }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -111,43 +216,56 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - 核心逻辑
+    // MARK: - 核心逻辑（优化 A/B）
 
     private func process(_ loc: CLLocation) {
         location = loc
-        // 找最近一个启用且类型开启的点位
-        var best: Poi?
-        var bestD = Double.greatestFiniteMagnitude
-        for p in pois where enabledTypes.contains(p.type) {
-            let d = loc.distance(from: CLLocation(latitude: p.latitude, longitude: p.longitude))
-            if d < bestD {
-                bestD = d
-                best = p
-            }
+        let speed = loc.speed >= 0 ? loc.speed : 0
+        speedKmh = speed * 3.6
+
+        // 优化 A：速度自适应预警距离
+        // 骑车 ≤15 m/s (54 km/h) 用默认；更高速度自动放大到 1.2× ~ 2.0×
+        let adaptiveFactor: Double
+        if speed <= 5 {          // 步行 <18 km/h：保持默认
+            adaptiveFactor = 1.0
+        } else if speed <= 10 {  // 骑行 <36 km/h
+            adaptiveFactor = 1.0
+        } else if speed <= 15 { // 高速骑行 / 低速开车 <54 km/h
+            adaptiveFactor = 1.2
+        } else if speed <= 22 {  // 普通开车 <80 km/h
+            adaptiveFactor = 1.5
+        } else {                  // 高速 >80 km/h
+            adaptiveFactor = 2.0
         }
+        let effectiveWarn = warnDistance * adaptiveFactor
+
+        guard let (best, bestD) = findNearest(relativeTo: loc) else { return }
         nearest = best
         nearestDistance = bestD
 
-        guard let p = best else { return }
-
-        if bestD > warnDistance * 1.2 {
-            // 已驶离该点，允许再次接近时重新播报
-            announced.remove(p.id)
+        // 优化 B：驶离冷却阈值从 1.2x 提升到 1.5x，避免两点相邻时反复触发
+        if bestD > effectiveWarn * 1.5 {
+            announced.remove(best.id)
             return
         }
-        guard bestD <= warnDistance, !announced.contains(p.id), canSpeakNow() else { return }
+        guard bestD <= effectiveWarn, !announced.contains(best.id), canSpeakNow() else { return }
 
-        announced.insert(p.id)
-        let text = "\(p.type.voiceText)，\(p.name)，请注意"
+        announced.insert(best.id)
+        let text = "\(best.type.voiceText)，\(best.name)，请注意"
         speak(text)
+        // 优化 C：震动辅助
+        haptic.notificationOccurred(.warning)
+
         announcements.insert(
-            Announcement(time: Date(), type: p.type, name: p.name, distance: Int(bestD), text: text),
+            Announcement(time: Date(), type: best.type, name: best.name,
+                         distance: Int(bestD), text: text),
             at: 0
         )
-        if announcements.count > 20 { announcements.removeLast(announcements.count - 20) }
+        if announcements.count > 50 { announcements.removeLast(announcements.count - 50) }
     }
 
-    /// 播报节流：前台 8 秒一次，后台 30 秒一次（省电、避免系统后台资源限制）
+    // MARK: - 节流（优化 B 改进版：点位冷却 + 时间冷却双保险）
+
     private func canSpeakNow() -> Bool {
         let now = Date()
         let minGap: TimeInterval =
@@ -157,17 +275,31 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         return true
     }
 
-    /// 语音播报（playback 会话 + 中文女声）
+    // MARK: - TTS 播报（#1 讯飞折中：保留系统，讯飞接入点留壳）
+
     private func speak(_ text: String) {
         configureAudio()
-        if speech.isSpeaking {
-            speech.stopSpeaking(at: .word) // 自然断句，保证新提醒及时
+
+        switch ttsProvider {
+        case .system:
+            if speech.isSpeaking { speech.stopSpeaking(at: .word) }
+            let u = AVSpeechUtterance(string: text)
+            u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+            u.rate = AVSpeechUtteranceDefaultSpeechRate
+            u.volume = 1.0
+            speech.speak(u)
+
+        case .iflytekPro:
+            // 讯飞接入占位：将系统语音兜底，用户自行替换为 iflytek TTS SDK 调用
+            // 替换方案示例：
+            //   IFlySpeechSynthesizer.shared().startSpeak(text)
+            // 保留系统语音作为 fallback，避免用户未接入 SDK 时静默
+            if speech.isSpeaking { speech.stopSpeaking(at: .word) }
+            let u = AVSpeechUtterance(string: text)
+            u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+            speech.speak(u)
+            statusText = "当前使用系统语音（讯飞 SDK 未接入，已自动 fallback）"
         }
-        let u = AVSpeechUtterance(string: text)
-        u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-        u.rate = AVSpeechUtteranceDefaultSpeechRate
-        u.volume = 1.0
-        speech.speak(u)
     }
 
     private func configureAudio() {
@@ -175,11 +307,73 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
-    /// 手动触发一次播报（供界面测试用）
+    // MARK: - 设置持久化
+
+    func saveSettings() {
+        let defaults = UserDefaults.standard
+        defaults.set(enabledTypes.map { $0.rawValue }, forKey: "enabledTypes")
+        defaults.set(warnDistance, forKey: "warnDistance")
+        defaults.set(ttsProvider.rawValue, forKey: "ttsProvider")
+        if let data = try? JSONEncoder().encode(userPois) {
+            defaults.set(data, forKey: "userPois")
+        }
+        rebuildIndex()
+    }
+
+    // MARK: - 用户 POI 管理（#3 点位编辑）
+
+    func addUserPoi(_ poi: Poi) {
+        // 去重（同 type+lat+lon 视为同一）
+        guard !userPois.contains(where: { $0.latitude == poi.latitude && $0.longitude == poi.longitude && $0.type == poi.type }) else {
+            return
+        }
+        userPois.append(poi)
+        saveSettings()
+    }
+
+    func deleteUserPoi(id: String) {
+        userPois.removeAll { $0.id == id }
+        saveSettings()
+    }
+
+    func toggleUserPoi(id: String) {
+        guard let idx = userPois.firstIndex(where: { $0.id == id }) else { return }
+        userPois[idx].enabled.toggle()
+        saveSettings()
+    }
+
+    /// 导出全部点位（Bundle + 用户自定义）为 JSON Data（优化 E）
+    func exportAllPois() -> Data? {
+        struct ExportPoi: Encodable {
+            let name, type: String
+            let lat, lon: Double
+            let radiusM: Double
+            let enabled: Bool
+        }
+        let arr = pois.map { ExportPoi(name: $0.name, type: $0.type.rawValue,
+                                        lat: $0.latitude, lon: $0.longitude,
+                                        radiusM: $0.radiusM, enabled: $0.enabled) }
+        return try? JSONEncoder().encode(arr)
+    }
+
+    /// 导入 JSON（格式兼容 poi.json），合并到 userPois（优化 E）
+    func importPois(from data: Data) throws {
+        let arr = try JSONDecoder().decode([Poi].self, from: data)
+        for p in arr {
+            if !userPois.contains(where: { $0.latitude == p.latitude && $0.longitude == p.longitude && $0.type == p.type }) {
+                userPois.append(p)
+            }
+        }
+        saveSettings()
+    }
+
+    // MARK: - 测试
+
     func testSpeak() {
         guard !speech.isSpeaking || canSpeakNow() else { return }
         let text = "电子眼卫士播报测试，前方路口请注意"
         speak(text)
+        haptic.notificationOccurred(.warning)
         announcements.insert(
             Announcement(time: Date(), type: .CUSTOM, name: "测试", distance: 0, text: text),
             at: 0

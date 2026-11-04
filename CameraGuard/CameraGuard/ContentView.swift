@@ -1,6 +1,7 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// 极简电子眼播报器主界面：打开即监听，接近违法拍照点自动语音提醒
+/// 极简电子眼播报器主界面
 struct ContentView: View {
     @EnvironmentObject private var engine: AlertEngine
 
@@ -15,6 +16,7 @@ struct ContentView: View {
                     backgroundHint
                     announcementsSection
                     settingsSection
+                    advancedSection
                 }
                 .padding(16)
             }
@@ -33,13 +35,14 @@ struct ContentView: View {
             Text(engine.statusText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             Spacer()
             Button {
                 engine.isMonitoring
-                    ? (engine.stop())
-                    : (engine.start())
+                    ? engine.stop()
+                    : engine.start()
             } label: {
-                Text(engine.isMonitoring ? "暂停" : "开始监听")
+                Text(engine.isMonitoring ? "暂停" : "开始")
                     .font(.footnote.bold())
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
@@ -59,7 +62,8 @@ struct ContentView: View {
             if let p = engine.nearest, engine.nearestDistance < .greatestFiniteMagnitude {
                 Text(distanceText(engine.nearestDistance))
                     .font(.system(size: 44, weight: .heavy, design: .rounded))
-                    .foregroundStyle(engine.nearestDistance <= engine.warnDistance ? .red : .primary)
+                    .foregroundStyle(engine.nearestDistance <= effectiveWarn ? .red : .primary)
+
                 HStack(spacing: 6) {
                     Image(systemName: p.type.icon)
                     Text(p.type.label)
@@ -69,11 +73,20 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Text(engine.nearestDistance <= engine.warnDistance
-                     ? "即将播报：\(p.type.voiceText)"
-                     : "接近 \(Int(engine.warnDistance)) 米内自动语音提醒")
+
+                // 优化 A：显示当前速度和自适应预警距离
+                HStack(spacing: 16) {
+                    Label(String(format: "当前 %.0f km/h", engine.speedKmh), systemImage: "speedometer")
+                    Label(String(format: "预警 %.0f m", effectiveWarn), systemImage: "exclamationmark.triangle")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Text(engine.nearestDistance <= effectiveWarn
+                     ? "⚠️ 即将播报：\(p.type.voiceText)"
+                     : "接近 \(Int(effectiveWarn)) 米内自动语音提醒")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(engine.nearestDistance <= effectiveWarn ? .red : .secondary)
             } else {
                 Image(systemName: "location.magnifyingglass")
                     .font(.system(size: 36))
@@ -87,9 +100,21 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 26)
+        .padding(.vertical, 22)
         .padding(.horizontal, 12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    /// 计算当前自适应预警距离（与 AlertEngine.process 逻辑一致）
+    private var effectiveWarn: Double {
+        let speed = engine.speedKmh / 3.6  // km/h → m/s
+        let factor: Double
+        if speed <= 5 { factor = 1.0 }
+        else if speed <= 10 { factor = 1.0 }
+        else if speed <= 15 { factor = 1.2 }
+        else if speed <= 22 { factor = 1.5 }
+        else { factor = 2.0 }
+        return engine.warnDistance * factor
     }
 
     // MARK: - 后台运行提示
@@ -107,12 +132,23 @@ struct ContentView: View {
         .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    // MARK: - 播报记录
+    // MARK: - 播报记录（#2 左滑删除）
 
     private var announcementsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("最近播报")
-                .font(.headline)
+            HStack {
+                Text("最近播报")
+                    .font(.headline)
+                Spacer()
+                if !engine.announcements.isEmpty {
+                    Button(role: .destructive) {
+                        engine.announcements.removeAll()
+                    } label: {
+                        Text("清空")
+                            .font(.caption)
+                    }
+                }
+            }
             if engine.announcements.isEmpty {
                 Text("暂无播报记录，接近点位后自动出现")
                     .font(.subheadline)
@@ -135,6 +171,14 @@ struct ContentView: View {
                         Spacer()
                     }
                     .padding(.vertical, 4)
+                    // #2 左滑删除单条
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            engine.announcements.removeAll { $0.id == a.id }
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
                     if a.id != engine.announcements.last?.id {
                         Divider()
                     }
@@ -146,16 +190,17 @@ struct ContentView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    // MARK: - 设置
+    // MARK: - 基础设置（距离 + 类型开关）
 
     private var settingsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("设置")
+            Text("基础设置")
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("播报触发距离：\(Int(engine.warnDistance)) 米")
+                Text("基础播报距离：\(Int(engine.warnDistance)) 米")
                     .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 Picker("播报距离", selection: $engine.warnDistance) {
                     ForEach(distanceOptions, id: \.self) { d in
                         Text("\(Int(d))m").tag(d)
@@ -164,10 +209,11 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
             }
 
+            // 类型开关（#3 已去掉 CUSTOM 自定义开关行，改为在点位编辑器里管理）
             VStack(alignment: .leading, spacing: 8) {
-                Text("播报类型")
+                Text("播报类型（可单独关闭）")
                     .font(.subheadline)
-                ForEach(PoiType.allCases, id: \.self) { t in
+                ForEach(PoiType.allCases.filter { $0 != .CUSTOM }, id: \.self) { t in
                     Toggle(isOn: binding(for: t)) {
                         HStack(spacing: 6) {
                             Image(systemName: t.icon)
@@ -177,11 +223,67 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - 高级设置（点位管理 / TTS / 测试）
+
+    private var advancedSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("高级设置")
+                .font(.headline)
+
+            // #3 点位管理入口
+            NavigationLink {
+                PoiEditorView()
+                    .environmentObject(engine)
+            } label: {
+                HStack {
+                    Image(systemName: "map.circle.fill")
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("点位管理")
+                            .font(.subheadline.weight(.medium))
+                        Text("查看内置、添加自定义、删除点位，支持交叉口地址解析")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(engine.userPois.count) 自定义")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Divider()
+
+            // #1 TTS 引擎选择
+            VStack(alignment: .leading, spacing: 6) {
+                Text("语音引擎")
+                    .font(.subheadline)
+                Picker("TTS", selection: $engine.ttsProvider) {
+                    ForEach(TtsProvider.allCases) { p in
+                        Text(p.label).tag(p)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
+                Text("讯飞模式需自行接入 SDK，当前未接入时自动回退系统语音")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
 
             Button {
                 engine.testSpeak()
             } label: {
-                Text("测试语音播报")
+                Label("测试语音播报 + 震动", systemImage: "speaker.wave.2")
                     .font(.subheadline.bold())
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
@@ -192,13 +294,18 @@ struct ContentView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .onChange(of: engine.warnDistance) { _, _ in engine.saveSettings() }
+        .onChange(of: engine.enabledTypes) { _, _ in engine.saveSettings() }
     }
+
+    // MARK: - Helpers
 
     private func binding(for t: PoiType) -> Binding<Bool> {
         Binding(
             get: { engine.enabledTypes.contains(t) },
             set: { on in
                 if on { engine.enabledTypes.insert(t) } else { engine.enabledTypes.remove(t) }
+                engine.saveSettings()
             }
         )
     }
