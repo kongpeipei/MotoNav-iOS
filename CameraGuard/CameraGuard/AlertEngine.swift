@@ -63,9 +63,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     override init() {
         // 从 UserDefaults 读取设置
         let defaults = UserDefaults.standard
-        let savedEnabledTypes = defaults.stringArray(forKey: "enabledTypes")
-            ?.compactMap { PoiType(rawValue: $0) }
-        self.enabledTypes = savedEnabledTypes.flatMap { Set($0) } ?? Set(PoiType.allCases)
+        if let raw = defaults.stringArray(forKey: "enabledTypes") {
+            self.enabledTypes = Set(raw.compactMap { PoiType(rawValue: $0) })
+        } else {
+            self.enabledTypes = Set(PoiType.allCases)
+        }
 
         self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
         self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
@@ -193,7 +195,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 statusText = "已允许始终定位 · 后台播报可用"
                 begin()
             case .authorizedWhenInUse:
-                statusText = "仅使用期间定位 · 建议设为"始终"以支持锁屏后台播报"
+                statusText = "仅使用期间定位 · 建议设为“始终”以支持锁屏后台播报"
                 begin()
             case .denied, .restricted:
                 statusText = "定位权限被拒绝，请在系统设置中开启"
