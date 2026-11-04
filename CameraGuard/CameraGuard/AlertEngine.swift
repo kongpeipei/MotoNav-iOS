@@ -253,7 +253,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard bestD <= effectiveWarn, !announced.contains(best.id), canSpeakNow() else { return }
 
         announced.insert(best.id)
-        let text = "\(best.type.voiceText)，\(best.name)，请注意"
+        let text = "前方\(Int(bestD))米，\(best.type.voiceText)，请谨慎行驶！"
         speak(text)
         // 优化 C：震动辅助
         haptic.notificationOccurred(.warning)

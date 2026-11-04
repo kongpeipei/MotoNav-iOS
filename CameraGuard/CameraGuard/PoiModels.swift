@@ -23,15 +23,15 @@ enum PoiType: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// 语音播报文案：接近时直接播报
+    /// 语音播报文案（拼接到「前方xx米」之后）
     var voiceText: String {
         switch self {
-        case .RED_LIGHT: return "前方路口有闯红灯拍照"
-        case .SPEED: return "前方有超速拍照"
-        case .LANE: return "前方有压线拍照"
-        case .HELMET: return "前方有不戴头盔拍照"
-        case .RESTRICTION: return "前方有限行禁摩路段"
-        case .CUSTOM: return "前方有自定义提醒点位"
+        case .RED_LIGHT: return "有摩托车闯红灯拍照"
+        case .SPEED: return "有超速拍照"
+        case .LANE: return "有压线拍照"
+        case .HELMET: return "有不戴头盔拍照"
+        case .RESTRICTION: return "有禁行拍照"
+        case .CUSTOM: return "有自定义提醒拍照"
         }
     }
 
