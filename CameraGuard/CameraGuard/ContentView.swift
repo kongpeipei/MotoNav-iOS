@@ -291,6 +291,15 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
+                    Picker("预设发音人", selection: $engine.xfVcn) {
+                        ForEach(VoicePresets.all) { v in
+                            Text(v.name).tag(v.vcn)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("「叶子(四川话)」的 vcn 以讯飞控制台为准，若默认值不符请直接改上方 vcn")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     Text("未配置或密钥错误时自动回退系统语音")
                         .font(.caption2)
                         .foregroundStyle(.secondary)

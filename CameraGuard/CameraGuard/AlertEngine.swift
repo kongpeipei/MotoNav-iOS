@@ -18,6 +18,26 @@ enum TtsProvider: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// 讯飞发音人预设（vcn 以讯飞控制台为准，可手动编辑覆盖）
+struct VoicePreset: Identifiable {
+    let name: String
+    let vcn: String
+    var id: String { vcn }
+}
+
+enum VoicePresets {
+    static let all: [VoicePreset] = [
+        VoicePreset(name: "小燕（普通话女声·默认）", vcn: "xiaoyan"),
+        VoicePreset(name: "小峰（普通话男声）", vcn: "xiaofeng"),
+        VoicePreset(name: "小宇（男声）", vcn: "xiaoyu"),
+        VoicePreset(name: "小萌（女声）", vcn: "xiaomeng"),
+        VoicePreset(name: "小晴（女声）", vcn: "xiaoqing"),
+        VoicePreset(name: "小静（女声）", vcn: "xiaojing"),
+        VoicePreset(name: "小新（童声）", vcn: "xiaoxin"),
+        VoicePreset(name: "叶子（四川话·女声）", vcn: "xiaorong"),
+    ]
+}
+
 /// 核心引擎：持续定位 → 匹配最近违法拍照点 → 接近时语音播报（支持后台运行）
 /// 优化点：A 速度自适应预警距离 / B 双保险节流 / C 震动反馈 / D 纬度分桶查找 / F 通知权限
 @MainActor
@@ -76,9 +96,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
         self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .iflytekPro
-        self.xfAppID = defaults.string(forKey: "xfAppID") ?? ""
-        self.xfAPIKey = defaults.string(forKey: "xfAPIKey") ?? ""
-        self.xfAPISecret = defaults.string(forKey: "xfAPISecret") ?? ""
+        self.xfAppID = defaults.string(forKey: "xfAppID") ?? "5ad38c61"
+        self.xfAPIKey = defaults.string(forKey: "xfAPIKey") ?? "65eb7d0144b094c4c34b"
+        self.xfAPISecret = defaults.string(forKey: "xfAPISecret") ?? "MGI5M2YzOGM3ZDRjNTAyYmM2YWQ1ZDY0"
         self.xfVcn = defaults.string(forKey: "xfVcn") ?? "xiaoyan"
 
         // 加载 Bundle 内置点位

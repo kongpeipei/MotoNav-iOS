@@ -52,25 +52,31 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
         let path = "/v2/tts"
         let dateStr = Self.rfc1123Date()
 
-        guard let url = URL(string: "wss://\(host)\(path)") else { complete(); return }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
-
         let signOrigin = "host: \(host)\ndate: \(dateStr)\nGET \(path) HTTP/1.1"
         let signature = Self.hmacSHA256(key: apiSecret, message: signOrigin).base64EncodedString()
         let authOrigin = "api_key=\"\(apiKey)\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"\(signature)\""
         let authorization = Data(authOrigin.utf8).base64EncodedString()
 
-        request.setValue(host, forHTTPHeaderField: "Host")
-        request.setValue(dateStr, forHTTPHeaderField: "Date")
-        request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        // 鉴权：authorization/date/host 作为 URL query 参数（讯飞文档规范）
+        var comp = URLComponents()
+        comp.scheme = "wss"
+        comp.host = host
+        comp.path = path
+        comp.queryItems = [
+            URLQueryItem(name: "authorization", value: authorization),
+            URLQueryItem(name: "date", value: dateStr),
+            URLQueryItem(name: "host", value: host)
+        ]
+        guard let url = comp.url else { complete(); return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
 
         session = URLSession(configuration: .default)
         webSocket = session?.webSocketTask(with: request)
         webSocket?.resume()
 
         let business: [String: Any] = [
-            "aue": "lame",                       // mp3 音频，便于 AVAudioPlayer 直接播放
+            "aue": "raw",                        // 原始 PCM，稳定拼接为 WAV 后播放
             "auf": "audio/L16;rate=16000",
             "vcn": vcn,
             "speed": 50,
@@ -100,19 +106,38 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
             switch result {
             case .success(let message):
                 switch message {
+                case .string(let text):
+                    self.handleText(text)
                 case .data(let data):
                     self.audioData.append(data)
                     self.receiveLoop()
-                case .string:
-                    // 结束标记帧（data.status == 2）
-                    self.finishPlay()
                 @unknown default:
                     self.finishPlay()
                 }
             case .failure:
-                // 服务端关闭连接 = 数据流结束
+                // 连接关闭 = 数据流结束
                 self.finishPlay()
             }
+        }
+    }
+
+    /// 解析响应：data.audio 为 base64 音频，data.status == 2 表示结束
+    private func handleText(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            receiveLoop(); return
+        }
+        if let code = json["code"] as? Int, code != 0 {
+            complete(); return
+        }
+        let d = json["data"] as? [String: Any]
+        if let b64 = d?["audio"] as? String, let bytes = Data(base64Encoded: b64) {
+            audioData.append(bytes)
+        }
+        if let status = d?["status"] as? Int, status == 2 {
+            finishPlay()
+        } else {
+            receiveLoop()
         }
     }
 
@@ -120,14 +145,31 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
 
     private func finishPlay() {
         guard !audioData.isEmpty else { complete(); return }
+        let wav = Self.wrapWAV(pcm: audioData, sampleRate: 16000)
         do {
-            player = try AVAudioPlayer(data: audioData, fileTypeHint: AVFileType.mp3.rawValue)
+            player = try AVAudioPlayer(data: wav, fileTypeHint: AVFileType.wav.rawValue)
             player?.delegate = self
             player?.volume = 1.0
             player?.play()
         } catch {
             complete()
         }
+    }
+
+    /// PCM(16bit/16k/mono) 包一层 WAV 头，供 AVAudioPlayer 播放
+    static func wrapWAV(pcm: Data, sampleRate: Int) -> Data {
+        var wav = Data()
+        func str(_ s: String) { wav.append(Data(s.utf8)) }
+        func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { wav.append(contentsOf: $0) } }
+        func u16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { wav.append(contentsOf: $0) } }
+        let channels = 1, bits = 16
+        let byteRate = sampleRate * channels * bits / 8
+        let blockAlign = channels * bits / 8
+        str("RIFF"); u32(UInt32(36 + pcm.count)); str("WAVE")
+        str("fmt "); u32(16); u16(1); u16(UInt16(channels))
+        u32(UInt32(sampleRate)); u32(UInt32(byteRate)); u16(UInt16(blockAlign)); u16(UInt16(bits))
+        str("data"); u32(UInt32(pcm.count)); wav.append(pcm)
+        return wav
     }
 
     private func complete() {
