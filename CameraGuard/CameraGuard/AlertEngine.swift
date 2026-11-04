@@ -48,7 +48,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 私有属性
 
     private let lm = CLLocationManager()
-    private var bundledPois: [Poi] = []
+    private(set) var bundledPois: [Poi] = []
     private var announced: Set<String> = []        // 已播报点位 id
     private var lastSpeak = Date.distantPast
     private let speech = AVSpeechSynthesizer()

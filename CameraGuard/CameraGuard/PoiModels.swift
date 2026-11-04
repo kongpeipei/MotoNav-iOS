@@ -49,7 +49,7 @@ enum PoiType: String, Codable, CaseIterable, Identifiable {
 }
 
 /// 单个违法拍照点位（兼容仓库 poi.json：lat/lon、Int id、radiusM、enabled）
-struct Poi: Identifiable, Equatable, Decodable {
+struct Poi: Identifiable, Equatable, Codable {
     var id: String { "\(type.rawValue)-\(latitude)-\(longitude)" }
     var name: String
     var type: PoiType
@@ -67,6 +67,15 @@ struct Poi: Identifiable, Equatable, Decodable {
         case latitude = "lat"
         case longitude = "lon"
         case radiusM
+    }
+
+    init(name: String, type: PoiType, latitude: Double, longitude: Double, radiusM: Double = 500, enabled: Bool = true) {
+        self.name = name
+        self.type = type
+        self.latitude = latitude
+        self.longitude = longitude
+        self.radiusM = radiusM
+        self.enabled = enabled
     }
 
     init(from decoder: Decoder) throws {

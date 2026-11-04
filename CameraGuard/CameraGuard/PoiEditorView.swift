@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import UniformTypeIdentifiers
 
 /// #3 点位编辑页面：查看 / 添加（支持交叉口 geocoder）/ 删除（二次确认）
 struct PoiEditorView: View {
@@ -35,7 +36,7 @@ struct PoiEditorView: View {
                     Text("操作")
                 }
 
-                Section("内置点位（共 \(engine.bundledPois.filter { $0.enabled }.count) 个）") {
+                Section {
                     ForEach(engine.bundledPois.filter { $0.enabled }) { p in
                         PoiRow(poi: p)
                     }
@@ -43,6 +44,8 @@ struct PoiEditorView: View {
                         Text("无内置点位")
                             .foregroundStyle(.tertiary)
                     }
+                } header: {
+                    Text("内置点位（共 \(engine.bundledPois.filter { $0.enabled }.count) 个）")
                 } footer: {
                     Text("内置点位不可修改，由 App 提供")
                 }
@@ -87,7 +90,6 @@ struct PoiEditorView: View {
                     secondaryButton: .cancel(Text("取消"))
                 )
             }
-            .fileImporter(isPresented: .constant(false), allowedContentTypes: [.json]) { _ in }
         }
     }
 
@@ -104,8 +106,9 @@ struct PoiEditorView: View {
 
     private func performExport() {
         guard let data = engine.exportAllPois() else { return }
-        // 通过 UIDocumentPicker 导出
-        let picker = UIDocumentPickerViewController(forExporting: [data as NSData], asCopy: true)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("poi_export.json")
+        try? data.write(to: url)
+        let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
         UIApplication.shared.windows.first?.rootViewController?.present(picker, animated: true)
     }
 
