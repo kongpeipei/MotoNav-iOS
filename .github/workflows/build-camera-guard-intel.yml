@@ -4,9 +4,6 @@ name: Build CameraGuard IPA (Intel)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths: [ 'CameraGuard/**' ]
 
 jobs:
   build:
