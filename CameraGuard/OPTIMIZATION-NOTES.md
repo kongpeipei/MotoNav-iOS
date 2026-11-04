@@ -142,3 +142,22 @@ CameraGuard/
 
 - 推送后由 `.github/workflows/build-camera-guard.yml`（macos-15 + Release，未签名）真实编译，以 CI 结果为准；本机为 Linux，无法本地 `xcodebuild`。
 - 静态自查：全部 Swift 文件花括号/圆括号平衡；`swipeActions` 已无残留；`importPois` / `saveSettings` 调用点全部对齐新签名。
+
+---
+
+# 第三轮（v1.5 · 语音包改为自定义管理）
+
+按使用反馈调整语音引擎逻辑，版本 1.4 → 1.5（构建号 5 → 6）。
+
+## 改动
+
+1. **删除全部内置语音包预设**：移除 `VoicePreset` / `VoicePresets`（小燕、小峰、小宇…叶子四川话共 8 个）以及对应的选择列表；源码不再预设任何发音人。
+2. **输入 vcn 自动建包**：在「高级」里填写 `发音人 vcn`，停止输入 0.6 秒后自动生成一条语音包（名称默认等于 vcn），并保持选中；重复 vcn 不会重复添加。
+3. **名称可编辑**：语音包列表里直接改名称，vcn 不变；名称编辑做 0.6 秒防抖落盘。
+4. **左滑删除**：语音包列表在 `Form`（List）里，`swipeActions` 正常生效；删掉当前选中项时自动切换到剩余第一个，全部删完则清空 vcn。
+5. **持久化**：语音包存 `UserDefaults` 的 `voicePacks`；老用户升级后若已有 `xfVcn`，首次启动自动补一条同名语音包，不会丢配置。
+
+## 验证
+
+- 编译由 CI（build-camera-guard.yml，macos-15 / Release）确认。
+- 交互验证清单：① 高级里输入 `xiaoyan` → 列表出现一条 `xiaoyan` 语音包并被选中；② 改名后杀进程重开仍保留；③ 左滑删除 → 列表消失；④ 删除当前项后选中项自动切换。

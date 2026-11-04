@@ -13,29 +13,21 @@ enum TtsProvider: String, CaseIterable, Identifiable, Codable {
     var label: String {
         switch self {
         case .system:     return "系统语音（推荐，离线零延迟）"
-        case .iflytekPro: return "讯飞在线合成（四川话·叶子，需填 AppID/APIKey）"
+        case .iflytekPro: return "讯飞在线合成（自定义 vcn，需填 AppID/APIKey）"
         }
     }
 }
 
-/// 讯飞发音人预设（vcn 以讯飞控制台为准，可手动编辑覆盖）
-struct VoicePreset: Identifiable {
-    let name: String
-    let vcn: String
+/// 自定义讯飞语音包（v1.5：不再内置预设；填写 vcn 即自动建档，名称可编辑、可左滑删除）
+struct VoicePack: Identifiable, Codable, Equatable {
+    var vcn: String      // 同时作为唯一标识
+    var name: String
     var id: String { vcn }
-}
 
-enum VoicePresets {
-    static let all: [VoicePreset] = [
-        VoicePreset(name: "小燕（普通话女声·默认）", vcn: "xiaoyan"),
-        VoicePreset(name: "小峰（普通话男声）", vcn: "xiaofeng"),
-        VoicePreset(name: "小宇（男声）", vcn: "xiaoyu"),
-        VoicePreset(name: "小萌（女声）", vcn: "xiaomeng"),
-        VoicePreset(name: "小晴（女声）", vcn: "xiaoqing"),
-        VoicePreset(name: "小静（女声）", vcn: "xiaojing"),
-        VoicePreset(name: "小新（童声）", vcn: "xiaoxin"),
-        VoicePreset(name: "叶子（四川话·女声）", vcn: "xiaorong"),
-    ]
+    init(vcn: String, name: String) {
+        self.vcn = vcn
+        self.name = name
+    }
 }
 
 /// 速度自适应预警距离系数（引擎判定与首页显示共用，避免两处阈值漂移）
@@ -79,6 +71,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var ttsFeedback: String = ""
     /// 用户自定义点位（持久化在 UserDefaults）
     @Published var userPois: [Poi] = []
+    /// 自定义讯飞语音包（v1.5：空列表为初始状态，填写 vcn 后自动添加）
+    @Published var voicePacks: [VoicePack] = []
 
     /// 全部有效点位 = Bundle 内置 + 用户自定义（均过滤 enabled=true）
     /// 结果缓存：定位回调、UI 计数、分桶索引都会读取，避免每次重新 filter 两个数组。
@@ -97,9 +91,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         poiCacheValid = false
     }
 
-    /// 当前发音人的显示名（未匹配预设时回退到 vcn 原值）
+    /// 当前发音人的显示名（未建档时回退到 vcn 原值）
     var voiceDisplayName: String {
-        VoicePresets.all.first { $0.vcn == xfVcn }?.name ?? xfVcn
+        voicePacks.first { $0.vcn == xfVcn }?.name ?? (xfVcn.isEmpty ? "未设置" : xfVcn)
     }
 
     // MARK: - 私有属性
@@ -159,6 +153,16 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let data = defaults.data(forKey: "userPois"),
            let decoded = try? JSONDecoder().decode([Poi].self, from: data) {
             userPois = decoded
+        }
+
+        // v1.5 加载自定义语音包；老用户已有 xfVcn 但没有包时，自动补一个（只补一次）
+        if let data = defaults.data(forKey: "voicePacks"),
+           let decoded = try? JSONDecoder().decode([VoicePack].self, from: data) {
+            voicePacks = decoded
+        }
+        let initialVcn = (defaults.string(forKey: "xfVcn") ?? "xiaoyan").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !initialVcn.isEmpty, !voicePacks.contains(where: { $0.vcn == initialVcn }) {
+            voicePacks = [VoicePack(vcn: initialVcn, name: initialVcn)]
         }
 
         super.init()
@@ -453,7 +457,43 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let data = try? JSONEncoder().encode(userPois) {
             defaults.set(data, forKey: "userPois")
         }
+        if let data = try? JSONEncoder().encode(voicePacks) {
+            defaults.set(data, forKey: "voicePacks")
+        }
         if rebuildIndex { self.rebuildIndex() }
+    }
+
+    // MARK: - 语音包管理（v1.5）
+
+    /// 输入 vcn 后自动建档（已存在则不重复）；空白输入忽略
+    func syncVoicePackWithCurrentVcn() {
+        let trimmed = xfVcn.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if xfVcn != trimmed { xfVcn = trimmed }
+        guard !voicePacks.contains(where: { $0.vcn == trimmed }) else { return }
+        voicePacks.append(VoicePack(vcn: trimmed, name: trimmed))
+        saveSettings()
+    }
+
+    /// 重命名语音包（vcn 不变，仅显示名变化）
+    func renameVoicePack(vcn: String, name: String) {
+        guard let idx = voicePacks.firstIndex(where: { $0.vcn == vcn }) else { return }
+        voicePacks[idx].name = name
+        saveSettings()
+    }
+
+    /// 左滑删除语音包；删掉的正是当前选中项时，自动切到剩余第一个（没有则清空）
+    func deleteVoicePack(vcn: String) {
+        voicePacks.removeAll { $0.vcn == vcn }
+        if xfVcn == vcn {
+            xfVcn = voicePacks.first?.vcn ?? ""
+        }
+        saveSettings()
+    }
+
+    func selectVoicePack(vcn: String) {
+        xfVcn = vcn
+        saveSettings()
     }
 
     // MARK: - 用户 POI 管理（#3 点位编辑）

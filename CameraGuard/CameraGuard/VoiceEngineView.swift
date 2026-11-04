@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// 语音引擎设置页：系统 / 讯飞 二选一，讯飞下展开语音包，凭证折叠防误操作。
+/// 语音引擎设置页：系统 / 讯飞 二选一。
+/// v1.5：去掉全部内置语音包预设 —— 在「高级」里填写 vcn 后自动生成一个语音包，
+/// 名称可直接编辑，已有语音包支持左滑删除。
 struct VoiceEngineView: View {
     @EnvironmentObject private var engine: AlertEngine
-    /// 凭证输入防抖任务：避免每输入一个字符就写一次 UserDefaults 并重建点位索引
+    /// 输入防抖任务：避免每输入一个字符就写一次 UserDefaults / 重建索引
     @State private var saveTask: Task<Void, Never>?
 
     var body: some View {
@@ -24,23 +26,27 @@ struct VoiceEngineView: View {
             }
 
             if engine.ttsProvider == .iflytekPro {
-                Section("讯飞语音包") {
-                    Picker("发音人", selection: $engine.xfVcn) {
-                        ForEach(VoicePresets.all) { v in
-                            Text(v.name).tag(v.vcn)
+                Section {
+                    if engine.voicePacks.isEmpty {
+                        Text("还没有语音包：在下方「高级」里填写发音人 vcn，会自动生成一个语音包")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(engine.voicePacks) { pack in
+                            voicePackRow(pack)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        engine.deleteVoicePack(vcn: pack.vcn)
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
+                                }
                         }
                     }
-                    .pickerStyle(.inline)
-
-                    Text("当前 vcn：\(engine.xfVcn)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-
-                    if !engine.ttsFeedback.isEmpty {
-                        Text(engine.ttsFeedback)
-                            .font(.caption)
-                            .foregroundStyle(engine.ttsFeedback.contains("失败") ? .red : .secondary)
-                    }
+                } header: {
+                    Text("我的语音包（左滑可删除）")
+                } footer: {
+                    Text("点左侧圆圈切换到该语音包；名称可直接编辑")
                 }
 
                 Section {
@@ -52,7 +58,8 @@ struct VoiceEngineView: View {
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
                         SecureField("APISecret", text: $engine.xfAPISecret)
-                        TextField("发音人 vcn", text: $engine.xfVcn)
+                        // 输入 vcn 即自动建档（不区分大小写前的空白会被自动去掉）
+                        TextField("发音人 vcn（输入后自动添加语音包）", text: $engine.xfVcn)
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
                     }
@@ -65,12 +72,51 @@ struct VoiceEngineView: View {
         .navigationTitle("语音引擎")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.xfVcn) { _, _ in engine.saveSettings() }
         // 文本类凭证输入防抖保存，停止输入 0.6 秒后再落盘
         .onChange(of: engine.xfAppID) { _, _ in scheduleDebouncedSave() }
         .onChange(of: engine.xfAPIKey) { _, _ in scheduleDebouncedSave() }
         .onChange(of: engine.xfAPISecret) { _, _ in scheduleDebouncedSave() }
+        // vcn 输入防抖建档：停止输入后再校验/新增，避免边输入边生成半截 vcn
+        .onChange(of: engine.xfVcn) { _, _ in scheduleDebouncedVcnSync() }
     }
+
+    // MARK: - 语音包行
+
+    private func voicePackRow(_ pack: VoicePack) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                engine.selectVoicePack(vcn: pack.vcn)
+            } label: {
+                Image(systemName: pack.vcn == engine.xfVcn ? "checkmark.circle.fill" : "circle")
+                    .font(.body)
+                    .foregroundStyle(pack.vcn == engine.xfVcn ? Color.blue : Color.secondary)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("语音包名称", text: nameBinding(for: pack))
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                Text("vcn: \(pack.vcn)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// 名称编辑绑定：直接改内存中的语音包，落盘做防抖（不影响 vcn 与选中状态）
+    private func nameBinding(for pack: VoicePack) -> Binding<String> {
+        Binding(
+            get: { engine.voicePacks.first { $0.vcn == pack.vcn }?.name ?? pack.name },
+            set: { newName in
+                guard let idx = engine.voicePacks.firstIndex(where: { $0.vcn == pack.vcn }) else { return }
+                engine.voicePacks[idx].name = newName
+                scheduleDebouncedSave()
+            }
+        )
+    }
+
+    // MARK: - 防抖
 
     private func scheduleDebouncedSave() {
         saveTask?.cancel()
@@ -78,6 +124,15 @@ struct VoiceEngineView: View {
             try? await Task.sleep(nanoseconds: 600_000_000)
             guard !Task.isCancelled else { return }
             engine.saveSettings()
+        }
+    }
+
+    private func scheduleDebouncedVcnSync() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            engine.syncVoicePackWithCurrentVcn()
         }
     }
 }
