@@ -59,6 +59,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var xfAPIKey: String
     @Published var xfAPISecret: String
     @Published var xfVcn: String
+    /// 最近一次 TTS 结果反馈（用于 UI 显示讯飞是否成功 / 回退）
+    @Published var ttsFeedback: String = ""
     /// 用户自定义点位（持久化在 UserDefaults）
     @Published var userPois: [Poi] = []
 
@@ -67,6 +69,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let bundled = bundledPois.filter { $0.enabled }
         let custom  = userPois.filter { $0.enabled }
         return bundled + custom
+    }
+
+    /// 当前发音人的显示名（未匹配预设时回退到 vcn 原值）
+    var voiceDisplayName: String {
+        VoicePresets.all.first { $0.vcn == xfVcn }?.name ?? xfVcn
     }
 
     // MARK: - 私有属性
@@ -320,14 +327,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             let tts = XfyunTTS(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret, vcn: xfVcn)
             guard tts.isConfigured else {
                 speakSystem(text)
-                statusText = "讯飞未配置，已回退系统语音"
+                ttsFeedback = "讯飞未配置，已用系统语音"
                 return
             }
             xfyunTTS = tts
+            ttsFeedback = "讯飞合成中 · \(voiceDisplayName)"
             tts.speak(text,
                       onFinish: { [weak self] in self?.xfyunTTS = nil },
-                      onNoAudio: { [weak self] in
-                          DispatchQueue.main.async { self?.speakSystem(text) }
+                      onNoAudio: { [weak self] reason in
+                          DispatchQueue.main.async {
+                              self?.ttsFeedback = "讯飞失败，已回退系统语音（\(reason)）"
+                              self?.speakSystem(text)
+                          }
                       })
         }
     }

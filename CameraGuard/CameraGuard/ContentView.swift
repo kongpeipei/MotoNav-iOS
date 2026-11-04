@@ -262,58 +262,26 @@ struct ContentView: View {
 
             Divider()
 
-            // #1 TTS 引擎选择
-            VStack(alignment: .leading, spacing: 6) {
-                Text("语音引擎")
-                    .font(.subheadline)
-                Picker("TTS", selection: $engine.ttsProvider) {
-                    ForEach(TtsProvider.allCases) { p in
-                        Text(p.label).tag(p)
+            // #1 语音引擎（折叠入口，点进去再选系统/讯飞；凭证收起防误操作）
+            NavigationLink {
+                VoiceEngineView()
+                    .environmentObject(engine)
+            } label: {
+                HStack {
+                    Image(systemName: "waveform.circle.fill")
+                        .foregroundStyle(.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("语音引擎")
+                            .font(.subheadline.weight(.medium))
+                        Text(voiceEngineSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                }
-                .pickerStyle(.menu)
-
-                if engine.ttsProvider == .iflytekPro {
-                    Text("填写讯飞开放平台控制台的 AppID / APIKey / APISecret")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    TextField("AppID", text: $engine.xfAppID)
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                    TextField("APIKey", text: $engine.xfAPIKey)
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                    SecureField("APISecret", text: $engine.xfAPISecret)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("发音人 vcn（默认 xiaoyan，四川话填控制台的叶子/小蓉对应值）", text: $engine.xfVcn)
-                        .textFieldStyle(.roundedBorder)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                    Picker("预设发音人", selection: $engine.xfVcn) {
-                        ForEach(VoicePresets.all) { v in
-                            Text(v.name).tag(v.vcn)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    Text("「叶子(四川话)」的 vcn 以讯飞控制台为准，若默认值不符请直接改上方 vcn")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("未配置或密钥错误时自动回退系统语音")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("系统语音离线可用、零延迟")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
-            .onChange(of: engine.xfAppID) { _, _ in engine.saveSettings() }
-            .onChange(of: engine.xfAPIKey) { _, _ in engine.saveSettings() }
-            .onChange(of: engine.xfAPISecret) { _, _ in engine.saveSettings() }
-            .onChange(of: engine.xfVcn) { _, _ in engine.saveSettings() }
 
             Divider()
 
@@ -326,6 +294,12 @@ struct ContentView: View {
                     .padding(.vertical, 10)
                     .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
                     .foregroundStyle(.white)
+            }
+
+            if !engine.ttsFeedback.isEmpty {
+                Text(engine.ttsFeedback)
+                    .font(.caption)
+                    .foregroundStyle(engine.ttsFeedback.contains("失败") ? .red : .secondary)
             }
         }
         .padding(12)
@@ -349,5 +323,9 @@ struct ContentView: View {
 
     private func distanceText(_ d: Double) -> String {
         d >= 1000 ? String(format: "%.1f 公里", d / 1000) : "\(Int(d)) 米"
+    }
+
+    private var voiceEngineSummary: String {
+        engine.ttsProvider == .system ? "系统语音" : "讯飞 · \(engine.voiceDisplayName)"
     }
 }
