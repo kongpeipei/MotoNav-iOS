@@ -13,7 +13,7 @@ enum TtsProvider: String, CaseIterable, Identifiable, Codable {
     var label: String {
         switch self {
         case .system:     return "系统语音（推荐，离线零延迟）"
-        case .iflytekPro: return "讯飞在线合成（高级用户，需自行接入 SDK）"
+        case .iflytekPro: return "讯飞在线合成（四川话·叶子，需填 AppID/APIKey）"
         }
     }
 }
@@ -35,6 +35,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var enabledTypes: Set<PoiType>
     @Published var warnDistance: Double
     @Published var ttsProvider: TtsProvider
+    @Published var xfAppID: String
+    @Published var xfAPIKey: String
+    @Published var xfAPISecret: String
+    @Published var xfVcn: String
     /// 用户自定义点位（持久化在 UserDefaults）
     @Published var userPois: [Poi] = []
 
@@ -52,6 +56,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var announced: Set<String> = []        // 已播报点位 id
     private var lastSpeak = Date.distantPast
     private let speech = AVSpeechSynthesizer()
+    private var xfyunTTS: XfyunTTS?
     private let haptic = UINotificationFeedbackGenerator()
 
     /// 优化 D：纬度分桶索引（每 0.01° ≈ 1.11km，一个桶覆盖约 1.1km×1km 区域）
@@ -70,7 +75,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
-        self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
+        self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .iflytekPro
+        self.xfAppID = defaults.string(forKey: "xfAppID") ?? ""
+        self.xfAPIKey = defaults.string(forKey: "xfAPIKey") ?? ""
+        self.xfAPISecret = defaults.string(forKey: "xfAPISecret") ?? ""
+        self.xfVcn = defaults.string(forKey: "xfVcn") ?? "xiaoyan"
 
         // 加载 Bundle 内置点位
         if let url = Bundle.main.url(forResource: "poi", withExtension: "json"),
@@ -256,7 +265,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let text = "前方\(Int(bestD))米，\(best.type.voiceText)，请谨慎行驶！"
         speak(text)
         // 优化 C：震动辅助
-        haptic.notificationOccurred(.warning)
+        vibrate()
 
         announcements.insert(
             Announcement(time: Date(), type: best.type, name: best.name,
@@ -284,29 +293,41 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         switch ttsProvider {
         case .system:
-            if speech.isSpeaking { speech.stopSpeaking(at: .word) }
-            let u = AVSpeechUtterance(string: text)
-            u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-            u.rate = AVSpeechUtteranceDefaultSpeechRate
-            u.volume = 1.0
-            speech.speak(u)
+            speakSystem(text)
 
         case .iflytekPro:
-            // 讯飞接入占位：将系统语音兜底，用户自行替换为 iflytek TTS SDK 调用
-            // 替换方案示例：
-            //   IFlySpeechSynthesizer.shared().startSpeak(text)
-            // 保留系统语音作为 fallback，避免用户未接入 SDK 时静默
-            if speech.isSpeaking { speech.stopSpeaking(at: .word) }
-            let u = AVSpeechUtterance(string: text)
-            u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
-            speech.speak(u)
-            statusText = "当前使用系统语音（讯飞 SDK 未接入，已自动 fallback）"
+            let tts = XfyunTTS(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret, vcn: xfVcn)
+            guard tts.isConfigured else {
+                speakSystem(text)
+                statusText = "讯飞未配置，已回退系统语音"
+                return
+            }
+            xfyunTTS = tts
+            tts.speak(text) { [weak self] in
+                self?.xfyunTTS = nil
+            }
         }
+    }
+
+    private func speakSystem(_ text: String) {
+        if speech.isSpeaking { speech.stopSpeaking(at: .word) }
+        let u = AVSpeechUtterance(string: text)
+        u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+        u.rate = AVSpeechUtteranceDefaultSpeechRate
+        u.volume = 1.0
+        speech.speak(u)
     }
 
     private func configureAudio() {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
+    }
+
+    /// 震动反馈（C）：prepare 后再触发，避免首次无感
+    private func vibrate() {
+        haptic.prepare()
+        vibrate()
+        UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1.0)
     }
 
     // MARK: - 设置持久化
@@ -316,6 +337,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         defaults.set(enabledTypes.map { $0.rawValue }, forKey: "enabledTypes")
         defaults.set(warnDistance, forKey: "warnDistance")
         defaults.set(ttsProvider.rawValue, forKey: "ttsProvider")
+        defaults.set(xfAppID, forKey: "xfAppID")
+        defaults.set(xfAPIKey, forKey: "xfAPIKey")
+        defaults.set(xfAPISecret, forKey: "xfAPISecret")
+        defaults.set(xfVcn, forKey: "xfVcn")
         if let data = try? JSONEncoder().encode(userPois) {
             defaults.set(data, forKey: "userPois")
         }
@@ -373,9 +398,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func testSpeak() {
         guard !speech.isSpeaking || canSpeakNow() else { return }
-        let text = "电子眼卫士播报测试，前方路口请注意"
+        let text = "前方300米，有摩托车闯红灯拍照，请谨慎行驶！"
         speak(text)
-        haptic.notificationOccurred(.warning)
+        vibrate()
         announcements.insert(
             Announcement(time: Date(), type: .CUSTOM, name: "测试", distance: 0, text: text),
             at: 0

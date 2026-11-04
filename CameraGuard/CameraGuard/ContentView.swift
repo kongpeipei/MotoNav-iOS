@@ -272,11 +272,39 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
-                Text("讯飞模式需自行接入 SDK，当前未接入时自动回退系统语音")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+
+                if engine.ttsProvider == .iflytekPro {
+                    Text("填写讯飞开放平台控制台的 AppID / APIKey / APISecret")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    TextField("AppID", text: $engine.xfAppID)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    TextField("APIKey", text: $engine.xfAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    SecureField("APISecret", text: $engine.xfAPISecret)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("发音人 vcn（默认 xiaoyan，四川话填控制台的叶子/小蓉对应值）", text: $engine.xfVcn)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    Text("未配置或密钥错误时自动回退系统语音")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("系统语音离线可用、零延迟")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
+            .onChange(of: engine.xfAppID) { _, _ in engine.saveSettings() }
+            .onChange(of: engine.xfAPIKey) { _, _ in engine.saveSettings() }
+            .onChange(of: engine.xfAPISecret) { _, _ in engine.saveSettings() }
+            .onChange(of: engine.xfVcn) { _, _ in engine.saveSettings() }
 
             Divider()
 

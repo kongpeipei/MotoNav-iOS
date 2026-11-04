@@ -15,6 +15,7 @@
 		CA0000000000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000007 /* Assets.xcassets */; };
 		CA0000000000000000000007 /* PoiEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000009 /* PoiEditorView.swift */; };
 		CA0000000000000000000008 /* AddPoiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000A /* AddPoiView.swift */; };
+		CA0000000000000000000009 /* XfyunTTS.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000B /* XfyunTTS.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 		CB0000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		CB0000000000000000000009 /* PoiEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoiEditorView.swift; sourceTree = "<group>"; };
 		CB000000000000000000000A /* AddPoiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPoiView.swift; sourceTree = "<group>"; };
+		CB000000000000000000000B /* XfyunTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XfyunTTS.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +60,7 @@
 				CB0000000000000000000005 /* PoiModels.swift */,
 				CB0000000000000000000009 /* PoiEditorView.swift */,
 				CB000000000000000000000A /* AddPoiView.swift */,
+				CB000000000000000000000B /* XfyunTTS.swift */,
 				CB0000000000000000000007 /* Assets.xcassets */,
 				CB0000000000000000000006 /* poi.json */,
 				CB0000000000000000000008 /* Info.plist */,
@@ -150,6 +153,7 @@
 				CA0000000000000000000004 /* PoiModels.swift in Sources */,
 				CA0000000000000000000007 /* PoiEditorView.swift in Sources */,
 				CA0000000000000000000008 /* AddPoiView.swift in Sources */,
+				CA0000000000000000000009 /* XfyunTTS.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
