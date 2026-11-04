@@ -261,28 +261,38 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         location = loc
         let speed = loc.speed >= 0 ? loc.speed : 0
         speedKmh = speed * 3.6
+        evaluateNearest()
+    }
 
-        // 优化 A：速度自适应预警距离
-        // 骑车 ≤15 m/s (54 km/h) 用默认；更高速度自动放大到 1.2× ~ 2.0×
-        let adaptiveFactor: Double
-        if speed <= 5 {          // 步行 <18 km/h：保持默认
-            adaptiveFactor = 1.0
-        } else if speed <= 10 {  // 骑行 <36 km/h
-            adaptiveFactor = 1.0
-        } else if speed <= 15 { // 高速骑行 / 低速开车 <54 km/h
-            adaptiveFactor = 1.2
-        } else if speed <= 22 {  // 普通开车 <80 km/h
-            adaptiveFactor = 1.5
+    /// 优化 A：速度自适应预警距离按当前速度放大（骑行 1.0× ~ 高速 2.0×）
+    private func adaptiveFactor(forSpeed speed: Double) -> Double {
+        if speed <= 10 {          // 步行 / 骑行 <36 km/h
+            return 1.0
+        } else if speed <= 15 {   // 高速骑行 / 低速开车 <54 km/h
+            return 1.2
+        } else if speed <= 22 {   // 普通开车 <80 km/h
+            return 1.5
         } else {                  // 高速 >80 km/h
-            adaptiveFactor = 2.0
+            return 2.0
         }
-        let effectiveWarn = warnDistance * adaptiveFactor
+    }
 
-        guard let (best, bestD) = findNearest(relativeTo: loc) else { return }
+    /// 用已缓存位置重新评估最近点位，更新首页并视情况播报。
+    /// 新增 / 删除 / 导入点位后调用即可立即刷新，无需等下一次定位。
+    private func evaluateNearest() {
+        guard let loc = location else { return }
+        let speed = loc.speed >= 0 ? loc.speed : 0
+        let effectiveWarn = warnDistance * adaptiveFactor(forSpeed: speed)
+
+        guard let (best, bestD) = findNearest(relativeTo: loc) else {
+            nearest = nil
+            nearestDistance = .greatestFiniteMagnitude
+            return
+        }
         nearest = best
         nearestDistance = bestD
 
-        // 优化 B：驶离冷却阈值从 1.2x 提升到 1.5x，避免两点相邻时反复触发
+        // 优化 B：驶离冷却阈值 1.5x，避免两点相邻时反复触发
         if bestD > effectiveWarn * 1.5 {
             announced.remove(best.id)
             return
@@ -389,17 +399,20 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         userPois.append(poi)
         saveSettings()
+        evaluateNearest()
     }
 
     func deleteUserPoi(id: String) {
         userPois.removeAll { $0.id == id }
         saveSettings()
+        evaluateNearest()
     }
 
     func toggleUserPoi(id: String) {
         guard let idx = userPois.firstIndex(where: { $0.id == id }) else { return }
         userPois[idx].enabled.toggle()
         saveSettings()
+        evaluateNearest()
     }
 
     /// 导出全部点位（Bundle + 用户自定义）为 JSON Data（优化 E）
@@ -425,6 +438,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
         saveSettings()
+        evaluateNearest()
     }
 
     // MARK: - 测试
