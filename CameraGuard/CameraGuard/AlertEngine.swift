@@ -326,6 +326,15 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - TTS 播报（#1 讯飞折中：保留系统，讯飞接入点留壳）
 
+    /// 讯飞凭证格式预检：AppID 8 位、APIKey/APISecret 32 位。不完整直接走系统语音，避免把
+    /// “凭证不完整”误当成合成失败。真实鉴权失败仍由讯飞服务器返回具体错误。
+    static func iflytekCredentialLooksValid(appID: String, apiKey: String, apiSecret: String) -> Bool {
+        let a = appID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let k = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = apiSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        return a.count == 8 && k.count == 32 && s.count == 32
+    }
+
     private func speak(_ text: String) {
         configureAudio()
 
@@ -334,6 +343,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             speakSystem(text)
 
         case .iflytekPro:
+            if !Self.iflytekCredentialLooksValid(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret) {
+                speakSystem(text)
+                ttsFeedback = "讯飞凭证不完整（AppID \(xfAppID.count) 位 / APIKey \(xfAPIKey.count) 位 / Secret \(xfAPISecret.count) 位），已用系统语音"
+                return
+            }
             let tts = XfyunTTS(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret, vcn: xfVcn)
             guard tts.isConfigured else {
                 speakSystem(text)

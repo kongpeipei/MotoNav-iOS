@@ -5,7 +5,7 @@ import AVFoundation
 /// 讯飞在线语音合成（WebSocket v2 协议）
 /// 文档：https://www.xfyun.cn/doc/tts/online_tts/API.html
 /// 鉴权：api_key + HMAC-SHA256(api_secret, "host\ndate\nrequest-line")
-final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
+final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelegate {
 
     private let appID: String
     private let apiKey: String
@@ -75,7 +75,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
 
-        session = URLSession(configuration: .default)
+        session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         webSocket = session?.webSocketTask(with: request)
         webSocket?.resume()
 
@@ -98,7 +98,12 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
               let jsonStr = String(data: json, encoding: .utf8) else { complete(); return }
 
         webSocket?.send(.string(jsonStr)) { [weak self] error in
-            if error != nil { self?.finishPlay() } else { self?.receiveLoop() }
+            if let error {
+                self?.errorMessage = "发送失败：\(error.localizedDescription)"
+                self?.failNoAudio()
+            } else {
+                self?.receiveLoop()
+            }
         }
     }
 
@@ -118,8 +123,9 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
                 @unknown default:
                     self.finishPlay()
                 }
-            case .failure:
-                // 连接关闭 = 数据流结束
+            case .failure(let error):
+                // 连接关闭或握手失败：记录具体错误，供界面显示
+                self.errorMessage = self.errorMessage ?? "连接失败：\(error.localizedDescription)"
                 self.finishPlay()
             }
         }
@@ -200,6 +206,20 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate {
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         complete()
+    }
+
+    // MARK: - WebSocket 代理（捕获握手/断开的具体错误）
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                    didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        guard !finished else { return }
+        let r = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        errorMessage = errorMessage ?? "连接关闭(\(closeCode.rawValue)) \(r)"
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error, !finished else { return }
+        errorMessage = errorMessage ?? "连接错误：\(error.localizedDescription)"
     }
 
     // MARK: - 工具
