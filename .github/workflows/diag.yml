@@ -1,0 +1,13 @@
+name: DIAG Runner
+on:
+  workflow_dispatch:
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - run: sw_vers && xcodebuild -version
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - run: uname -a
