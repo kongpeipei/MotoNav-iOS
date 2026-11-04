@@ -38,6 +38,22 @@ enum VoicePresets {
     ]
 }
 
+/// 速度自适应预警距离系数（引擎判定与首页显示共用，避免两处阈值漂移）
+/// 入参单位为 m/s；低速步行/骑行 1.0×，提速后逐步放大提前量。
+enum AdaptiveWarn {
+    static func factor(speedMetersPerSecond speed: Double) -> Double {
+        switch speed {
+        case ...10:  return 1.0   // ≤36 km/h
+        case ...15:  return 1.2   // ≤54 km/h
+        case ...22:  return 1.5   // ≤80 km/h
+        default:     return 2.0
+        }
+    }
+    static func effectiveDistance(base: Double, speedMetersPerSecond speed: Double) -> Double {
+        base * factor(speedMetersPerSecond: speed)
+    }
+}
+
 /// 核心引擎：持续定位 → 匹配最近违法拍照点 → 接近时语音播报（支持后台运行）
 /// 优化点：A 速度自适应预警距离 / B 双保险节流 / C 震动反馈 / D 纬度分桶查找 / F 通知权限
 @MainActor
@@ -65,10 +81,20 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var userPois: [Poi] = []
 
     /// 全部有效点位 = Bundle 内置 + 用户自定义（均过滤 enabled=true）
+    /// 结果缓存：定位回调、UI 计数、分桶索引都会读取，避免每次重新 filter 两个数组。
+    private var cachedPois: [Poi] = []
+    private var poiCacheValid = false
     var pois: [Poi] {
+        if poiCacheValid { return cachedPois }
         let bundled = bundledPois.filter { $0.enabled }
         let custom  = userPois.filter { $0.enabled }
-        return bundled + custom
+        cachedPois = bundled + custom
+        poiCacheValid = true
+        return cachedPois
+    }
+
+    private func invalidatePoiCache() {
+        poiCacheValid = false
     }
 
     /// 当前发音人的显示名（未匹配预设时回退到 vcn 原值）
@@ -103,17 +129,27 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
 
         self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
-        self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .iflytekPro
-        self.xfAppID = defaults.string(forKey: "xfAppID") ?? "5ad38c61"
-        self.xfAPIKey = defaults.string(forKey: "xfAPIKey") ?? "65eb7d0144b094c4c34b"
-        self.xfAPISecret = defaults.string(forKey: "xfAPISecret") ?? "MGI5M2YzOGM3ZDRjNTAyYmM2YWQ1ZDY0"
+        // 默认使用离线系统语音；讯飞凭证一律由用户在「语音引擎」页自行填写，源码不内置任何密钥
+        self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
+        self.xfAppID = defaults.string(forKey: "xfAppID") ?? ""
+        self.xfAPIKey = defaults.string(forKey: "xfAPIKey") ?? ""
+        self.xfAPISecret = defaults.string(forKey: "xfAPISecret") ?? ""
         self.xfVcn = defaults.string(forKey: "xfVcn") ?? "xiaoyan"
 
-        // 加载 Bundle 内置点位
+        // 加载 Bundle 内置点位：逐元素解码，单条坏数据不会导致整个数组解析失败而全部丢失
         if let url = Bundle.main.url(forResource: "poi", withExtension: "json"),
            let data = try? Data(contentsOf: url),
-           let arr = try? JSONDecoder().decode([Poi].self, from: data) {
-            bundledPois = arr
+           let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            bundledPois = raw.compactMap { dict -> Poi? in
+                guard let name = dict["name"] as? String,
+                      let typeRaw = dict["type"] as? String,
+                      let type = PoiType(rawValue: typeRaw),
+                      let lat = (dict["lat"] as? NSNumber)?.doubleValue,
+                      let lon = (dict["lon"] as? NSNumber)?.doubleValue else { return nil }
+                return Poi(name: name, type: type, latitude: lat, longitude: lon,
+                           radiusM: (dict["radiusM"] as? NSNumber)?.doubleValue ?? 500,
+                           enabled: (dict["enabled"] as? Bool) ?? true)
+            }
         }
 
         // 加载用户自定义点位
@@ -132,29 +168,16 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         lm.allowsBackgroundLocationUpdates = true
         lm.showsBackgroundLocationIndicator = true
 
+        invalidatePoiCache()
         rebuildIndex()
         configureAudio()
-
-        // 持久化观察
-        observeSettings()
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    private func observeSettings() {
-        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
-                                               object: UserDefaults.standard, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            self.rebuildIndex()
-        }
     }
 
     // MARK: - 索引（优化 D：纬度分桶 + 邻桶扫描）
 
     /// 重建分桶索引（每次新增/删除用户点位或过滤条件变化后调用）
     func rebuildIndex() {
+        invalidatePoiCache()
         latBuckets.removeAll(keepingCapacity: true)
         for p in pois {
             let key = Int(p.latitude / bucketStep)
@@ -165,19 +188,17 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 基于分桶的近邻查找（优化 D：先筛桶再算距离，O(桶内数量)）
     private func findNearest(relativeTo loc: CLLocation) -> (Poi, Double)? {
         let latKey = Int(loc.coordinate.latitude / bucketStep)
-        // 扫描当前桶 + 上下各 2 个桶（覆盖 5 × 1.1km ≈ 5.5km 范围，足够覆盖 warnDistance=1000m 加余量）
-        let lonKey = Int(loc.coordinate.longitude / bucketStep)
+        // 扫描当前桶 + 上下各 2 个纬度桶（5 × 0.01° ≈ 5.5km 纬度范围，覆盖 warnDistance=1000m 加余量）
         var best: Poi?
         var bestD = Double.greatestFiniteMagnitude
         for dLat in -2...2 {
             let key = latKey + dLat
             guard let bucket = latBuckets[key] else { continue }
             for p in bucket where enabledTypes.contains(p.type) {
-                // 经度粗略过滤（先算经度差对应的近似距离，减少 CLLocation 构造）
+                // 度单位粗筛：经度差乘 cos(纬度) 折算后与纬度差比较，先剔除远距离候选，减少 CLLocation 构造
                 let deltaLat = (p.latitude - loc.coordinate.latitude)
                 let deltaLon = (p.longitude - loc.coordinate.longitude) * cos(loc.coordinate.latitude * .pi / 180)
-                // 0.02° ≈ 2.2km，粗略跳过远距离
-                if hypot(deltaLat, deltaLon) > 0.025 { continue }
+                if hypot(deltaLat, deltaLon) > 0.025 { continue }   // 0.025° ≈ 2.8km 上限
                 let d = loc.distance(from: CLLocation(latitude: p.latitude, longitude: p.longitude))
                 if d < bestD {
                     bestD = d
@@ -265,16 +286,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 优化 A：速度自适应预警距离按当前速度放大（骑行 1.0× ~ 高速 2.0×）
+    /// 阈值统一在 AdaptiveWarn 中维护，首页显示与引擎判定共用同一套系数。
     private func adaptiveFactor(forSpeed speed: Double) -> Double {
-        if speed <= 10 {          // 步行 / 骑行 <36 km/h
-            return 1.0
-        } else if speed <= 15 {   // 高速骑行 / 低速开车 <54 km/h
-            return 1.2
-        } else if speed <= 22 {   // 普通开车 <80 km/h
-            return 1.5
-        } else {                  // 高速 >80 km/h
-            return 2.0
-        }
+        AdaptiveWarn.factor(speedMetersPerSecond: speed)
     }
 
     /// 用已缓存位置重新评估最近点位，更新首页并视情况播报。
@@ -335,12 +349,12 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         return a.count == 8 && k.count == 32 && s.count == 32
     }
 
-    private func speak(_ text: String) {
+    private func speak(_ text: String, force: Bool = false) {
         configureAudio()
 
         switch ttsProvider {
         case .system:
-            speakSystem(text)
+            speakSystem(text, force: force)
 
         case .iflytekPro:
             if !Self.iflytekCredentialLooksValid(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret) {
@@ -367,8 +381,12 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    private func speakSystem(_ text: String) {
-        if speech.isSpeaking { speech.stopSpeaking(at: .word) }
+    private func speakSystem(_ text: String, force: Bool = false) {
+        // 节流已限制播报频率；默认不打断正在播放的句子，避免两句语音互相截断、听感撕扯。
+        if speech.isSpeaking {
+            guard force else { return }
+            speech.stopSpeaking(at: .word)
+        }
         let u = AVSpeechUtterance(string: text)
         u.voice = AVSpeechSynthesisVoice(language: "zh-CN")
         u.rate = AVSpeechUtteranceDefaultSpeechRate
@@ -466,7 +484,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
         let text = "前方300米，有摩托车闯红灯拍照，请谨慎行驶！"
-        speak(text)
+        speak(text, force: true)   // 测试按钮要求立即发声，允许打断当前语音
         vibrate()
         announcements.insert(
             Announcement(time: Date(), type: .CUSTOM, name: "测试", distance: 0, text: text),

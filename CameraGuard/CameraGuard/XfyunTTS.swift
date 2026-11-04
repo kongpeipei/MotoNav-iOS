@@ -19,13 +19,15 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelega
     private var onFinish: (() -> Void)?
     private var onNoAudio: ((String) -> Void)?
     private var finished = false
+    private var finalizing = false   // 防止正常结束与连接关闭回调重复触发收尾/重复播放
     private var errorMessage: String?
 
     init(appID: String, apiKey: String, apiSecret: String, vcn: String) {
         self.appID = appID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         self.apiSecret = apiSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.vcn = vcn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "xiaoyan" : vcn
+        let trimmedVcn = vcn.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.vcn = trimmedVcn.isEmpty ? "xiaoyan" : trimmedVcn
         super.init()
     }
 
@@ -37,6 +39,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelega
         self.onFinish = onFinish
         self.onNoAudio = onNoAudio
         self.finished = false
+        self.finalizing = false
         self.errorMessage = nil
         audioData = Data()
         player?.stop()
@@ -157,6 +160,8 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelega
     // MARK: - 播放 & 收尾
 
     private func finishPlay() {
+        guard !finalizing else { return }
+        finalizing = true
         guard !audioData.isEmpty else { failNoAudio(); return }
         let wav = Self.wrapWAV(pcm: audioData, sampleRate: 16000)
         do {
@@ -189,6 +194,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelega
         guard !finished else { return }
         finished = true
         webSocket?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
         onFinish?()
     }
 
@@ -196,6 +202,7 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelega
         guard !finished else { return }
         finished = true
         webSocket?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
         onNoAudio?(errorMessage ?? "无音频返回")
         onFinish?()
     }
@@ -212,14 +219,22 @@ final class XfyunTTS: NSObject, AVAudioPlayerDelegate, URLSessionWebSocketDelega
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        guard !finished else { return }
         let r = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        errorMessage = errorMessage ?? "连接关闭(\(closeCode.rawValue)) \(r)"
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.finished else { return }
+            self.errorMessage = self.errorMessage ?? "连接关闭(\(closeCode.rawValue)) \(r)"
+            // 连接提前关闭时收尾：已有音频则播放，否则按失败回退，避免界面一直停在「合成中」
+            self.finishPlay()
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let error, !finished else { return }
-        errorMessage = errorMessage ?? "连接错误：\(error.localizedDescription)"
+        guard let error else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.finished else { return }
+            self.errorMessage = self.errorMessage ?? "连接错误：\(error.localizedDescription)"
+            self.finishPlay()
+        }
     }
 
     // MARK: - 工具

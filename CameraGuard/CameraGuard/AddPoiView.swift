@@ -16,7 +16,8 @@ struct AddPoiView: View {
     @State private var geocoding = false
     @State private var geocodeError: String?
 
-    private let formatter = NumberFormatter()
+    /// 地址不含省/市时自动补上的城市前缀，避免把交叉口解析到其他城市（可按使用城市修改）
+    private let defaultCityHint = "合肥 "
 
     var body: some View {
         NavigationStack {
@@ -118,8 +119,8 @@ struct AddPoiView: View {
         geocodeError = nil
 
         let geocoder = CLGeocoder()
-        // 对"X路与Y路交叉口"这类输入加上合肥限定，避免解析到其他城市
-        let cityHinted = address.contains("市") || address.contains("省") ? address : "合肥 " + address
+        // 对"X路与Y路交叉口"这类输入补上城市限定，避免解析到其他城市
+        let cityHinted = address.contains("市") || address.contains("省") ? address : defaultCityHint + address
 
         geocoder.geocodeAddressString(cityHinted) { placemarks, error in
             DispatchQueue.main.async {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import CoreLocation
 import UniformTypeIdentifiers
 
@@ -9,8 +10,13 @@ struct PoiEditorView: View {
 
     @State private var showAddForm = false
     @State private var poiToDelete: Poi?
+    /// 持有导入协调器：UIDocumentPicker 的 delegate 不会被系统强引用，临时对象会被提前释放导致回调丢失
+    @State private var importer: ImportCoordinator?
 
-    private let columns = [GridItem(.adaptive(minimum: 80))]
+    /// 已启用内置点位（body 内多处复用，只计算一次）
+    private var enabledBundled: [Poi] {
+        engine.bundledPois.filter { $0.enabled }
+    }
 
     var body: some View {
         NavigationStack {
@@ -37,15 +43,15 @@ struct PoiEditorView: View {
                 }
 
                 Section {
-                    ForEach(engine.bundledPois.filter { $0.enabled }) { p in
+                    ForEach(enabledBundled) { p in
                         PoiRow(poi: p)
                     }
-                    if engine.bundledPois.filter({ $0.enabled }).isEmpty {
+                    if enabledBundled.isEmpty {
                         Text("无内置点位")
                             .foregroundStyle(.tertiary)
                     }
                 } header: {
-                    Text("内置点位（共 \(engine.bundledPois.filter { $0.enabled }.count) 个）")
+                    Text("内置点位（共 \(enabledBundled.count) 个）")
                 } footer: {
                     Text("内置点位不可修改，由 App 提供")
                 }
@@ -109,13 +115,15 @@ struct PoiEditorView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("poi_export.json")
         try? data.write(to: url)
         let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
-        UIApplication.shared.windows.first?.rootViewController?.present(picker, animated: true)
+        currentTopViewController()?.present(picker, animated: true)
     }
 
     private func performImport() {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json])
-        picker.delegate = ImportCoordinator(engine: engine)
-        UIApplication.shared.windows.first?.rootViewController?.present(picker, animated: true)
+        let coordinator = ImportCoordinator(engine: engine)
+        importer = coordinator
+        picker.delegate = coordinator
+        currentTopViewController()?.present(picker, animated: true)
     }
 }
 
@@ -187,10 +195,17 @@ final class ImportCoordinator: NSObject, UIDocumentPickerDelegate {
             let data = try Data(contentsOf: url)
             try engine.importPois(from: data)
         } catch {
-            // 简易提示
             let alert = UIAlertController(title: "导入失败", message: error.localizedDescription, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "好", style: .default))
-            UIApplication.shared.windows.first?.rootViewController?.present(alert, animated: true)
+            currentTopViewController()?.present(alert, animated: true)
         }
     }
+}
+
+/// 取当前前台窗口根控制器（替代已废弃的 UIApplication.shared.windows.first），页面与导入协调器共用
+private func currentTopViewController() -> UIViewController? {
+    guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .first(where: { $0.activationState == .foregroundActive }) else { return nil }
+    return (scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first)?.rootViewController
 }

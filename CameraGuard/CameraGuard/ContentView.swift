@@ -105,16 +105,10 @@ struct ContentView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
     }
 
-    /// 计算当前自适应预警距离（与 AlertEngine.process 逻辑一致）
+    /// 当前自适应预警距离：与引擎共用 AdaptiveWarn 系数，保证界面显示与实际触发阈值一致
     private var effectiveWarn: Double {
-        let speed = engine.speedKmh / 3.6  // km/h → m/s
-        let factor: Double
-        if speed <= 5 { factor = 1.0 }
-        else if speed <= 10 { factor = 1.0 }
-        else if speed <= 15 { factor = 1.2 }
-        else if speed <= 22 { factor = 1.5 }
-        else { factor = 2.0 }
-        return engine.warnDistance * factor
+        AdaptiveWarn.effectiveDistance(base: engine.warnDistance,
+                                        speedMetersPerSecond: engine.speedKmh / 3.6)
     }
 
     // MARK: - 后台运行提示

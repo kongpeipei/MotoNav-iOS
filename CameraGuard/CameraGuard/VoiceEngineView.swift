@@ -3,6 +3,8 @@ import SwiftUI
 /// 语音引擎设置页：系统 / 讯飞 二选一，讯飞下展开语音包，凭证折叠防误操作。
 struct VoiceEngineView: View {
     @EnvironmentObject private var engine: AlertEngine
+    /// 凭证输入防抖任务：避免每输入一个字符就写一次 UserDefaults 并重建点位索引
+    @State private var saveTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -64,8 +66,18 @@ struct VoiceEngineView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
         .onChange(of: engine.xfVcn) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.xfAppID) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.xfAPIKey) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.xfAPISecret) { _, _ in engine.saveSettings() }
+        // 文本类凭证输入防抖保存，停止输入 0.6 秒后再落盘
+        .onChange(of: engine.xfAppID) { _, _ in scheduleDebouncedSave() }
+        .onChange(of: engine.xfAPIKey) { _, _ in scheduleDebouncedSave() }
+        .onChange(of: engine.xfAPISecret) { _, _ in scheduleDebouncedSave() }
+    }
+
+    private func scheduleDebouncedSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            engine.saveSettings()
+        }
     }
 }
