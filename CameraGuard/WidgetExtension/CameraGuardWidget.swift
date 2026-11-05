@@ -68,30 +68,9 @@ func poiTypeIconView(key: String, color: Color) -> some View {
             .padding(.vertical, 3)
         }
         .frame(width: 20, height: 20)
-    case "HELMET": // 摩托车整车（不戴头盔）
-        ZStack {
-            Circle().stroke(color, style: s).frame(width: 9, height: 9)
-                .offset(x: -3.8, y: 5)
-            Circle().stroke(color, style: s).frame(width: 9, height: 9)
-                .offset(x: 4.2, y: 5)
-            Path { p in
-                p.move(to: CGPoint(x: 4.4, y: 10.6))
-                p.addCurve(to: CGPoint(x: 9.4, y: 5.6), control1: CGPoint(x: 4.4, y: 7.4), control2: CGPoint(x: 6.6, y: 5.6))
-                p.addLine(to: CGPoint(x: 13, y: 7.6))
-                p.addLine(to: CGPoint(x: 14.4, y: 10.6))
-            }.stroke(color, style: s)
-            Path { p in
-                p.move(to: CGPoint(x: 9.4, y: 5.6))
-                p.addLine(to: CGPoint(x: 9.4, y: 2.8))
-            }.stroke(color, style: s)
-            Path { p in
-                p.move(to: CGPoint(x: 6, y: 2.8))
-                p.addLine(to: CGPoint(x: 12.4, y: 1.6))
-            }.stroke(color, style: s)
-            Circle().fill(color.opacity(0.85)).frame(width: 4.2, height: 4.2)
-                .offset(x: 4.2, y: -5.4)
-        }
-        .frame(width: 20, height: 20)
+    case "HELMET": // 揭面盔剪影（用户指定图标，轮廓提取自参考图）
+        HelmetShape().stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            .frame(width: 20, height: 20)
     case "RESTRICTION": // 限行/禁摩：禁行圈
         ZStack {
             Circle().stroke(color, style: s)
@@ -102,18 +81,13 @@ func poiTypeIconView(key: String, color: Color) -> some View {
             Circle().fill(color).frame(width: 2.4, height: 2.4)
         }
         .frame(width: 20, height: 20)
-    case "CUSTOM": // 自定义：定位图钉+感叹号
-        ZStack {
-            PinShape().stroke(color, style: s)
-            Circle().stroke(color, style: s).frame(width: 6.6, height: 6.6)
-            Path { p in
-                p.move(to: CGPoint(x: 10, y: 4.6))
-                p.addLine(to: CGPoint(x: 10, y: 7.2))
-            }.stroke(color, style: s)
-            Circle().fill(color).frame(width: 1.7, height: 1.7)
-                .offset(x: 0, y: 2.6)
-        }
-        .frame(width: 20, height: 20)
+    case "CUSTOM": // 自定义：直接显示文字
+        Text("自定义")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .fixedSize()
     default:
         EmptyView()
     }
@@ -130,31 +104,106 @@ private struct ArcShape: Shape {
     }
 }
 
-/// 压线虚线（横线）
-private struct DashedLine: Shape {
+/// 揭面盔剪影：外轮廓 + 面罩弧线（用户指定图标）
+private struct HelmetShape: Shape {
     func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
         var p = Path()
-        p.move(to: CGPoint(x: rect.minX + 1, y: rect.midY))
-        p.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.midY))
+        let outer: [(CGFloat, CGFloat)] = [
+            (0.7380, 0.4860), (0.7380, 0.5000), (0.7380,
+            0.5140), (0.7400, 0.5300), (0.7400, 0.5440),
+            (0.7400, 0.5600), (0.7400, 0.5780), (0.7380,
+            0.5940), (0.6880, 0.5820), (0.7080, 0.6120),
+            (0.6320, 0.5680), (0.6480, 0.5960), (0.6280,
+            0.5900), (0.7080, 0.7080), (0.5800, 0.5540),
+            (0.5700, 0.5480), (0.5780, 0.5760), (0.5560,
+            0.5400), (0.6040, 0.7020), (0.5540, 0.5660),
+            (0.5680, 0.6820), (0.5540, 0.6740), (0.5400,
+            0.6740), (0.5280, 0.6720), (0.5140, 0.6700),
+            (0.5280, 0.5200), (0.5200, 0.5420), (0.4760,
+            0.6640), (0.5220, 0.5160), (0.4500, 0.6600),
+            (0.4360, 0.6560), (0.5040, 0.5300), (0.4060,
+            0.6480), (0.3920, 0.6440), (0.3760, 0.6400),
+            (0.5100, 0.5060), (0.4900, 0.5180), (0.3220,
+            0.6180), (0.3040, 0.6080), (0.2860, 0.5960),
+            (0.2700, 0.5820), (0.2640, 0.5640), (0.2680,
+            0.5420), (0.2700, 0.5240), (0.2640, 0.5040),
+            (0.2600, 0.4860), (0.2620, 0.4660), (0.2640,
+            0.4480), (0.2680, 0.4300), (0.2700, 0.4100),
+            (0.2640, 0.3880), (0.2640, 0.3660), (0.4320,
+            0.4320), (0.3080, 0.3440), (0.4320, 0.4120),
+            (0.4360, 0.4040), (0.3480, 0.3080), (0.4620,
+            0.4060), (0.3800, 0.2880), (0.4760, 0.4000),
+            (0.4720, 0.3780), (0.4300, 0.2720), (0.4460,
+            0.2700), (0.4640, 0.2700), (0.4800, 0.2700),
+            (0.4960, 0.2700), (0.5120, 0.2720), (0.5300,
+            0.3760), (0.5380, 0.3780), (0.5560, 0.2800),
+            (0.5700, 0.2820), (0.5600, 0.3820), (0.5680,
+            0.3820), (0.6100, 0.2980), (0.5840, 0.3840),
+            (0.5920, 0.3860), (0.6020, 0.3860), (0.6560,
+            0.3320), (0.6220, 0.3880), (0.6360, 0.3880),
+            (0.6820, 0.3620), (0.6660, 0.3900), (0.6880,
+            0.3900), (0.6740, 0.4120), (0.7000, 0.4120),
+            (0.7260, 0.4160), (0.7300, 0.4300), (0.7340,
+            0.4440), (0.7340, 0.4580), (0.7360, 0.4720),
+        ]
+        p.move(to: CGPoint(x: outer[0].0 * w, y: outer[0].1 * h))
+        for pt in outer.dropFirst() {
+            p.addLine(to: CGPoint(x: pt.0 * w, y: pt.1 * h))
+        }
+        p.closeSubpath()
+        let visor: [(CGFloat, CGFloat)] = [
+            (0.5020, 0.5260), (0.3900, 0.6460), (0.3740,
+            0.6420), (0.3580, 0.6360), (0.3400, 0.6280),
+            (0.3220, 0.6200), (0.3040, 0.6100), (0.2860,
+            0.5980), (0.2680, 0.5840), (0.4780, 0.5040),
+            (0.2640, 0.5460), (0.2680, 0.5260), (0.2620,
+            0.5080), (0.2580, 0.4880), (0.2580, 0.4700),
+            (0.4560, 0.4780), (0.2660, 0.4320), (0.4460,
+            0.4640), (0.4420, 0.4560), (0.2600, 0.3680),
+            (0.2760, 0.3520), (0.3040, 0.3460), (0.3160,
+            0.3320), (0.4520, 0.4220), (0.4400, 0.4000),
+            (0.3600, 0.2980), (0.4640, 0.4020), (0.3900,
+            0.2800), (0.4080, 0.2740), (0.4860, 0.3960),
+            (0.4420, 0.2680), (0.4600, 0.2680), (0.5040,
+            0.3760), (0.4920, 0.2680), (0.5200, 0.3780),
+            (0.5240, 0.2700), (0.5400, 0.2720), (0.5540,
+            0.2760), (0.5680, 0.2800), (0.5820, 0.2840),
+            (0.5960, 0.2900), (0.6100, 0.2960), (0.6220,
+            0.3020), (0.6340, 0.3100), (0.6460, 0.3180),
+            (0.5960, 0.4060), (0.6040, 0.4080), (0.6760,
+            0.3500), (0.6840, 0.3600), (0.6400, 0.4100),
+            (0.6860, 0.3920), (0.6800, 0.4100), (0.7080,
+            0.4100), (0.7300, 0.4160), (0.7340, 0.4300),
+            (0.7360, 0.4460), (0.7380, 0.4600), (0.7380,
+            0.4740), (0.7400, 0.4900), (0.7400, 0.5040),
+            (0.7420, 0.5180), (0.7420, 0.5340), (0.7420,
+            0.5480), (0.7420, 0.5660), (0.7420, 0.5820),
+            (0.7340, 0.5960), (0.6840, 0.5840), (0.6520,
+            0.5760), (0.7360, 0.6600), (0.6120, 0.5660),
+            (0.7180, 0.6960), (0.7060, 0.7120), (0.5920,
+            0.5780), (0.5820, 0.5760), (0.5720, 0.5720),
+            (0.6220, 0.7120), (0.5560, 0.5640), (0.5820,
+            0.6920), (0.5660, 0.6840), (0.5380, 0.5520),
+            (0.5380, 0.6760), (0.5260, 0.6740), (0.5260,
+            0.5440), (0.5220, 0.5420), (0.4860, 0.6700),
+            (0.5220, 0.5180), (0.4600, 0.6640), (0.4460,
+            0.6620), (0.4340, 0.6580), (0.4200, 0.6560),
+        ]
+        p.move(to: CGPoint(x: visor[0].0 * w, y: visor[0].1 * h))
+        for pt in visor.dropFirst() {
+            p.addLine(to: CGPoint(x: pt.0 * w, y: pt.1 * h))
+        }
         return p
     }
 }
 
-/// 自定义图钉
-private struct PinShape: Shape {
+private struct DashedLine: Shape {
+    /// 压线虚线（横线）
     func path(in rect: CGRect) -> Path {
         var p = Path()
-        let w = rect.width, h = rect.height
-        p.move(to: CGPoint(x: w * 0.5, y: h * 0.04))
-        p.addCurve(to: CGPoint(x: w * 0.14, y: h * 0.42),
-                   control1: CGPoint(x: w * 0.24, y: h * 0.04), control2: CGPoint(x: w * 0.14, y: h * 0.2))
-        p.addCurve(to: CGPoint(x: w * 0.5, y: h * 0.98),
-                   control1: CGPoint(x: w * 0.14, y: h * 0.58), control2: CGPoint(x: w * 0.32, y: h * 0.82))
-        p.addCurve(to: CGPoint(x: w * 0.86, y: h * 0.42),
-                   control1: CGPoint(x: w * 0.68, y: h * 0.82), control2: CGPoint(x: w * 0.86, y: h * 0.58))
-        p.addCurve(to: CGPoint(x: w * 0.5, y: h * 0.04),
-                   control1: CGPoint(x: w * 0.86, y: h * 0.2), control2: CGPoint(x: w * 0.76, y: h * 0.04))
-        p.closeSubpath()
+        p.move(to: CGPoint(x: rect.minX + 1, y: rect.midY))
+        p.addLine(to: CGPoint(x: rect.maxX - 1, y: rect.midY))
         return p
     }
 }

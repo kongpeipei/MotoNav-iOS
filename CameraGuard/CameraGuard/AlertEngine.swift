@@ -467,10 +467,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastIdleEvaluate = Date.distantPast
     private var wasIdle = false
 
+    /// v1.29 速度门控休眠：休眠中不预警不播报（最低功耗），只低速检测速度
+    @Published private(set) var hibernating = false
+    /// 唤醒阈值：速度 > 50km/h 唤醒进入监听
+    private let wakeSpeed: Double = 50.0 / 3.6
+    /// 休眠阈值：速度 < 10km/h（10码）进入休眠
+    private let sleepSpeed: Double = 10.0 / 3.6
+
     private func process(_ loc: CLLocation) {
         location = loc
         let speed = loc.speed >= 0 ? loc.speed : 0
         speedKmh = speed * 3.6
+        applyHibernationGate(speed: speed)
         tuneLocationAccuracy(speedMetersPerSecond: speed)
         // v1.20 静止省电：位置基本不动时每 12 秒才重新评估一次点位；
         // 首次进入静止仍立即评估（避免停在点位内漏播），移动时恢复逐次评估。
@@ -484,11 +492,42 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         evaluateNearest()
     }
 
+    /// v1.29 速度门控：>50km/h 唤醒监听；<10km/h 进入休眠省电。
+    /// 中间速度保持当前状态，避免在阈值附近来回抖动。
+    private func applyHibernationGate(speed: Double) {
+        if hibernating {
+            guard speed > wakeSpeed else { return }
+            hibernating = false
+            statusText = "检测到高速行驶 · 已唤醒监听"
+            updateLiveActivity() // 立即恢复灵动岛巡航态（去掉"休眠中"）
+        } else {
+            guard speed < sleepSpeed else { return }
+            hibernating = true
+            statusText = "速度低于10码 · 进入休眠省电"
+            // 强制结束预警态，休眠不打扰
+            if floatWarning || activeWarningId != nil {
+                floatWarning = false
+                activeWarningId = nil
+                announced.removeAll()
+            }
+            updateLiveActivity()
+        }
+    }
+
     /// v1.4/v1.20 功耗优化：只有真正在移动时才需要高精度高频定位。
     /// 静止（<0.5 m/s）→ 10 米精度 + 60 米过滤（低频唤醒，省电）；
     /// 低速（3 m/s 以下）→ 10 米精度 + 30 米过滤；高速 → Best + 10 米。
     /// 进入/退出阈值不同（3 m/s 进低速、5 m/s 回高速），避免在阈值附近来回抖动。
+    /// v1.29：休眠态强制最低功耗（10 米精度 + 60 米过滤）。
     private func tuneLocationAccuracy(speedMetersPerSecond speed: Double) {
+        if hibernating {
+            if highAccuracyMode || lm.distanceFilter != 60 {
+                highAccuracyMode = false
+                lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+                lm.distanceFilter = 60
+            }
+            return
+        }
         if speed < 0.5 {
             if highAccuracyMode || lm.distanceFilter != 60 {
                 highAccuracyMode = false
@@ -514,6 +553,14 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 新增 / 删除 / 导入点位后调用即可立即刷新，无需等下一次定位。
     private func evaluateNearest() {
         guard let loc = location else { return }
+        // v1.29 休眠态：不预警不播报，仅刷新最近距离供灵动岛显示
+        if hibernating {
+            if let (best, bestD) = findNearest(relativeTo: loc) {
+                nearest = best
+                nearestDistance = bestD
+            }
+            return
+        }
         let speed = loc.speed >= 0 ? loc.speed : 0
         let effectiveWarn = warnDistance * adaptiveFactor(forSpeed: speed)
 
@@ -631,7 +678,17 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 当前灵动岛内容状态：预警态（红色+距离）或巡航态
     /// v1.25：巡航态右侧也显示实时最近距离（绿色），并与 app 内提示卡点位信息同步
     /// v1.28：按最近点位类型下发中间图标 key（icon）
+    /// v1.29：休眠态显示「休眠中」巡航文案
     private func makeActivityState() -> CameraGuardActivityAttributes.ContentState {
+        if hibernating {
+            return CameraGuardActivityAttributes.ContentState(
+                phase: "cruising",
+                title: "电子眼卫士 · 休眠中",
+                detail: "速度低于10码 · 恢复行驶自动监听",
+                distanceM: safeMeters(nearestDistance),
+                icon: ""
+            )
+        }
         if floatWarning, let n = nearest, nearestDistance.isFinite {
             return CameraGuardActivityAttributes.ContentState(
                 phase: "warning",
