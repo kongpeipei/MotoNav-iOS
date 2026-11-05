@@ -126,14 +126,10 @@ struct PoiEditorView: View {
                 )
             }
             .alert("恢复全部内置点位", isPresented: $showRestoreBuiltinConfirm) {
-                Alert(
-                    title: Text("恢复全部内置点位"),
-                    message: Text("将清空所有对内置点位的删除、改名、半径与开关修改，恢复到出厂默认。"),
-                    primaryButton: .destructive(Text("恢复")) {
-                        engine.restoreAllBuiltinPois()
-                    },
-                    secondaryButton: .cancel(Text("取消"))
-                )
+                Button("恢复", role: .destructive) { engine.restoreAllBuiltinPois() }
+                Button("取消", role: .cancel) { }
+            } message: {
+                Text("将清空所有对内置点位的删除、改名、半径与开关修改，恢复到出厂默认。")
             }
         }
     }
