@@ -6,13 +6,14 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject private var engine: AlertEngine
 
-    private let distanceOptions: [Double] = [300, 500, 800, 1000]
+    // v1.33：基础播报距离选项新增 1.5km/2km
+    private let distanceOptions: [Double] = [300, 500, 800, 1000, 1500, 2000]
 
     /// v1.9：用 NavigationStack 路径管理页面跳转
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.32/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.33/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -336,12 +337,12 @@ struct ContentView: View {
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("基础播报距离：\(Int(engine.warnDistance)) 米")
+                Text("基础播报距离：\(distanceText(engine.warnDistance))")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Picker("播报距离", selection: $engine.warnDistance) {
                     ForEach(distanceOptions, id: \.self) { d in
-                        Text("\(Int(d))m").tag(d)
+                        Text(d >= 1000 ? String(format: "%gkm", d / 1000) : "\(Int(d))m").tag(d)
                     }
                 }
                 .pickerStyle(.segmented)

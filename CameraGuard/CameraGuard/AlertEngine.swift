@@ -184,7 +184,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.enabledTypes = Set(PoiType.allCases)
         }
 
-        self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 500
+        self.warnDistance = defaults.object(forKey: "warnDistance") as? Double ?? 800 // v1.33 默认 800 米
         self.hapticDuration = defaults.object(forKey: "hapticDuration") as? Double ?? 0.4
         self.hapticIntensity = defaults.object(forKey: "hapticIntensity") as? Double ?? 0.8
         self.hapticLastDuration = defaults.object(forKey: "hapticLastDuration") as? Double ?? 1.0
