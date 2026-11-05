@@ -29,9 +29,16 @@ struct CameraGuardActivityWidget: Widget {
                         .foregroundStyle(warning ? .red : .green)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "--")
-                        .font(.headline.monospacedDigit())
-                        .foregroundStyle(warning ? .red : .green)
+                    // v1.27：无有效距离时不再显示"--"，改显 scope 图标
+                    if context.state.distanceM > 0 {
+                        Text("\(context.state.distanceM)m")
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(warning ? .red : .green)
+                    } else {
+                        Image(systemName: "scope")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 2) {
@@ -47,9 +54,16 @@ struct CameraGuardActivityWidget: Widget {
                 Image(systemName: warning ? "exclamationmark.triangle.fill" : "scope")
                     .foregroundStyle(warning ? .red : .green)
             } compactTrailing: {
-                Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "--")
-                    .font(.footnote.monospacedDigit())
-                    .foregroundStyle(warning ? .red : .green)
+                // v1.27：无有效距离时不再显示"--"，改显 scope 图标
+                if context.state.distanceM > 0 {
+                    Text("\(context.state.distanceM)m")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(warning ? .red : .green)
+                } else {
+                    Image(systemName: "scope")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             } minimal: {
                 Image(systemName: warning ? "exclamationmark.triangle.fill" : "scope")
                     .foregroundStyle(warning ? .red : .green)
@@ -77,9 +91,16 @@ struct LiveActivityCard: View {
                     .foregroundStyle(context.state.phase == "warning" ? .red : .secondary)
             }
             Spacer()
-            Text(context.state.distanceM > 0 ? "\(context.state.distanceM) 米" : "--")
-                .font(.title3.bold().monospacedDigit())
-                .foregroundStyle(context.state.phase == "warning" ? .red : .green)
+            // v1.27：无有效距离时不再显示"--"，改显 scope 图标
+            if context.state.distanceM > 0 {
+                Text("\(context.state.distanceM) 米")
+                    .font(.title3.bold().monospacedDigit())
+                    .foregroundStyle(context.state.phase == "warning" ? .red : .green)
+            } else {
+                Image(systemName: "scope")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(16)
         .background(Color(.secondarySystemBackground),

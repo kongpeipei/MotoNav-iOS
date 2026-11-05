@@ -702,3 +702,22 @@ App 启动瞬间定位尚未更新距离时走巡航分支 → `Int(1.8e308)` �
 - 新增 safeMeters(_:)：isFinite + 0...100000 钳制，异常值按 0；
 - makeActivityState 三处 Int(nearestDistance) 全部改 safeMeters；
 - 其余 Int() 转换核查：warnDistance 来自有限 Picker 选项，有界安全，无需改。
+
+---
+
+# 第二十一轮（v1.27 · 灵动岛右侧无"--" + 生命周期文案）
+
+版本 1.26 → 1.27（构建号 27 → 28）。
+
+## 改动
+
+1. Widget 三处（展开态 trailing / compactTrailing / 锁屏卡右侧）不再显示 "--"：
+   有有效距离（distanceM>0）显示数字，无距离时改显灰色 scope 图标（表示巡航定位中）。
+2. 设置区灵动岛说明补充：系统数小时后自动清除；长按可立即移除。
+
+## 关于"上滑清除 App 后同步清除灵动岛"
+
+iOS 硬限制：上滑清除是系统 SIGKILL 终止进程，被杀瞬间没有任何 App 代码能执行
+（无 applicationWillTerminate 回调），因此"杀瞬间结束灵动岛"无 API 可实现，
+高德/百度等所有导航 App 行为一致。可用兜底：长按灵动岛立即移除（秒级）、
+系统数小时后自动清除、重新打开 App 立即自动清理（已有 cleanupStaleLiveActivities）。

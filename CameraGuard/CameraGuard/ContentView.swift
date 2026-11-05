@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.26/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.27/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -412,8 +412,8 @@ struct ContentView: View {
                             .font(.subheadline)
                     }
                 }
-                // v1.25：灵动岛生命周期说明（不清除一直显示 / 清除后重开自动清理）
-                Text("灵动岛由系统管理：不清除后台可一直显示；上滑清除 App 后系统仍会短暂保留，重新打开自动清理，也可长按灵动岛立即移除")
+                // v1.27：灵动岛生命周期说明（不清除一直显示 / 清除后重开自动清理 / 长按即时移除）
+                Text("灵动岛由系统管理：不清除后台可一直显示；上滑清除 App 后系统仍会保留并数小时后自动清除，重新打开 App 立即自动清理，也可长按灵动岛立即移除")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
