@@ -235,7 +235,10 @@ struct ContentView: View {
     }
 
     var body: some View {
-        bodyCore
+        // v2.47 修复：body 链过长（4×onChange+手势+5×modifier+sheet）导致 Xcode 16.1 编译器
+        // type-check 超时 —— AnyView 显式类型化整条链，跳过深层链式推断
+        AnyView(
+            bodyCore
         // v2.25 我的位置移动时，黑线起点跟着更新（线始终连着当前定位点）
         // 顺带兜底：搜索时如果定位还没出来（nil），定位一有值就补上黑线起点
         .onChange(of: model.currentLocation?.latitude ?? 0) { _, _ in
@@ -389,6 +392,7 @@ struct ContentView: View {
         // v2.12 外观三段式：自动跟随系统 / 强制浅色 / 强制深色
         // 放在根视图上，sheet、设置页、地图底图（MapView 读同一个 colorScheme）一起生效
         .preferredColorScheme((AppearanceMode(rawValue: appearanceMode) ?? .auto).colorScheme)
+        )
     }
 
 
@@ -1461,7 +1465,7 @@ struct ContentView: View {
     /// 长按/轻点出来的卡（地点卡 / 提示点卡）——互斥，只出一张。
     /// v2.16 抽成独立视图，好让「沉浸态」也能单独把这张卡亮出来而不带其它 UI。
     @ViewBuilder private var poiCardStack: some View {
- else if let tp = tapPlace {
+        if let tp = tapPlace {
             // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
             DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                            deleteLabel: "关闭",
@@ -3013,7 +3017,7 @@ struct ContentView: View {
     }
 
 
-    private var bottomLayerGroup: some View {
+    @ViewBuilder private var bottomLayerGroup: some View {
         // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
         if !model.navigating && model.waypointCandidate != nil {
             AnyView(waypointCandidateCard)
