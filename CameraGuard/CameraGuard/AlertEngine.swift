@@ -634,12 +634,12 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if floatWarning, let n = nearest, nearestDistance.isFinite {
             return CameraGuardActivityAttributes.ContentState(
                 phase: "warning",
-                title: "前方 \(Int(nearestDistance)) 米 · \(n.type.label)",
+                title: "前方 \(safeMeters(nearestDistance)) 米 · \(n.type.label)",
                 detail: "\(n.name) · 请减速通过",
-                distanceM: Int(nearestDistance)
+                distanceM: safeMeters(nearestDistance)
             )
         }
-        let d = nearestDistance.isFinite ? Int(nearestDistance) : 0
+        let d = safeMeters(nearestDistance)
         let detail: String
         if let n = nearest, nearestDistance.isFinite {
             detail = "\(n.type.label) · \(n.name)"
@@ -652,6 +652,15 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             detail: detail,
             distanceM: d
         )
+    }
+
+    /// v1.26 修复启动崩溃：Double→Int 转换陷阱。
+    /// nearestDistance 初始为 .greatestFiniteMagnitude（1.8e308，isFinite 仍为 true），
+    /// Int(1.8e308) 会触发 Swift "Double cannot be converted to Int" 运行时 trap（SIGTRAP）。
+    /// 钳制到 0...100000，异常值统一按 0 处理。
+    private func safeMeters(_ d: Double) -> Int {
+        guard d.isFinite, d >= 0, d <= 100_000 else { return 0 }
+        return Int(d)
     }
 
     // MARK: - v1.24/v1.25 灵动岛生命周期管理

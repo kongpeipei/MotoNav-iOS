@@ -681,3 +681,24 @@ v1.17 已修）。但 v1.21/v1.22 加上渲染层去重后用户实测**仍感�
 - 删除 v1.24 的"后台 3 分钟超时自动结束"逻辑（违背用户预期）；
 - 保留：回前台若活动被系统清理则自动补回；冷启动清理残留（上滑清除后重开即清）；
 - 设置区文案同步更新。
+
+---
+
+# 第二十轮（v1.26 · 启动崩溃根治）
+
+版本 1.25 → 1.26（构建号 26 → 27）。用户上传 .ips 崩溃日志：
+iPhone OS 26.6.1，CameraGuard 1.25/build26，EXC_BREAKPOINT/SIGTRAP，主线程，
+栈：start() → begin() → startLiveActivity() → makeActivityState() +1980。
+
+## 根因（必现，不是偶发）
+
+v1.25 把巡航态 distanceM 从固定 0 改为实时距离 `nearestDistance.isFinite ? Int(nearestDistance) : 0`，
+但 nearestDistance 的初始/无点哨兵值是 `.greatestFiniteMagnitude`（1.8e308，isFinite 为 true）。
+App 启动瞬间定位尚未更新距离时走巡航分支 → `Int(1.8e308)` 触发 Swift
+"Double cannot be converted to Int" 运行时 trap（SIGTRAP）。v1.24 巡航 distanceM=0 所以不崩。
+
+## 修复
+
+- 新增 safeMeters(_:)：isFinite + 0...100000 钳制，异常值按 0；
+- makeActivityState 三处 Int(nearestDistance) 全部改 safeMeters；
+- 其余 Int() 转换核查：warnDistance 来自有限 Picker 选项，有界安全，无需改。
