@@ -654,31 +654,19 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         )
     }
 
-    // MARK: - v1.24 灵动岛生命周期管理（后台超时自动结束 / 回前台恢复 / 启动清理）
+    // MARK: - v1.24/v1.25 灵动岛生命周期管理
 
-    /// 后台超时任务：进后台超过该时长未回前台则结束灵动岛
-    private var backgroundTimeoutTask: Task<Void, Never>?
-
-    /// 由 App 的 scenePhase 驱动：background → 计时结束后灵动岛；active → 恢复
+    /// 由 App 的 scenePhase 驱动。
+    /// v1.25（用户澄清）：不清除后台时灵动岛应一直显示，不做超时自动结束；
+    /// 上滑清除 App 是系统级进程终止（iOS 无"被杀瞬间"回调），无法在那一刻结束灵动岛，
+    /// 由冷启动清理（cleanupStaleLiveActivities）兜底。
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            guard isMonitoring, liveActivityEnabled, liveActivity != nil else { return }
-            backgroundTimeoutTask?.cancel()
-            backgroundTimeoutTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 180 * 1_000_000_000) // 3 分钟
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self else { return }
-                    if self.isMonitoring {
-                        self.endLiveActivity()
-                    }
-                }
-            }
+            // 保持灵动岛持续显示（定位 App 后台长期存活，状态实时更新）
+            break
         case .active:
-            backgroundTimeoutTask?.cancel()
-            backgroundTimeoutTask = nil
-            // 若监听中且开关开、活动已被自动结束，则恢复灵动岛
+            // 若活动被系统清理（极少见），监听中且开关开则自动补回
             if isMonitoring, liveActivityEnabled, liveActivity == nil {
                 startLiveActivity()
             }
