@@ -365,8 +365,7 @@ struct ContentView: View {
             if phase == .active {
                 model.checkClipboard()
             } else if phase == .background {
-                // v1.92 进后台才做瓦片缓存清理（IO 放到后台，前台滚动地图不卡）
-                AmapTileRenderer.trimDiskNow()
+                // v2.31 底图已换 MapKit 原生，不再需要手动瓦片缓存清理
             }
         }
         // 导航中保持屏幕常亮（骑行看导航不被锁屏；退出导航恢复）
@@ -978,7 +977,7 @@ struct ContentView: View {
                 Label("按速度自动切换视野", systemImage: "speedometer")
             }
 
-            // v2.29 骑行省电地图（降瓦片层级与并发，省流量与电量）
+            // v2.29 骑行省电地图（v2.31 底图换 MapKit 原生后保留开关兼容历史设置）
             Toggle(isOn: Binding(
                 get: { model.ridingPowerSaveMap },
                 set: { model.ridingPowerSaveMap = $0 }

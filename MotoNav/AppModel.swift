@@ -3783,11 +3783,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ///
     /// 降低瓦片层级与并发请求数，省流量与 GPU。
     /// 骑行时手机在导航、没法插充电，这一档比手机导航更该有。
+    /// v2.31 底图换 MapKit 原生后，此开关不再影响瓦片渲染（保留字段兼容历史设置与 UI）
     @Published var ridingPowerSaveMap: Bool = UserDefaults.standard.object(forKey: "ridingPowerSaveMap") as? Bool ?? false {
         didSet {
             UserDefaults.standard.set(ridingPowerSaveMap, forKey: "ridingPowerSaveMap")
-            // 瓦片渲染器是 static 的，需要手动同步
-            AmapTileRenderer.setPowerSaveMap(ridingPowerSaveMap)
         }
     }
 

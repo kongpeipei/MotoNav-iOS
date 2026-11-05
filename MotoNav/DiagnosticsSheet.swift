@@ -54,8 +54,6 @@ struct DiagnosticsSheet: View {
                 // ── 内存与耗电 ──────────────────────────────────
                 Section {
                     row("内存占用", formatBytes(memoryUsage()))
-                    row("瓦片缓存", formatBytes(AmapTileRenderer.diskCacheSize()))
-                    row("瓦片命中/未命中", "\(AmapTileRenderer.hitCount) / \(AmapTileRenderer.missCount)")
                     row("电量", String(format: "%.0f%%", (batteryLevel() * 100)))
                     row("耗电速率", drainPerHour > 0.5
                         ? String(format: "%.1f %%/小时", drainPerHour)
