@@ -853,8 +853,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// v1.8 滑杆整秒提示：短促轻震反馈（不改变已设置的时长/强度）
+    /// v1.20 档位切换试震：按当前档位强度反馈（低/中/高可感知差异）
     func hapticTick() {
-        haptics.play(duration: 0.12, intensity: 0.35)
+        haptics.play(duration: 0.15, intensity: hapticIntensity)
     }
 
     /// 后台本地通知（仅 App 不在前台时发，前台已有界面与语音，不重复打扰）
