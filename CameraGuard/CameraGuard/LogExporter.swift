@@ -24,8 +24,8 @@ enum LogExporter {
     static func writeIPS() -> URL? {
         var dict: [String: Any] = [:]
         dict["app_name"] = "CameraGuard"
-        dict["app_version"] = AlertEngine.appVersion
-        dict["build_version"] = AlertEngine.appBuild
+        dict["app_version"] = Self.appVersion
+        dict["build_version"] = Self.appBuild
         dict["bundleID"] = "com.motonav.app.eye"
         dict["os_version"] = "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
         dict["device_model"] = UIDevice.current.model
@@ -46,5 +46,13 @@ enum LogExporter {
         guard let data = ("// 运行日志导出（电子眼卫士 CameraGuard）\n" + text).data(using: .utf8) else { return nil }
         try? data.write(to: url)
         return url
+    }
+
+    // 直接读 Bundle（不走 AlertEngine，避免主 actor 隔离导致的编译错误）
+    private static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+    private static var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 }
