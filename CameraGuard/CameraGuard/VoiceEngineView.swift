@@ -50,7 +50,7 @@ struct VoiceEngineView: View {
                 }
 
                 Section {
-                    DisclosureGroup("高级：填写讯飞凭证（防误操作）") {
+                    DisclosureGroup("高级：讯飞凭证（v1.13 已内置默认，留空即用内置）") {
                         TextField("AppID", text: $engine.xfAppID)
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
@@ -63,7 +63,7 @@ struct VoiceEngineView: View {
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
                     }
-                    Text("未配置或密钥错误时会自动回退系统语音")
+                    Text("已内置默认讯飞语音包（加密存储），可直接使用；未配置或密钥错误时会自动回退系统语音")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

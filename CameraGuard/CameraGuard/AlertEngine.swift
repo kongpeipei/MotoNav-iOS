@@ -182,12 +182,24 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         self.hapticDuration = defaults.object(forKey: "hapticDuration") as? Double ?? 0.4
         self.hapticIntensity = defaults.object(forKey: "hapticIntensity") as? Double ?? 0.8
         self.hapticLastDuration = defaults.object(forKey: "hapticLastDuration") as? Double ?? 1.0
-        // 默认使用离线系统语音；讯飞凭证一律由用户在「语音引擎」页自行填写，源码不内置任何密钥
-        self.ttsProvider = TtsProvider(rawValue: defaults.string(forKey: "ttsProvider") ?? "") ?? .system
-        self.xfAppID = defaults.string(forKey: "xfAppID") ?? ""
-        self.xfAPIKey = defaults.string(forKey: "xfAPIKey") ?? ""
-        self.xfAPISecret = defaults.string(forKey: "xfAPISecret") ?? ""
-        self.xfVcn = defaults.string(forKey: "xfVcn") ?? "xiaoyan"
+        // 默认使用离线系统语音；v1.13 起内置加密讯飞凭证，用户从未设置过引擎时默认使用讯飞
+        let builtin = BuiltinXfyun.decrypt()
+        let savedProvider = defaults.string(forKey: "ttsProvider") ?? ""
+        if !savedProvider.isEmpty {
+            self.ttsProvider = TtsProvider(rawValue: savedProvider) ?? .system
+        } else {
+            self.ttsProvider = builtin == nil ? .system : .xfyun
+        }
+        // 用户显式设置过的凭证优先；未设置时使用内置加密凭证（不明文落盘）
+        let savedAppID = defaults.string(forKey: "xfAppID") ?? ""
+        let savedKey = defaults.string(forKey: "xfAPIKey") ?? ""
+        let savedSecret = defaults.string(forKey: "xfAPISecret") ?? ""
+        self.xfAppID = savedAppID.isEmpty ? (builtin?.appid ?? "") : savedAppID
+        self.xfAPIKey = savedKey.isEmpty ? (builtin?.apiKey ?? "") : savedKey
+        self.xfAPISecret = savedSecret.isEmpty ? (builtin?.apiSecret ?? "") : savedSecret
+        self.xfVcn = defaults.string(forKey: "xfVcn")?.isEmpty == false
+            ? (defaults.string(forKey: "xfVcn") ?? "")
+            : (builtin == nil ? "xiaoyan" : BuiltinXfyun.defaultVcn)
 
         // 加载 Bundle 内置点位：逐元素解码，单条坏数据不会导致整个数组解析失败而全部丢失
         if let url = Bundle.main.url(forResource: "poi", withExtension: "json"),
@@ -235,16 +247,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         )
     }
 
-    /// v1.5：从 UserDefaults 恢复语音包；无任何包但已有 vcn 时补一条同名包
+    /// v1.5：从 UserDefaults 恢复语音包；无任何包但已有 vcn 时补一条同名包。
+    /// v1.13：首次启动（无包无显式 vcn）时补内置默认发音人「讯飞小璇(英文)」。
     private func loadVoicePacks() {
         let defaults = UserDefaults.standard
         if let data = defaults.data(forKey: "voicePacks"),
            let decoded = try? JSONDecoder().decode([VoicePack].self, from: data) {
             voicePacks = decoded
         }
-        let initialVcn = (defaults.string(forKey: "xfVcn") ?? "xiaoyan").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !initialVcn.isEmpty, !voicePacks.contains(where: { $0.vcn == initialVcn }) {
-            voicePacks = [VoicePack(vcn: initialVcn, name: initialVcn)]
+        let savedVcn = (defaults.string(forKey: "xfVcn") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveVcn = savedVcn.isEmpty ? xfVcn : savedVcn
+        if !effectiveVcn.isEmpty, !voicePacks.contains(where: { $0.vcn == effectiveVcn }) {
+            voicePacks = [VoicePack(vcn: effectiveVcn, name: BuiltinXfyun.vcnDisplayName(effectiveVcn))]
         }
     }
 
@@ -788,10 +802,12 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         defaults.set(hapticIntensity, forKey: "hapticIntensity")
         defaults.set(hapticLastDuration, forKey: "hapticLastDuration")
         defaults.set(ttsProvider.rawValue, forKey: "ttsProvider")
-        defaults.set(xfAppID, forKey: "xfAppID")
-        defaults.set(xfAPIKey, forKey: "xfAPIKey")
-        defaults.set(xfAPISecret, forKey: "xfAPISecret")
-        defaults.set(xfVcn, forKey: "xfVcn")
+        // v1.13：凭证等于内置加密值时不清除也不落盘明文（保持走内置解密）；用户改过才存用户值
+        let builtin = BuiltinXfyun.decrypt()
+        if xfAppID == builtin?.appid { defaults.removeObject(forKey: "xfAppID") } else { defaults.set(xfAppID, forKey: "xfAppID") }
+        if xfAPIKey == builtin?.apiKey { defaults.removeObject(forKey: "xfAPIKey") } else { defaults.set(xfAPIKey, forKey: "xfAPIKey") }
+        if xfAPISecret == builtin?.apiSecret { defaults.removeObject(forKey: "xfAPISecret") } else { defaults.set(xfAPISecret, forKey: "xfAPISecret") }
+        if builtin != nil, xfVcn == BuiltinXfyun.defaultVcn { defaults.removeObject(forKey: "xfVcn") } else { defaults.set(xfVcn, forKey: "xfVcn") }
         if let data = try? JSONEncoder().encode(userPois) {
             defaults.set(data, forKey: "userPois")
         }

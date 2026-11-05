@@ -22,6 +22,7 @@
 		CA0000000000000000000013 /* CameraGuardWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000F /* CameraGuardWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CA0000000000000000000014 /* CarPlaySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000011 /* CarPlaySupport.swift */; };
 		CA0000000000000000000015 /* silence.wav in Resources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000012 /* silence.wav */; };
+		CA0000000000000000000016 /* XfyunCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000013 /* XfyunCredentials.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +44,7 @@
 		CB0000000000000000000010 /* ActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityAttributes.swift; sourceTree = "<group>"; };
 		CB0000000000000000000011 /* CarPlaySupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySupport.swift; sourceTree = "<group>"; };
 		CB0000000000000000000012 /* silence.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = silence.wav; sourceTree = "<group>"; };
+		CB0000000000000000000013 /* XfyunCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XfyunCredentials.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,6 +87,7 @@
 				CB000000000000000000000C /* VoiceEngineView.swift */,
 				CB0000000000000000000010 /* ActivityAttributes.swift */,
 				CB0000000000000000000011 /* CarPlaySupport.swift */,
+				CB0000000000000000000013 /* XfyunCredentials.swift */,
 				CB0000000000000000000007 /* Assets.xcassets */,
 				CB0000000000000000000006 /* poi.json */,
 				CB0000000000000000000012 /* silence.wav */,
@@ -235,6 +238,7 @@
 				CA0000000000000000000009 /* XfyunTTS.swift in Sources */,
 				CA0000000000000000000010 /* VoiceEngineView.swift in Sources */,
 				CA0000000000000000000012 /* ActivityAttributes.swift in Sources */,
+				CA0000000000000000000016 /* XfyunCredentials.swift in Sources */,
 				CA0000000000000000000014 /* CarPlaySupport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -303,7 +307,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "CameraGuard/Info.plist";
@@ -311,7 +315,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -326,7 +330,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "CameraGuard/Info.plist";
@@ -334,7 +338,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -347,7 +351,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "WidgetExtension/Info.plist";
@@ -357,7 +361,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -371,7 +375,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "WidgetExtension/Info.plist";
@@ -381,7 +385,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
