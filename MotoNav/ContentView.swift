@@ -133,6 +133,10 @@ struct ContentView: View {
     @State private var statusDismissTask: Task<Void, Never>?
     /// v2.39 I2 导航中切换备选路线（高德式：导航页可换方案）
     @State private var showRouteSwap = false
+    /// v2.48 规划卡实测屏幕框（全屏坐标）：地图路线全览按卡片真实遮挡位置留白，
+    /// 否则路线起终点正好被上下两卡遮住（用户反馈"规划了但看不到地图上的路线"）
+    @State private var planTopCardFrame: CGRect = .zero
+    @State private var planBottomCardFrame: CGRect = .zero
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
@@ -402,6 +406,27 @@ struct ContentView: View {
     }
 
 
+    /// v2.48 规划态地图全览留白：路线 fit 时按上下卡实际高度避让。
+    ///
+    /// 旧版固定 edgePadding 60pt，规划页两张卡（上卡贴顶、下卡锚底）把路线
+    /// 起终点正好盖住 —— 用户"看得到卡片、看不到地图上的路线"。
+    /// 这里用 DraggableFloat 实测的卡高算留白；卡还没测完时用保守估值兜底，
+    /// 测完会由 MapView 的 insets 变化触发一次补 fit。
+    private var planFitInsets: UIEdgeInsets {
+        let h = UIScreen.main.bounds.height
+        // 上卡：取卡片真实顶边到屏幕顶的距离（= 卡底 y），比"6% 屏高 + 估算卡高"更准
+        var top = planTopCardFrame.maxY > 0 ? planTopCardFrame.maxY + 6 : h * 0.06 + 216
+        // 下卡：屏底到卡片顶边的距离
+        var bottom = planBottomCardFrame.minY > 0 ? h - planBottomCardFrame.minY + 8 : 294
+        // 地图可见带至少保留屏高 22%（否则 MapKit 缩得太狠，路线细得看不清）
+        let availMin = h * 0.22
+        if top + bottom > h - availMin {
+            bottom = max(h - availMin - top, 110)
+        }
+        top = min(top, h * 0.46)
+        return UIEdgeInsets(top: top, left: 36, bottom: bottom, right: 36)
+    }
+
     /// 地图全屏层（高德式：地图在上，搜索框下置）
     private var mapLayer: some View {
         MapViewRepresentable(
@@ -411,6 +436,7 @@ struct ContentView: View {
             selectedRouteIdx: model.selectedRouteIdx,
             locateTick: model.locateTick,
             fitTick: model.fitTick,
+            routeFitInsets: planFitInsets,
             heading: model.heading,
             preview: model.searchPreview,
             gasStations: model.gasStations,
@@ -1428,7 +1454,8 @@ struct ContentView: View {
                     // v2.23 上卡固定在屏幕顶部：只能下拉，不能上拉顶出屏幕；
                     // 下次启动位置不记忆，永远回到顶部。
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.06),
-                                   lockX: true, topLocked: true) {
+                                   lockX: true, topLocked: true,
+                                   onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
                     }
                     // v2.23 底部锚定：pos.y 是卡片底边位置，卡片向上生长。
@@ -1440,7 +1467,8 @@ struct ContentView: View {
                     DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
                                    deleteLabel: "删除",
-                                   onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanBottomCard) }
+                                   onSwipeLeft: { closeRoutePlan() },
+                                   onFrameChange: { planBottomCardFrame = $0 }) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
@@ -1864,6 +1892,9 @@ struct ContentView: View {
         model.route = []
         model.routeTurns = []
         model.routeChoices = []
+        // v2.48 清掉规划卡屏幕框测量值：下次规划重新上报，避免用旧框算留白
+        planTopCardFrame = .zero
+        planBottomCardFrame = .zero
     }
 
     /// v2.28 路线规划卡（上）——按高德样式重做
@@ -2037,6 +2068,8 @@ struct ContentView: View {
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
+        // v2.48 高度上限：下卡内容最多占屏高一半，保证规划页始终留有看地图的可见带
+        .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
     }
 
     /// v2.28 路况 / 风险提示条（高德："✦ 实时路况早知道，避开拥堵路段  更多 ›"）

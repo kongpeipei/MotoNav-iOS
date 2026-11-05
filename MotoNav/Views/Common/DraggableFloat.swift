@@ -35,6 +35,9 @@ struct DraggableFloat<Content: View>: View {
     var bottomAnchor: Bool = false
     var deleteLabel: String? = nil
     var onSwipeLeft: (() -> Void)? = nil
+    /// v2.48 卡片屏幕框回调：规划卡把 content 在屏幕坐标系里的真实 rect 回传给地图，
+    /// 路线全览按"卡片实际遮挡到哪"留白（不依赖 6%/3% 屏高比例的假设）。
+    var onFrameChange: ((CGRect) -> Void)? = nil
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -55,6 +58,7 @@ struct DraggableFloat<Content: View>: View {
          bottomAnchor: Bool = false,
          deleteLabel: String? = nil,
          onSwipeLeft: (() -> Void)? = nil,
+         onFrameChange: ((CGRect) -> Void)? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -62,6 +66,7 @@ struct DraggableFloat<Content: View>: View {
         self.bottomAnchor = bottomAnchor
         self.deleteLabel = deleteLabel
         self.onSwipeLeft = onSwipeLeft
+        self.onFrameChange = onFrameChange
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -136,8 +141,16 @@ struct DraggableFloat<Content: View>: View {
                     .background(
                         GeometryReader { cg in
                             Color.clear
-                                .onAppear { contentSize = cg.size }
-                                .onChange(of: cg.size) { _, newSize in contentSize = newSize }
+                                .onAppear {
+                                    contentSize = cg.size
+                                    onFrameChange?(cg.frame(in: .global))
+                                }
+                                // 只在尺寸变化（卡片出现/内容变高）时上报：
+                                // 拖动卡片不触发地图重算，避免拖拽中地图反复重 fit 抖动。
+                                .onChange(of: cg.size) { _, newSize in
+                                    contentSize = newSize
+                                    onFrameChange?(cg.frame(in: .global))
+                                }
                         }
                     )
             }

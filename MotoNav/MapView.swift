@@ -75,6 +75,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     let locateTick: Int
     /// 路线全览请求计数（规划完成 +1，触发地图缩放全览）
     let fitTick: Int
+    /// v2.48 路线全览留白：规划页上下两张卡片（出发点卡/方案卡）会遮住地图，
+    /// 旧版固定 edgePadding(60/60) 导致路线起终点正好落在卡片后面 ——
+    /// 用户看到"规划完成但地图上找不到路线"。改为按卡片实际高度留白。
+    var routeFitInsets: UIEdgeInsets = UIEdgeInsets(top: 60, left: 36, bottom: 60, right: 36)
     /// 手机朝向（度），驱动地图跟随旋转
     let heading: Double
     /// 搜索预览点（绿色高亮）
@@ -244,8 +248,17 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // 路线全览（仅在新规划完成时触发一次，避免定位更新反复拉回；包含全部方案路线）
-        if fitTick != context.coordinator.lastFitTick {
+        //
+        // v2.48：规划页上下卡片（上卡贴顶、下卡锚底）会遮住地图；
+        // 旧版固定 edgePadding 60pt 让路线起终点正好落在卡片后面，用户"看不到地图上的路线"。
+        // 现在：① fit 使用 routeFitInsets（按卡片实际高度计算）
+        //      ② 卡片高度测量完成（insets 变化）后，若仍在规划态则补 fit 一次，
+        //         避免首次规划时卡片还没测完就用旧留白 fit。
+        let planFitChanged = context.coordinator.lastFitInsets != routeFitInsets
+        if fitTick != context.coordinator.lastFitTick
+            || (planFitChanged && !choiceRoutes.isEmpty && !navigating) {
             context.coordinator.lastFitTick = fitTick
+            context.coordinator.lastFitInsets = routeFitInsets
             if let tf = tipFit {
                 // v1.81.1 地点信息卡：地图定位到该点（不画黄圈，卡片沉底展示）
                 context.coordinator.setRegionProgrammatically {
@@ -259,7 +272,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                     let p = MKMapPoint(c)
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
-                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
+                // v2.48 规划全览固定北向上：从导航/巡航切回来时相机可能还斜着，
+                // 斜着看长路线极易误判"地图上没有路线"
+                map.camera.heading = 0
+                map.setVisibleMapRect(rect, edgePadding: routeFitInsets, animated: true)
             }
         }
         // 加油站全览（仅在新请求时触发一次）
@@ -631,7 +647,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 用户手动拖动/旋转地图后暂停跟随（高德式：点定位按钮恢复）
         // v2.34 航向平滑插值：GPS course 在静止/低速时会在 ±几十度内抖动，
         // 直接赋值会导致地图每帧瞬跳旋转。改为每帧最多转 45°；掉头（>120°）直接跟随避免迟滞。
-        if !context.coordinator.userMoved {
+        // v2.48 规划态不跟手机朝向：规划页要看整条路线做选择，
+        // 地图跟着手机转会把路线转出视野、甚至看起来"地图不见了"（高德规划页同款北向上）
+        if !context.coordinator.userMoved && (navigating || cruise) {
             let target = CLLocationDirection(heading)
             var cur = context.coordinator.lastAppliedHeading ?? target
             var d = target - cur
@@ -904,6 +922,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// 定位/全览/预览请求记忆（只响应新请求，避免定位更新反复重置地图）
         var lastLocateTick = 0
         var lastFitTick = 0
+        /// v2.48 上次全览用的留白（卡片高度测量完成后触发一次补 fit）
+        var lastFitInsets: UIEdgeInsets? = nil
         var lastGasTick = 0
         var lastZoomInTick = 0
         /// v1.81 地点查看北向上记忆
