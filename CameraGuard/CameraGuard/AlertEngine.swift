@@ -166,17 +166,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             userPois = decoded
         }
 
-        // v1.5 加载自定义语音包；老用户已有 xfVcn 但没有包时，自动补一个（只补一次）
-        if let data = defaults.data(forKey: "voicePacks"),
-           let decoded = try? JSONDecoder().decode([VoicePack].self, from: data) {
-            voicePacks = decoded
-        }
-        let initialVcn = (defaults.string(forKey: "xfVcn") ?? "xiaoyan").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !initialVcn.isEmpty, !voicePacks.contains(where: { $0.vcn == initialVcn }) {
-            voicePacks = [VoicePack(vcn: initialVcn, name: initialVcn)]
-        }
-
         super.init()
+
+        // v1.5 加载自定义语音包（须在 super.init() 之后读写 @Published 属性）；
+        // 老用户已有 xfVcn 但没有包时，自动补一个（只补一次）
+        loadVoicePacks()
 
         lm.delegate = self
         // v1.4：初始按「行驶中」配置；低速/静止后自动切成低精度低频，减少骑行者电池消耗
@@ -190,6 +184,19 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         invalidatePoiCache()
         rebuildIndex()
         configureAudio()
+    }
+
+    /// v1.5：从 UserDefaults 恢复语音包；无任何包但已有 vcn 时补一条同名包
+    private func loadVoicePacks() {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: "voicePacks"),
+           let decoded = try? JSONDecoder().decode([VoicePack].self, from: data) {
+            voicePacks = decoded
+        }
+        let initialVcn = (defaults.string(forKey: "xfVcn") ?? "xiaoyan").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !initialVcn.isEmpty, !voicePacks.contains(where: { $0.vcn == initialVcn }) {
+            voicePacks = [VoicePack(vcn: initialVcn, name: initialVcn)]
+        }
     }
 
     // MARK: - 索引（优化 D：纬度分桶 + 邻桶扫描）

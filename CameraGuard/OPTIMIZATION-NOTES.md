@@ -221,3 +221,9 @@ CameraGuard/
 
 - 本地无 Xcode/Swift 工具链，未做本地编译；已做括号平衡、符号引用、调用点一致性静态核查。
 - GitHub 托管 macOS runner 当前出现排队被取消（运行器未分配），构建结论以 CI 实际跑通为准。
+
+## 编译修复（v1.7 · build 8 内）
+
+- **根因**：v1.5 把 `voicePacks` 的恢复逻辑放在 `super.init()` 之前，Swift 不允许在 super.init 前访问 `@Published` 属性（`'self' used in property access 'voicePacks' before 'super.init' call`）。该错误自 v1.5 起一直存在，但因 macOS runner 短缺从未真正编译暴露。
+- **修复**：抽出 `loadVoicePacks()` 私有方法，在 `super.init()` 之后调用；读取/补包逻辑不变。
+- **验证**：2026-11-05 08:07 UTC+8 首次拿到真实编译日志，错误仅此一条；修复后重新派发 CI 出包。
