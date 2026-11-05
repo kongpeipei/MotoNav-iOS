@@ -207,6 +207,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastTurnSpoken = -1
     /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
     private var farAnnounced: Set<Int> = []
+    /// v2.43 M1 已播报过"已通过路口"确认的转向序号（每个转向只确认一次）
+    private var turnConfirmSet: Set<Int> = []
+    /// v2.43 M2 已播报过前方拥堵提示（过段后复位，允许下次再报）
+    private var trafficAheadSpoken = false
     /// 所选路线全程距离/用时（导航信息卡：剩余里程与时间按比例估算）
     @Published var routeDistanceM = 0
     @Published var routeDurationS = 0
@@ -1480,6 +1484,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 }
                 if loc.speed > 0 { maxSpeedKph = max(maxSpeedKph, loc.speed * 3.6) }
                 checkRiderRisks(at: coord)
+                // v2.43 M1 转弯后确认 + M2 前方拥堵提示（高德式小提示）
+                checkTurnConfirm(at: coord)
+                checkTrafficAhead(at: coord)
                 // v2.28 导航进度更新放在这里（事件驱动），而不是 body 求值期 ——
                 // 后者会触发 SwiftUI 无限重算循环（"点开始导航就卡死"的根因）。
                 updateNavProgress(at: coord)
@@ -2609,6 +2616,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routeDurationS = c.durationS
         lastTurnSpoken = -1
         farAnnounced.removeAll()
+        turnConfirmSet.removeAll()
+        trafficAheadSpoken = false
         fitTick += 1
         // v1.99 骑行风险 + 路况（切方案时同步刷新）
         riderRisks = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
@@ -2908,6 +2917,48 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ///
     /// 只有禁摩类（motoBlocked）走双段式；隧道/大桥只需预告一次
     /// （它们不是"能不能进"的问题，而是"注意安全"）。
+    /// v2.43 M1 转弯后确认播报（高德式）：刚过转向点 20~200m 内确认一次，
+    /// 骑手戴头盔余光确认"已经走上目标道路"，不重复播报
+    private func checkTurnConfirm(at coord: CLLocationCoordinate2D) {
+        guard navigating, !routeTurns.isEmpty, speechMode != .simple else { return }
+        let traveled = traveledM(route, coord)
+        for (idx, t) in routeTurns.enumerated() where !turnConfirmSet.contains(idx) {
+            let passed = traveled - t.fromStartM
+            if passed >= 20 && passed < 200 {
+                turnConfirmSet.insert(idx)
+                let road = t.roadName.isEmpty ? "" : "，已进入\(t.roadName)"
+                speak("已通过路口\(road)", priority: 2)
+                break
+            }
+        }
+    }
+
+    /// v2.43 M2 前方拥堵提示（高德式）：距拥堵/缓行段起点 40~600m 播报一次，
+    /// 红色折线之外的听觉补全；驶离该段后复位允许下次再报
+    private func checkTrafficAhead(at coord: CLLocationCoordinate2D) {
+        guard navigating, !trafficSpans.isEmpty else { return }
+        if trafficAheadSpoken {
+            // 已报过：驶离最近拥堵段起点 800m 外才复位
+            if let start = trafficSpans.first(where: { $0.level >= 1 })?.points.first,
+               distanceM(coord, start) > 800 {
+                trafficAheadSpoken = false
+            }
+            return
+        }
+        for span in trafficSpans where span.level >= 1 {
+            guard let start = span.points.first else { continue }
+            let d = distanceM(coord, start)
+            guard d > 40 && d < 600 else { continue }
+            trafficAheadSpoken = true
+            let dist = GuidanceEventBuilder.formatDistance(Int(d))
+            let text = span.level >= 2 ? "前方\(dist)拥堵路段，预计缓慢通行"
+                                       : "前方\(dist)缓行路段，注意路况"
+            speak(text, priority: 1)
+            status = "⚠️ \(text)"
+            break
+        }
+    }
+
     private func checkRiderRisks(at coord: CLLocationCoordinate2D) {
         guard navigating, !riderRisks.isEmpty, speechMode != .simple else { return }
         let remain = route.last.map { distanceM(coord, $0) } ?? 0
