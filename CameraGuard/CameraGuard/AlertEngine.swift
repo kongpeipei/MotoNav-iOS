@@ -127,14 +127,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 内置点位生效列表 = 内置 - 已删除，再叠加用户补丁（坐标与类型始终不变）
     var builtinPois: [Poi] {
-        basePois
+        bundledPois
             .filter { !deletedBuiltinIds.contains($0.id) && !deletedBuiltinIds.contains(Self.stableBuiltinId(for: $0)) }
             .map { builtinPatches[$0.id] ?? builtinPatches[Self.stableBuiltinId(for: $0)] ?? $0 }
-    }
-
-    /// v1.11 内置点位基础库：云端更新库（在线更新后持久化）优先，否则回退 Bundle 内置库
-    var basePois: [Poi] {
-        remotePois.isEmpty ? bundledPois : remotePois
     }
 
     /// 全部有效点位 = 内置（含补丁/删除）+ 用户自定义（均过滤 enabled=true）
@@ -163,10 +158,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let lm = CLLocationManager()
     private(set) var bundledPois: [Poi] = []
-    /// v1.11 云端点位库（在线更新结果，持久化到 UserDefaults；为空时回退 Bundle 内置库）
-    private(set) var remotePois: [Poi] = []
-    /// v1.11 在线更新状态文案（点位管理页展示）
-    @Published var remoteUpdateStatus: String = ""
     /// 已播报点位 id（published 供首页显示「已播报」状态，避免播报后仍显示「即将播报」）
     @Published private(set) var announced: Set<String> = []
     /// v1.4 功耗自适应：当前是否处于高精度模式（低速/静止时降精度省电）
@@ -237,12 +228,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         loadBuiltinLedger()
         // v1.9 加载弹窗/灵动岛设置
         loadFloatSettings()
-        // v1.11 恢复云端点位库（在线更新结果持久化）
-        loadRemotePois()
-
-        // v1.18：启动汇总日志（点位/语音包/凭证/引擎状态），供右上角「运行日志」排查
-        RingLog.shared.log("启动", "v\(AlertEngine.appVersion)(\(AlertEngine.appBuild)) 初始化：内置点 \(bundledPois.count)｜云端点 \(remotePois.count)｜语音包 \(voicePacks.count)｜引擎 \(ttsProvider.rawValue)｜vcn=\(xfVcn)｜AppID=\(xfAppID.count)位")
-
         lm.delegate = self
         // v1.4：初始按「行驶中」配置；低速/静止后自动切成低精度低频，减少骑行者电池消耗
         lm.desiredAccuracy = kCLLocationAccuracyBest
@@ -300,13 +285,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let v = defaults.object(forKey: "liveActivityEnabled") as? Bool { liveActivityEnabled = v }
     }
 
-    // MARK: - v1.11 点位在线更新（云端点位库）
-
-    /// 云端点位库地址：仓库 main 分支的 poi.json（随仓库更新即全网同步，零服务器成本）
-    static let remotePointsURL = "https://raw.githubusercontent.com/kongpeipei/MotoNav-iOS/main/CameraGuard/CameraGuard/poi.json"
-
     /// 逐条解析点位数组（坏条目跳过；v1.17 按展示 id 去重，防重复点导致 ForEach 断言）。
-    /// Bundle 内置库与云端更新共用同一解析。
     private static func parsePois(_ raw: [[String: Any]]) -> [Poi] {
         var seen = Set<String>()
         return raw.compactMap { dict -> Poi? in
@@ -320,65 +299,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                        enabled: (dict["enabled"] as? Bool) ?? true)
         }
         .filter { seen.insert($0.id).inserted }
-    }
-
-    /// 恢复上次在线更新保存的云端点位库
-    private func loadRemotePois() {
-        if let data = UserDefaults.standard.data(forKey: "remotePois"),
-           let decoded = try? JSONDecoder().decode([Poi].self, from: data),
-           !decoded.isEmpty {
-            remotePois = decoded
-        }
-    }
-
-    /// 检查并应用云端最新点位库：下载 → 逐条校验 → 持久化 → 重建索引并立即生效
-    func checkRemotePointsUpdate() {
-        remoteUpdateStatus = "正在检查更新…"
-        guard let url = URL(string: Self.remotePointsURL) else {
-            remoteUpdateStatus = "更新地址无效"
-            return
-        }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 20
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        let task = URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
-            Task { @MainActor in
-                guard let self else { return }
-                if let error {
-                    self.remoteUpdateStatus = "检查更新失败：\(error.localizedDescription)"
-                    return
-                }
-                guard let data,
-                      let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-                      !raw.isEmpty else {
-                    self.remoteUpdateStatus = "点位数据为空或格式错误"
-                    return
-                }
-                let decoded = Self.parsePois(raw)
-                guard !decoded.isEmpty else {
-                    self.remoteUpdateStatus = "解析失败，请稍后再试"
-                    RingLog.shared.log("点位", "⚠️ 云端点位解析失败（数据为空或格式错误）")
-                    return
-                }
-                let added = decoded.count - self.remotePois.count
-                self.remotePois = decoded
-                RingLog.shared.log("点位", "云端点位更新成功：\(decoded.count) 个（新增 \(max(added, 0))）")
-                if let d = try? JSONEncoder().encode(decoded) {
-                    UserDefaults.standard.set(d, forKey: "remotePois")
-                }
-                let dateText = Date().formatted(date: .numeric, time: .omitted)
-                var msg = "更新完成：共 \(decoded.count) 个点位（\(dateText)）"
-                if added > 0 { msg += "，新增 \(added) 个" }
-                self.remoteUpdateStatus = msg
-                self.invalidatePoiCache()
-                self.rebuildIndex()
-                // 同步刷新 CarPlay 卡片与灵动岛的点位数
-                CarPlaySupport.pointsCountSnapshot = self.pois.count
-                CarPlaySupport.updateNowPlaying()
-                self.updateLiveActivity()
-            }
-        }
-        task.resume()
     }
 
     // MARK: - 索引（优化 D：纬度分桶 + 邻桶扫描）
@@ -534,7 +454,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             if (error as? CLError)?.code == .denied {
                 statusText = "定位失败：权限被拒绝"
             }
-            RingLog.shared.log("定位", "错误：\(error.localizedDescription)")
         }
     }
 
@@ -734,28 +653,24 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             if !Self.iflytekCredentialLooksValid(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret) {
                 speakSystem(text)
                 ttsFeedback = "讯飞凭证不完整（AppID \(xfAppID.count) 位 / APIKey \(xfAPIKey.count) 位 / Secret \(xfAPISecret.count) 位），已用系统语音"
-                RingLog.shared.log("语音", "凭证不完整，回退系统语音（AppID \(xfAppID.count)/Key \(xfAPIKey.count)/Secret \(xfAPISecret.count)）")
                 return
             }
             let tts = XfyunTTS(appID: xfAppID, apiKey: xfAPIKey, apiSecret: xfAPISecret, vcn: xfVcn)
             guard tts.isConfigured else {
                 speakSystem(text)
                 ttsFeedback = "讯飞未配置，已用系统语音"
-                RingLog.shared.log("语音", "讯飞未配置，回退系统语音")
                 return
             }
             // v1.4：先停掉上一段未播完的讯飞请求，避免两句合成请求叠播、连接与音频资源泄漏
             xfyunTTS?.stop()
             xfyunTTS = tts
             ttsFeedback = "讯飞合成中 · \(voiceDisplayName)"
-            RingLog.shared.log("语音", "讯飞合成「\(text.prefix(20))…」vcn=\(xfVcn)")
             tts.speak(text,
                       onFinish: { [weak self] in self?.xfyunTTS = nil },
                       onNoAudio: { [weak self] reason in
                           DispatchQueue.main.async {
                               self?.ttsFeedback = "讯飞失败，已回退系统语音（\(reason)）"
                               self?.speakSystem(text)
-                              RingLog.shared.log("语音", "⚠️ 讯飞失败已回退系统语音：\(reason)")
                           }
                       })
         }
@@ -934,7 +849,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         deletedBuiltinIds.insert(id)
         builtinPatches.removeValue(forKey: id)
         announced.remove(id)
-        RingLog.shared.log("点位", "删除内置点（id=\(id)），删除台账 \(deletedBuiltinIds.count) 条")
         saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
@@ -949,21 +863,20 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 开关内置点位（通过补丁覆盖 enabled）
     /// v1.18：改用稳定 id（类型+坐标6位）匹配基库，兼容改名后 id 变化
     func toggleBuiltinPoi(_ poi: Poi) {
-        guard let base = basePois.first(where: { Self.stableBuiltinId(for: $0) == Self.stableBuiltinId(for: poi) }),
+        guard let base = bundledPois.first(where: { Self.stableBuiltinId(for: $0) == Self.stableBuiltinId(for: poi) }),
               !deletedBuiltinIds.contains(poi.id),
               !deletedBuiltinIds.contains(Self.stableBuiltinId(for: poi)) else { return }
         var p = builtinPatches[poi.id] ?? builtinPatches[Self.stableBuiltinId(for: poi)] ?? base
         p.enabled.toggle()
         builtinPatches[poi.id] = p
-        RingLog.shared.log("点位", "开关内置点「\(poi.name)」→ \(p.enabled ? "启用" : "停用")")
         saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
 
     /// 修改内置点位：只允许改名称/半径/启用状态，坐标与类型固定不变
-    /// v1.18：按稳定 id 匹配基库，修复改名后 basePois 按新 id 找不到导致修改失效
+    /// v1.18：按稳定 id 匹配基库，修复改名后 id 变化导致修改失效
     func updateBuiltinPoi(_ poi: Poi) {
-        guard let base = basePois.first(where: { Self.stableBuiltinId(for: $0) == Self.stableBuiltinId(for: poi) }),
+        guard let base = bundledPois.first(where: { Self.stableBuiltinId(for: $0) == Self.stableBuiltinId(for: poi) }),
               !deletedBuiltinIds.contains(poi.id),
               !deletedBuiltinIds.contains(Self.stableBuiltinId(for: poi)) else { return }
         var p = poi
@@ -972,7 +885,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         p.longitude = base.longitude
         builtinPatches[poi.id] = p
         builtinPatches.removeValue(forKey: Self.stableBuiltinId(for: poi))
-        RingLog.shared.log("点位", "修改内置点「\(poi.name)」")
         saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
@@ -1038,7 +950,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
         let text = "前方300米，有摩托车闯红灯拍照，请谨慎行驶！"
-        RingLog.shared.log("测试", "点击测试语音（引擎 \(ttsProvider.rawValue)）")
         speak(text, force: true)   // 测试按钮要求立即发声，允许打断当前语音
         vibrate()
         announcements.insert(

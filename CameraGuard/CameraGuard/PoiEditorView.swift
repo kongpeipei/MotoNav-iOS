@@ -39,25 +39,6 @@ struct PoiEditorView: View {
                     Text("操作")
                 }
 
-                // v1.11：在线更新云端点位库（仓库 poi.json，随维护更新全网同步）
-                Section {
-                    Button {
-                        engine.checkRemotePointsUpdate()
-                    } label: {
-                        Label("检查在线更新", systemImage: "arrow.triangle.2.circlepath")
-                            .foregroundStyle(.green)
-                    }
-                    if !engine.remoteUpdateStatus.isEmpty {
-                        Text(engine.remoteUpdateStatus)
-                            .font(.footnote)
-                            .foregroundStyle(engine.remoteUpdateStatus.contains("失败") ? .red : .secondary)
-                    }
-                } header: {
-                    Text("云端点位库")
-                } footer: {
-                    Text("从 GitHub 拉取最新点位（含摩托车抓拍新增点），更新后自动与本地合并生效。")
-                }
-
                 // v1.8：自定义点位置顶，方便修改/查看
                 Section {
                     if engine.userPois.isEmpty {
@@ -90,16 +71,13 @@ struct PoiEditorView: View {
                         }
                     }
                 } header: {
-                    Text("内置点位（显示 \(engine.builtinPois.count) / 共 \(engine.basePois.count) 个）")
+                    Text("内置点位（显示 \(engine.builtinPois.count) / 共 \(engine.bundledPois.count) 个）")
                 } footer: {
                     Text("内置点位可改名称、半径、开关，也可删除；坐标与类型固定。App 升级后可恢复默认。")
                 }
             }
             .navigationTitle("点位管理")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                RingLog.shared.log("页面", "点位管理打开：内置生效 \(engine.builtinPois.count) / 基础 \(engine.basePois.count)，自定义 \(engine.userPois.count)，语音包 \(engine.voicePacks.count)")
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }

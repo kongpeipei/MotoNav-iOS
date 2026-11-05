@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.18/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.19/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -37,22 +37,11 @@ struct ContentView: View {
                 case .voiceEngine:
                     VoiceEngineView()
                         .environmentObject(engine)
-                case .logViewer:
-                    LogViewer()
-                        .environmentObject(engine)
                 }
             }
-            // v1.9：右上角分享按钮（苹果同款分享图标），分享当前版本 IPA 安装包到微信/QQ；
-            // v1.18：左侧新增「运行日志」按钮，用于检测运行问题
+            // v1.9：右上角分享按钮（苹果同款分享图标），分享当前版本 IPA 安装包到微信/QQ
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        navPath.append(CameraGuardRoute.logViewer)
-                    } label: {
-                        Image(systemName: "doc.text.magnifyingglass")
-                    }
-                    .accessibilityLabel("运行日志")
-
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         shareInstallPackage()
                     } label: {
@@ -78,11 +67,10 @@ struct ContentView: View {
         .overlay(alignment: .top) { bannerOverlay }
     }
 
-    /// v1.9 页面路由（用于 NavigationStack path）；v1.18 新增 logViewer
+    /// v1.9 页面路由（用于 NavigationStack path）
     private enum CameraGuardRoute: Hashable {
         case poiEditor
         case voiceEngine
-        case logViewer
     }
 
     // MARK: - v1.9 分享当前版本 IPA

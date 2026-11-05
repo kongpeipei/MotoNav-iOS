@@ -510,3 +510,31 @@ Poi.id 追加名称段后，改过名的点 id 随之变化：toggleBuiltinPoi/u
   bundleID/os_version/device_model/异常项/事件日志，首行注释头），文件名贴近崩溃日志命名规则。
 - LogViewer 分享按钮改为确认弹窗：日志文件(.txt) / 崩溃日志(.ips) 二选一，经系统分享面板发出。
 - AlertEngine 补充 appBuild 静态属性（CFBundleVersion）。
+
+---
+
+# 第十六轮（v1.19 · 按用户要求回退 v1.10 形态：删除云端点位库与运行日志）
+
+版本 1.18 → 1.19（构建号 19 → 20）。
+
+## 用户指令
+
+删除点位管理/语音引擎/运行日志按钮，去掉云端点位库功能，按 v1.10 中的点位管理与语音引擎
+重做并添加到相同位置（高级设置入口）。
+
+## 本轮改动
+
+1. 删除全部运行日志：RingLog.swift / LogViewer.swift / LogExporter.swift 移除，
+   ContentView 右上角恢复为仅分享按钮，route/navigationDestination 删 logViewer；
+   AlertEngine 与各页面的日志埋点全部移除（pbxproj 同步注销）。
+2. 删除云端点位库：remotePois / remoteUpdateStatus / checkRemotePointsUpdate /
+   loadRemotePois / remotePointsURL 全部移除，点位管理页删「云端点位库」section，
+   内置点位回退为 Bundle 内置库（bundledPois），显示「共 N 个」。
+3. 点位管理按 v1.10 形态重做：操作（添加/导入/导出）+ 自定义点位 + 内置点位三段，
+   入口仍在高级设置同位置；语音引擎按 v1.10 形态，仅保留 v1.13 内置凭证说明。
+4. 保留防崩溃底层修复（避免旧问题复现）：
+   - v1.12/1.14 导航入口仍用 Button+navPath（v1.10 的 NavigationLink 在 iOS 17
+     ScrollView 内点击失效，会重新「点不进去」）；
+   - v1.17 Poi.id 含名称段 + parsePois 去重（同坐标真实点位不冲突，防 ForEach 感叹号）；
+   - v1.16 震动串行队列 + AudioServices 回退（防崩溃）；
+   - v1.13/v1.15 内置加密讯飞凭证（默认语音包）。
