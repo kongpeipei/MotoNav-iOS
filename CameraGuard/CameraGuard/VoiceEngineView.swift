@@ -49,23 +49,26 @@ struct VoiceEngineView: View {
                     Text("点左侧圆圈切换到该语音包；名称可直接编辑")
                 }
 
+                // v1.20：凭证输入直接展开（不再折叠），输入后自动生成语音包
                 Section {
-                    DisclosureGroup("高级：讯飞凭证（v1.13 已内置默认，留空即用内置）") {
-                        TextField("AppID", text: $engine.xfAppID)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                        TextField("APIKey", text: $engine.xfAPIKey)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                        SecureField("APISecret", text: $engine.xfAPISecret)
-                        // 输入 vcn 即自动建档（不区分大小写前的空白会被自动去掉）
-                        TextField("发音人 vcn（输入后自动添加语音包）", text: $engine.xfVcn)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                    }
-                    Text("已内置默认讯飞语音包（加密存储），可直接使用；未配置或密钥错误时会自动回退系统语音")
+                    TextField("AppID", text: $engine.xfAppID)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    TextField("APIKey", text: $engine.xfAPIKey)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    SecureField("APISecret", text: $engine.xfAPISecret)
+                    // 输入 vcn 即自动建档（不区分大小写前的空白会被自动去掉）
+                    TextField("发音人 vcn（输入后自动添加语音包）", text: $engine.xfVcn)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                    Text("输入 AppID / APIKey / APISecret / vcn 后自动生成一个语音包，可在上方列表改名、左滑删除")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                } header: {
+                    Text("讯飞凭证（已内置默认语音包，留空即用内置）")
+                } footer: {
+                    Text("已内置默认讯飞语音包（加密存储），可直接使用；未配置或密钥错误时会自动回退系统语音")
                 }
             }
         }

@@ -12,6 +12,7 @@ struct PoiEditorView: View {
     @State private var poiToDelete: Poi?
     @State private var builtinToDelete: Poi?
     @State private var poiToEdit: Poi?
+    @State private var showRestoreBuiltinConfirm = false
     /// 持有导入协调器：UIDocumentPicker 的 delegate 不会被系统强引用，临时对象会被提前释放导致回调丢失
     @State private var importer: ImportCoordinator?
 
@@ -34,6 +35,13 @@ struct PoiEditorView: View {
                         performExport()
                     } label: {
                         Label("导出全部点位为 JSON", systemImage: "square.and.arrow.up")
+                    }
+                    // v1.20 一键恢复：清空删除/改名/半径/开关台账，回到出厂默认
+                    Button {
+                        showRestoreBuiltinConfirm = true
+                    } label: {
+                        Label("恢复全部内置点位", systemImage: "arrow.uturn.backward.circle")
+                            .foregroundStyle(.orange)
                     }
                 } header: {
                     Text("操作")
@@ -110,9 +118,19 @@ struct PoiEditorView: View {
             .alert(item: $builtinToDelete) { p in
                 Alert(
                     title: Text("删除内置点位"),
-                    message: Text("确定要删除内置点位「\(p.name)」吗？App 升级后可恢复默认。"),
+                    message: Text("确定要删除内置点位「\(p.name)」吗？可在「操作 → 恢复全部内置点位」找回。"),
                     primaryButton: .destructive(Text("删除")) {
                         engine.deleteBuiltinPoi(id: p.id)
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            }
+            .alert("恢复全部内置点位", isPresented: $showRestoreBuiltinConfirm) {
+                Alert(
+                    title: Text("恢复全部内置点位"),
+                    message: Text("将清空所有对内置点位的删除、改名、半径与开关修改，恢复到出厂默认。"),
+                    primaryButton: .destructive(Text("恢复")) {
+                        engine.restoreAllBuiltinPois()
                     },
                     secondaryButton: .cancel(Text("取消"))
                 )

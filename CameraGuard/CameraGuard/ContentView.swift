@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.19/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.20/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -487,18 +487,14 @@ struct ContentView: View {
                     .foregroundStyle(.tertiary)
 
                 if engine.hapticDuration > 0 {
-                    HStack(spacing: 10) {
-                        Text("强度")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 32, alignment: .leading)
-                        Slider(value: $engine.hapticIntensity, in: 0...1, step: 0.1)
-                            .tint(.orange)
-                        Text("\(Int(engine.hapticIntensity * 100))%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 40, alignment: .trailing)
+                    // v1.20 强度改为低/中/高三档（映射 0.35/0.65/1.0），切换档位即时震动反馈
+                    Picker("强度", selection: hapticLevelBinding) {
+                        Text("低").tag(0)
+                        Text("中").tag(1)
+                        Text("高").tag(2)
                     }
+                    .pickerStyle(.segmented)
+                    .onChange(of: engine.hapticIntensity) { _, _ in engine.saveSettings() }
                 }
             }
 
@@ -525,7 +521,24 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: engine.warnDistance) { _, _ in engine.saveSettings() }
-        .onChange(of: engine.hapticIntensity) { _, _ in engine.saveSettings() }   // 时长由 setHapticEnabled/updateHapticDuration 内部落盘
+    }
+
+    /// v1.20 震动强度三档映射：低=0.35 / 中=0.65 / 高=1.0，切换时即时震动反馈
+    private var hapticLevelBinding: Binding<Int> {
+        Binding(
+            get: {
+                let v = engine.hapticIntensity
+                return v < 0.5 ? 0 : (v < 0.8 ? 1 : 2)
+            },
+            set: { level in
+                let values = [0.35, 0.65, 1.0]
+                let newValue = values[max(0, min(2, level))]
+                guard newValue != engine.hapticIntensity else { return }
+                engine.hapticIntensity = newValue
+                engine.saveSettings()
+                engine.hapticTick()
+            }
+        )
     }
 
     // MARK: - Helpers

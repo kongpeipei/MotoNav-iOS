@@ -459,18 +459,40 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 核心逻辑（优化 A/B）
 
+    /// v1.20 静止节流时间戳：静止时降低定位处理频率省电
+    private var lastIdleEvaluate = Date.distantPast
+    private var wasIdle = false
+
     private func process(_ loc: CLLocation) {
         location = loc
         let speed = loc.speed >= 0 ? loc.speed : 0
         speedKmh = speed * 3.6
         tuneLocationAccuracy(speedMetersPerSecond: speed)
+        // v1.20 静止省电：位置基本不动时每 12 秒才重新评估一次点位；
+        // 首次进入静止仍立即评估（避免停在点位内漏播），移动时恢复逐次评估。
+        let now = Date()
+        let idle = speed < 0.5
+        if idle {
+            guard now.timeIntervalSince(lastIdleEvaluate) > 12 || !wasIdle else { return }
+        }
+        wasIdle = idle
+        lastIdleEvaluate = now
         evaluateNearest()
     }
 
-    /// v1.4 功耗优化：只有真正在移动时才需要高精度高频定位。
-    /// 低速/等红灯/停车时切到 10 米精度 + 30 米过滤，显著降低 GPS 与后台唤醒耗电；
+    /// v1.4/v1.20 功耗优化：只有真正在移动时才需要高精度高频定位。
+    /// 静止（<0.5 m/s）→ 10 米精度 + 60 米过滤（低频唤醒，省电）；
+    /// 低速（3 m/s 以下）→ 10 米精度 + 30 米过滤；高速 → Best + 10 米。
     /// 进入/退出阈值不同（3 m/s 进低速、5 m/s 回高速），避免在阈值附近来回抖动。
     private func tuneLocationAccuracy(speedMetersPerSecond speed: Double) {
+        if speed < 0.5 {
+            if highAccuracyMode || lm.distanceFilter != 60 {
+                highAccuracyMode = false
+                lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+                lm.distanceFilter = 60
+            }
+            return
+        }
         let shouldHigh = highAccuracyMode ? speed >= 3.0 : speed >= 5.0
         guard shouldHigh != highAccuracyMode else { return }
         highAccuracyMode = shouldHigh
@@ -856,6 +878,15 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 恢复被删除的内置点位（撤销删除）
     func restoreBuiltinPoi(id: String) {
         guard deletedBuiltinIds.remove(id) != nil else { return }
+        saveSettings(rebuildIndex: true)
+        evaluateNearest()
+    }
+
+    /// v1.20 一键恢复全部内置点位：清空删除台账与改名/半径/开关补丁，回到出厂默认
+    func restoreAllBuiltinPois() {
+        deletedBuiltinIds.removeAll()
+        builtinPatches.removeAll()
+        announced.removeAll()
         saveSettings(rebuildIndex: true)
         evaluateNearest()
     }
