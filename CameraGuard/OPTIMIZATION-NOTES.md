@@ -721,3 +721,19 @@ iOS 硬限制：上滑清除是系统 SIGKILL 终止进程，被杀瞬间没有�
 （无 applicationWillTerminate 回调），因此"杀瞬间结束灵动岛"无 API 可实现，
 高德/百度等所有导航 App 行为一致。可用兜底：长按灵动岛立即移除（秒级）、
 系统数小时后自动清除、重新打开 App 立即自动清理（已有 cleanupStaleLiveActivities）。
+
+---
+
+# 第二十二轮（v1.28 · 灵动岛中间抓拍类型图标）
+
+版本 1.27 → 1.28（构建号 28 → 29）。用户确认图标方案（6 类），修改了
+摩托车头盔（整车侧影）与自定义（定位图钉+感叹号），其余 4 类确认。
+
+## 实现
+
+- App 端 ContentState 新增 icon 字段（PoiType.rawValue，"" = 无最近点）；
+  makeActivityState 按最近点位类型下发。
+- Widget 端 ContentState 同步新增 icon；新增 poiTypeIconView（自绘 6 类：
+  红绿灯/速度表/压线/摩托车/禁行圈/图钉，SwiftUI Shape + Path），
+  展开态中间（标题左侧）与锁屏卡 title 前显示，巡航绿/预警红。
+- 两个模块的 ActivityAttributes 字段保持完全一致（ActivityKit 匹配要求）。

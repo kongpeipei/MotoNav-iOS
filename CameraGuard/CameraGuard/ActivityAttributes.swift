@@ -11,6 +11,8 @@ struct CameraGuardActivityAttributes: ActivityAttributes {
         var detail: String
         /// 距最近抓拍点距离（米），巡航态为 0
         var distanceM: Int
+        /// v1.28 抓拍类型图标 key（PoiType.rawValue，"" = 无最近点不显示）
+        var icon: String
     }
     var name: String = "电子眼卫士"
 }
