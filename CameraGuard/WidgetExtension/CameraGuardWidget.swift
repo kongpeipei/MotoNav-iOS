@@ -37,9 +37,10 @@ struct CameraGuardActivityWidget: Widget {
                     VStack(spacing: 2) {
                         Text(context.state.title)
                             .font(.headline)
+                            .foregroundStyle(warning ? .red : .primary) // v1.25 预警全红
                         Text(context.state.detail)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(warning ? .red : .secondary)
                     }
                 }
             } compactLeading: {
@@ -70,9 +71,10 @@ struct LiveActivityCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(context.state.title)
                     .font(.headline)
+                    .foregroundStyle(context.state.phase == "warning" ? .red : .primary) // v1.25 预警全红
                 Text(context.state.detail)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(context.state.phase == "warning" ? .red : .secondary)
             }
             Spacer()
             Text(context.state.distanceM > 0 ? "\(context.state.distanceM) 米" : "--")

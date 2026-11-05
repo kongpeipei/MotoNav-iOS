@@ -629,6 +629,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 当前灵动岛内容状态：预警态（红色+距离）或巡航态
+    /// v1.25：巡航态右侧也显示实时最近距离（绿色），并与 app 内提示卡点位信息同步
     private func makeActivityState() -> CameraGuardActivityAttributes.ContentState {
         if floatWarning, let n = nearest, nearestDistance.isFinite {
             return CameraGuardActivityAttributes.ContentState(
@@ -638,11 +639,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 distanceM: Int(nearestDistance)
             )
         }
+        let d = nearestDistance.isFinite ? Int(nearestDistance) : 0
+        let detail: String
+        if let n = nearest, nearestDistance.isFinite {
+            detail = "\(n.type.label) · \(n.name)"
+        } else {
+            detail = "已载入 \(pois.count) 个点位"
+        }
         return CameraGuardActivityAttributes.ContentState(
             phase: "cruising",
             title: "电子眼卫士 · 正常巡航",
-            detail: "已载入 \(pois.count) 个点位",
-            distanceM: 0
+            detail: detail,
+            distanceM: d
         )
     }
 
