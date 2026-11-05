@@ -2419,6 +2419,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeDurationS = r.durationS
                 lastTurnSpoken = -1
                 farAnnounced.removeAll()
+                // v2.46 P1 重路由后同步清空 v2.43 的转后确认/拥堵提示去重状态：
+                // 新路线转向序号与旧路线重叠时，旧去重记录会让新路线的
+                // 转弯后确认/拥堵提示静默失效
+                turnConfirmSet.removeAll()
+                trafficAheadSpoken = false
                 fitTick += 1
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
                 trafficSpans = r.traffic
@@ -2703,6 +2708,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 现在改成：先发状态 → 下一轮 runloop 再启动 Live Activity，
             // 且用 Task 包裹（不在主线程同步等），并加超时兜底。
             scheduleLiveActivityStart(destName: destName)
+            // v2.46 P6 开始导航触感确认：到达已有震动提醒，开始也补一次
+            // （戴头盔/手套时看不到屏幕，凭触感确认导航已启动）
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             // v2.44 N3 开始导航加全程概览（高德式）：全程X公里，预计X分钟
             let km = String(format: "%.1f", Double(max(routeDistanceM, 0)) / 1000.0)
             let min = max(routeDurationS, 0) / 60
