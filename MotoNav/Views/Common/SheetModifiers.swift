@@ -83,6 +83,14 @@ struct SheetGroup3Modifier: ViewModifier {
     @Binding var showQuickNameAlert: Bool
     @Binding var quickName: String
 
+    /// v2.47 自定义 init：@EnvironmentObject 由环境注入，不参与 init 参数
+    init(pendingQuickCoord: Binding<CLLocationCoordinate2D?>, quickPickMode: Binding<Bool>, showQuickNameAlert: Binding<Bool>, quickName: Binding<String>) {
+        _pendingQuickCoord = pendingQuickCoord
+        _quickPickMode = quickPickMode
+        _showQuickNameAlert = showQuickNameAlert
+        _quickName = quickName
+    }
+
     func body(content: Content) -> some View {
         content
         .alert("命名快捷卡片", isPresented: $showQuickNameAlert) {

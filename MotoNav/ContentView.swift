@@ -277,7 +277,7 @@ struct ContentView: View {
             }
         }
         .modifier(SheetGroup2Modifier(showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput))
-        .modifier(SheetGroup3Modifier(model: model, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName))
+        .modifier(SheetGroup3Modifier(pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName))
         .modifier(SheetGroup4Modifier(showDiagnostics: $showDiagnostics))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
@@ -3416,7 +3416,7 @@ struct ContentView: View {
                 // v2.39 I3 喇叭改可点按钮：导航中一键静音/恢复（高德式），静音态灰色斜杠
                 Button {
                     haptic()
-                    model.toggleVoiceMuted()
+                    model.toggleVoice()
                 } label: {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         let speaking = Date().timeIntervalSince(model.lastSpeakAt) < 2.5
