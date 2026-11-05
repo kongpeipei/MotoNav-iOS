@@ -4,6 +4,7 @@ import AVFoundation
 import UIKit
 import UserNotifications
 import CoreHaptics
+import ActivityKit
 
 /// TTS 引擎选择（优化 #1：保留系统默认，给高级用户留讯飞接入点）
 enum TtsProvider: String, CaseIterable, Identifiable, Codable {
@@ -84,6 +85,33 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v1.8 内置点位编辑台账：已删除的内置点位 id 与补丁（名称/半径/启用状态覆盖）
     @Published private(set) var deletedBuiltinIds: Set<String> = []
     @Published private(set) var builtinPatches: [String: Poi] = [:]
+
+    // MARK: - v1.9 悬浮球 / 弹窗 / 灵动岛
+
+    /// 悬浮球总开关（高级设置第一项）
+    @Published var floatEnabled: Bool = true
+    /// 悬浮球是否允许拖动（位置归一化 0~1 持久化）
+    @Published var floatDraggable: Bool = true
+    /// 接近抓拍点时的顶部弹窗停留时长（1~10 秒，默认 1.2）
+    @Published var bannerDuration: Double = 1.2
+    /// 后台/锁屏时是否使用灵动岛实时活动
+    @Published var liveActivityEnabled: Bool = true
+    /// 悬浮球当前位置（归一化坐标，0~1）
+    @Published var ballPosition: CGPoint = CGPoint(x: 0.88, y: 0.80)
+
+    /// 当前打包版本号（读取 CFBundleShortVersionString，供分享文案使用）
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.9"
+    }
+    /// 顶部弹窗当前文案（nil 表示不显示）
+    @Published var bannerText: String?
+    /// 是否处于抓拍预警状态（悬浮球红色 + 灵动岛警告态）
+    @Published private(set) var floatWarning: Bool = false
+    /// 当前预警对应的点位 id（离开预警半径时清空）
+    private var activeWarningId: String?
+    private var bannerTask: Task<Void, Never>?
+    private var liveActivity: Activity<CameraGuardActivityAttributes>?
+
 
     /// 内置点位生效列表 = 内置 - 已删除，再叠加用户补丁（坐标与类型始终不变）
     var builtinPois: [Poi] {
@@ -182,6 +210,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         loadVoicePacks()
         // v1.8 加载内置点位的删除/补丁台账（同样在 super.init() 之后）
         loadBuiltinLedger()
+        // v1.9 加载悬浮球/弹窗/灵动岛设置与悬浮球位置
+        loadFloatSettings()
 
         lm.delegate = self
         // v1.4：初始按「行驶中」配置；低速/静止后自动切成低精度低频，减少骑行者电池消耗
@@ -220,6 +250,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
            let decoded = try? JSONDecoder().decode([String: Poi].self, from: data) {
             builtinPatches = decoded
         }
+    }
+
+    /// v1.9：恢复悬浮球/弹窗/灵动岛设置与悬浮球位置（归一化坐标）
+    private func loadFloatSettings() {
+        let defaults = UserDefaults.standard
+        if let v = defaults.object(forKey: "floatEnabled") as? Bool { floatEnabled = v }
+        if let v = defaults.object(forKey: "floatDraggable") as? Bool { floatDraggable = v }
+        if let v = defaults.object(forKey: "bannerDuration") as? Double { bannerDuration = v }
+        if let v = defaults.object(forKey: "liveActivityEnabled") as? Bool { liveActivityEnabled = v }
+        let x = defaults.object(forKey: "floatBallX") as? Double ?? 0.88
+        let y = defaults.object(forKey: "floatBallY") as? Double ?? 0.80
+        ballPosition = CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
     }
 
     // MARK: - 索引（优化 D：纬度分桶 + 邻桶扫描）
@@ -286,6 +328,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         lm.startUpdatingLocation()
         isMonitoring = true
         statusText = "监听中 · 已载入 \(pois.count) 个点位"
+        // v1.9：开始监听时同步开启灵动岛实时活动（后台/锁屏可见）
+        startLiveActivity()
     }
 
     /// v1.6：当前是否只是「使用期间」授权 —— 是则 App 启动时弹引导，建议升级为「始终」
@@ -302,6 +346,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         lm.stopUpdatingLocation()
         isMonitoring = false
         statusText = "已暂停监听"
+        // v1.9：暂停监听时结束灵动岛实时活动
+        endLiveActivity()
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -374,10 +420,27 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let (best, bestD) = findNearest(relativeTo: loc) else {
             nearest = nil
             nearestDistance = .greatestFiniteMagnitude
+            if floatWarning || activeWarningId != nil {
+                floatWarning = false
+                activeWarningId = nil
+                updateLiveActivity()
+            }
             return
         }
         nearest = best
         nearestDistance = bestD
+
+        // v1.9 悬浮球 / 灵动岛状态机：进入预警半径→红色+距离，离开预警半径→自动回绿
+        if bestD > effectiveWarn {
+            if floatWarning || activeWarningId != nil {
+                floatWarning = false
+                activeWarningId = nil
+                updateLiveActivity()
+            }
+        } else if floatWarning {
+            // 持续处于预警状态：每次定位刷新都同步灵动岛距离
+            updateLiveActivity()
+        }
 
         // 优化 B：驶离冷却阈值 1.5x，避免两点相邻时反复触发
         if bestD > effectiveWarn * 1.5 {
@@ -387,7 +450,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard bestD <= effectiveWarn, !announced.contains(best.id), canSpeakNow() else { return }
 
         announced.insert(best.id)
+        activeWarningId = best.id
+        floatWarning = true
         let text = "前方\(Int(bestD))米，\(best.type.voiceText)，请谨慎行驶！"
+        showBanner(text: text)
         speak(text)
         // 优化 C：震动辅助
         vibrate()
@@ -400,6 +466,81 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             at: 0
         )
         if announcements.count > 50 { announcements.removeLast(announcements.count - 50) }
+        updateLiveActivity()
+    }
+
+    // MARK: - v1.9 顶部弹窗（接近抓拍点时先弹窗提示，按设置时长自动收起）
+
+    /// 显示顶部弹窗：文案保留 bannerDuration 秒后自动隐藏
+    func showBanner(text: String) {
+        guard floatEnabled else { return }
+        bannerText = text
+        bannerTask?.cancel()
+        bannerTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(max(bannerDuration, 1) * 1_000_000_000))
+            if !Task.isCancelled { bannerText = nil }
+        }
+    }
+
+    /// 手动收起当前弹窗（关闭悬浮球时调用）
+    func dismissBanner() {
+        bannerTask?.cancel()
+        bannerText = nil
+    }
+
+    // MARK: - v1.9 灵动岛 / Live Activity（后台、锁屏时同步悬浮球状态）
+
+    /// 开始实时活动（进入监听时调用）
+    func startLiveActivity() {
+        guard liveActivityEnabled, liveActivity == nil else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let state = makeActivityState()
+        liveActivity = try? Activity<CameraGuardActivityAttributes>.request(
+            attributes: CameraGuardActivityAttributes(),
+            contentState: state,
+            pushType: nil
+        )
+    }
+
+    /// 状态变化时刷新实时活动（进入/离开预警、距离刷新）
+    func updateLiveActivity() {
+        guard liveActivityEnabled else { return }
+        let state = makeActivityState()
+        if let activity = liveActivity {
+            Task { await activity.update(using: state) }
+        } else if ActivityAuthorizationInfo().areActivitiesEnabled {
+            liveActivity = try? Activity<CameraGuardActivityAttributes>.request(
+                attributes: CameraGuardActivityAttributes(),
+                contentState: state,
+                pushType: nil
+            )
+        }
+    }
+
+    /// 结束实时活动（暂停监听 / 关闭开关时调用）
+    func endLiveActivity() {
+        guard let activity = liveActivity else { return }
+        liveActivity = nil
+        let state = makeActivityState()
+        Task { await activity.end(using: state, dismissalPolicy: .immediate) }
+    }
+
+    /// 当前灵动岛内容状态：预警态（红色+距离）或巡航态
+    private func makeActivityState() -> CameraGuardActivityAttributes.ContentState {
+        if floatWarning, let n = nearest, nearestDistance.isFinite {
+            return CameraGuardActivityAttributes.ContentState(
+                phase: "warning",
+                title: "前方 \(Int(nearestDistance)) 米 · \(n.type.label)",
+                detail: "\(n.name) · 请减速通过",
+                distanceM: Int(nearestDistance)
+            )
+        }
+        return CameraGuardActivityAttributes.ContentState(
+            phase: "cruising",
+            title: "电子眼卫士 · 正常巡航",
+            detail: "已载入 \(pois.count) 个点位",
+            distanceM: 0
+        )
     }
 
     // MARK: - 节流（优化 B 改进版：点位冷却 + 时间冷却双保险）
@@ -543,6 +684,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let data = try? JSONEncoder().encode(builtinPatches) {
             defaults.set(data, forKey: "builtinPatches")
         }
+        // v1.9 悬浮球/弹窗/灵动岛设置与悬浮球位置
+        defaults.set(floatEnabled, forKey: "floatEnabled")
+        defaults.set(floatDraggable, forKey: "floatDraggable")
+        defaults.set(bannerDuration, forKey: "bannerDuration")
+        defaults.set(liveActivityEnabled, forKey: "liveActivityEnabled")
+        defaults.set(ballPosition.x, forKey: "floatBallX")
+        defaults.set(ballPosition.y, forKey: "floatBallY")
         if rebuildIndex { self.rebuildIndex() }
     }
 

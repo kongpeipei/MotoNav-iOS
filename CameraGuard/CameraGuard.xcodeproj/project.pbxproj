@@ -17,6 +17,9 @@
 		CA0000000000000000000008 /* AddPoiView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000A /* AddPoiView.swift */; };
 		CA0000000000000000000009 /* XfyunTTS.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000B /* XfyunTTS.swift */; };
 		CA0000000000000000000010 /* VoiceEngineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000C /* VoiceEngineView.swift */; };
+		CA0000000000000000000011 /* CameraGuardWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000D /* CameraGuardWidget.swift */; };
+		CA0000000000000000000012 /* ActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000010 /* ActivityAttributes.swift */; };
+		CA0000000000000000000013 /* CameraGuardWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = CB000000000000000000000F /* CameraGuardWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,10 +35,21 @@
 		CB000000000000000000000A /* AddPoiView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPoiView.swift; sourceTree = "<group>"; };
 		CB000000000000000000000B /* XfyunTTS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XfyunTTS.swift; sourceTree = "<group>"; };
 		CB000000000000000000000C /* VoiceEngineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceEngineView.swift; sourceTree = "<group>"; };
+		CB000000000000000000000D /* CameraGuardWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraGuardWidget.swift; sourceTree = "<group>"; };
+		CB000000000000000000000E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		CB000000000000000000000F /* CameraGuardWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CameraGuardWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		CB0000000000000000000010 /* ActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityAttributes.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		CC0000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC0000000000000000000002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -49,6 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				DD0000000000000000000002 /* CameraGuard */,
+				DD0000000000000000000004 /* WidgetExtension */,
 				DD0000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -64,6 +79,7 @@
 				CB000000000000000000000A /* AddPoiView.swift */,
 				CB000000000000000000000B /* XfyunTTS.swift */,
 				CB000000000000000000000C /* VoiceEngineView.swift */,
+				CB0000000000000000000010 /* ActivityAttributes.swift */,
 				CB0000000000000000000007 /* Assets.xcassets */,
 				CB0000000000000000000006 /* poi.json */,
 				CB0000000000000000000008 /* Info.plist */,
@@ -71,10 +87,20 @@
 			path = CameraGuard;
 			sourceTree = "<group>";
 		};
+		DD0000000000000000000004 /* WidgetExtension */ = {
+			isa = PBXGroup;
+			children = (
+				CB000000000000000000000D /* CameraGuardWidget.swift */,
+				CB000000000000000000000E /* Info.plist */,
+			);
+			path = WidgetExtension;
+			sourceTree = "<group>";
+		};
 		DD0000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				CB0000000000000000000001 /* CameraGuard.app */,
+				CB000000000000000000000F /* CameraGuardWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,6 +115,7 @@
 				GG0000000000000000000001 /* Sources */,
 				CC0000000000000000000001 /* Frameworks */,
 				GG0000000000000000000002 /* Resources */,
+				GG0000000000000000000005 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
@@ -98,6 +125,23 @@
 			productName = CameraGuard;
 			productReference = CB0000000000000000000001 /* CameraGuard.app */;
 			productType = "com.apple.product-type.application";
+		};
+		EE0000000000000000000003 /* CameraGuardWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF0000000000000000000003 /* Build configuration list for PBXNativeTarget "CameraGuardWidget" */;
+			buildPhases = (
+				GG0000000000000000000003 /* Sources */,
+				CC0000000000000000000002 /* Frameworks */,
+				GG0000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CameraGuardWidget;
+			productName = CameraGuardWidget;
+			productReference = CB000000000000000000000F /* CameraGuardWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -110,6 +154,9 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					EE0000000000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					EE0000000000000000000003 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -129,6 +176,7 @@
 			projectRoot = "";
 			targets = (
 				EE0000000000000000000001 /* CameraGuard */,
+				EE0000000000000000000003 /* CameraGuardWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -143,7 +191,28 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		GG0000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		GG0000000000000000000005 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				CA0000000000000000000013 /* CameraGuardWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		GG0000000000000000000001 /* Sources */ = {
@@ -158,6 +227,15 @@
 				CA0000000000000000000008 /* AddPoiView.swift in Sources */,
 				CA0000000000000000000009 /* XfyunTTS.swift in Sources */,
 				CA0000000000000000000010 /* VoiceEngineView.swift in Sources */,
+				CA0000000000000000000012 /* ActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		GG0000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CA0000000000000000000011 /* CameraGuardWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -217,7 +295,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "CameraGuard/Info.plist";
@@ -225,7 +303,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -240,7 +318,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "CameraGuard/Info.plist";
@@ -248,9 +326,57 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		HH0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 10;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "WidgetExtension/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.9;
+				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		HH0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 10;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "WidgetExtension/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.9;
+				PRODUCT_BUNDLE_IDENTIFIER = com.motonav.app.eye.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -274,6 +400,15 @@
 			buildConfigurations = (
 				HH0000000000000000000003 /* Debug */,
 				HH0000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FF0000000000000000000003 /* Build configuration list for PBXNativeTarget "CameraGuardWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				HH0000000000000000000005 /* Debug */,
+				HH0000000000000000000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

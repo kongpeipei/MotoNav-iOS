@@ -8,8 +8,14 @@ struct ContentView: View {
 
     private let distanceOptions: [Double] = [300, 500, 800, 1000]
 
+    /// v1.9：用 NavigationStack 路径管理页面跳转，悬浮球点击可一键回到主界面
+    @State private var navPath = NavigationPath()
+
+    /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.9/CameraGuard-unsigned.ipa"
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             ScrollView {
                 VStack(spacing: 14) {
                     statusBar
@@ -23,6 +29,27 @@ struct ContentView: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("电子眼卫士")
+            .navigationDestination(for: CameraGuardRoute.self) { route in
+                switch route {
+                case .poiEditor:
+                    PoiEditorView()
+                        .environmentObject(engine)
+                case .voiceEngine:
+                    VoiceEngineView()
+                        .environmentObject(engine)
+                }
+            }
+            // v1.9：右上角分享按钮（苹果同款分享图标），分享当前版本 IPA 安装包到微信/QQ
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        shareInstallPackage()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("分享安装包")
+                }
+            }
             // v1.6：启动时若只是「使用期间」定位，主动询问是否升级为「始终」，保证锁屏后台继续播报
             .alert("开启「始终」定位", isPresented: $engine.showAlwaysPrompt) {
                 Button("现在允许") { engine.requestAlwaysAuthorization() }
@@ -36,6 +63,118 @@ struct ContentView: View {
                 Text("锁屏或切到后台后仍要语音提醒违法拍照点，需要把定位权限改为「始终允许」。")
             }
         }
+        // v1.9：顶部弹窗 + 可拖动悬浮球覆盖层
+        .overlay(alignment: .top) { bannerOverlay }
+        .overlay { floatingBallOverlay }
+    }
+
+    /// v1.9 页面路由（用于 NavigationStack path）
+    private enum CameraGuardRoute: Hashable {
+        case poiEditor
+        case voiceEngine
+    }
+
+    // MARK: - v1.9 分享当前版本 IPA
+
+    private func shareInstallPackage() {
+        let text = "电子眼卫士 \(AlertEngine.appVersion) 安装包（未签名，需用全能签重签后安装）："
+        let url = URL(string: ipaShareURL)!
+        let av = UIActivityViewController(activityItems: [text, url], applicationActivities: nil)
+        if let pop = av.popoverPresentationController {
+            pop.sourceView = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first(where: { $0.activationState == .foregroundActive })?
+                .windows.first
+            pop.sourceRect = CGRect(x: UIScreen.main.bounds.width - 60, y: 44, width: 1, height: 1)
+        }
+        currentTopViewController()?.present(av, animated: true)
+    }
+
+    /// 取当前最上层控制器，避免在 sheet/子页面叠层时从根控制器弹出失败
+    private func currentTopViewController() -> UIViewController? {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else { return nil }
+        var vc = (scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first)?.rootViewController
+        while let presented = vc?.presentedViewController, !presented.isBeingDismissed {
+            vc = presented
+        }
+        return vc
+    }
+
+    // MARK: - v1.9 顶部弹窗（接近抓拍点：弹窗 → 自动收起 → 变红悬浮球显示米数）
+
+    private var bannerOverlay: some View {
+        Group {
+            if engine.floatEnabled, let text = engine.bannerText {
+                VStack(spacing: 3) {
+                    Label("抓拍提醒", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                    Text(text)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.95))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity)
+                .background(Color.red.gradient, in: RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .allowsHitTesting(false)
+            }
+        }
+        .animation(.spring(duration: 0.35), value: engine.bannerText)
+    }
+
+    // MARK: - v1.9 可拖动悬浮球（绿色=巡航 / 红色=预警+球内米数）
+
+    private var floatingBallOverlay: some View {
+        GeometryReader { geo in
+            if engine.floatEnabled {
+                floatingBall
+                    .position(CGPoint(x: engine.ballPosition.x * geo.size.width,
+                                      y: engine.ballPosition.y * geo.size.height))
+                    .gesture(engine.floatDraggable ? ballDragGesture(size: geo.size) : nil)
+                    .onTapGesture {
+                        // 点击悬浮球：回到主界面（清空导航路径）
+                        if !navPath.isEmpty { navPath = NavigationPath() }
+                    }
+            }
+        }
+        .allowsHitTesting(true)
+    }
+
+    private var floatingBall: some View {
+        ZStack {
+            Circle()
+                .fill(engine.floatWarning ? Color.red : Color.green)
+                .shadow(color: (engine.floatWarning ? Color.red : Color.green).opacity(0.55),
+                        radius: 6, y: 3)
+            VStack(spacing: 0) {
+                Text(engine.floatWarning && engine.nearestDistance.isFinite
+                     ? "\(Int(engine.nearestDistance))" : "--")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("米")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .frame(width: 58, height: 58)
+        .contentShape(Circle())
+    }
+
+    private func ballDragGesture(size: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { v in
+                let x = min(max(v.location.x / size.width, 0.07), 0.93)
+                let y = min(max(v.location.y / size.height, 0.10), 0.90)
+                engine.ballPosition = CGPoint(x: x, y: y)
+            }
+            .onEnded { _ in engine.saveSettings() }
     }
 
     // MARK: - 状态栏
@@ -261,11 +400,87 @@ struct ContentView: View {
             Text("高级设置")
                 .font(.headline)
 
+            // v1.9 悬浮球设置（高级设置第一项）
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(isOn: Binding(
+                    get: { engine.floatEnabled },
+                    set: { on in
+                        engine.floatEnabled = on
+                        if !on {
+                            engine.dismissBanner()
+                            engine.endLiveActivity()
+                        }
+                        engine.saveSettings()
+                    }
+                )) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "scope")
+                            .foregroundStyle(.green)
+                        Text("悬浮球")
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text(engine.floatEnabled ? "开启" : "关闭")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if engine.floatEnabled {
+                    Toggle(isOn: Binding(
+                        get: { engine.floatDraggable },
+                        set: { engine.floatDraggable = $0; engine.saveSettings() }
+                    )) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "hand.draw.fill")
+                                .foregroundStyle(.green)
+                            Text("允许拖动悬浮球")
+                                .font(.subheadline)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("弹窗展示时长")
+                                .font(.subheadline)
+                            Spacer()
+                            Text(String(format: "%.1f 秒", engine.bannerDuration))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $engine.bannerDuration, in: 1...10, step: 0.1)
+                            .tint(.green)
+                        Text("接近抓拍点时的顶部弹窗停留时长，到时自动收起变回悬浮球")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .onChange(of: engine.bannerDuration) { _, _ in engine.saveSettings() }
+
+                    Toggle(isOn: Binding(
+                        get: { engine.liveActivityEnabled },
+                        set: { on in
+                            engine.liveActivityEnabled = on
+                            if on {
+                                engine.startLiveActivity()
+                            } else {
+                                engine.endLiveActivity()
+                            }
+                            engine.saveSettings()
+                        }
+                    )) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
+                                .foregroundStyle(.green)
+                            Text("灵动岛实时活动（后台/锁屏）")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
             // #3 点位管理入口
-            NavigationLink {
-                PoiEditorView()
-                    .environmentObject(engine)
-            } label: {
+            NavigationLink(value: CameraGuardRoute.poiEditor) {
                 HStack {
                     Image(systemName: "map.circle.fill")
                         .foregroundStyle(.green)
@@ -288,10 +503,7 @@ struct ContentView: View {
             Divider()
 
             // #1 语音引擎（折叠入口，点进去再选系统/讯飞；凭证收起防误操作）
-            NavigationLink {
-                VoiceEngineView()
-                    .environmentObject(engine)
-            } label: {
+            NavigationLink(value: CameraGuardRoute.voiceEngine) {
                 HStack {
                     Image(systemName: "waveform.circle.fill")
                         .foregroundStyle(.purple)

@@ -37,6 +37,8 @@
 	<string>用于在骑行接近违法拍照点时自动语音提醒（红绿灯/超速/压线/不戴头盔等）。请选择「始终」以支持锁屏后台持续播报。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于在骑行接近违法拍照点时自动语音提醒（红绿灯/超速/压线/不戴头盔等）。</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
