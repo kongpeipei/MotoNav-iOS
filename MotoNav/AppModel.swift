@@ -3234,6 +3234,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if toDest < Double(arriveThreshold) {
             speak("已到达目的地，\(destName)，导航结束")
             status = "已到达：\(destName)"
+            // v2.39 I4 停车位置记忆（高德式：到达后可在"我的"页一键导航回程找车）
+            UserDefaults.standard.set(coord.latitude, forKey: "lastParkedLat")
+            UserDefaults.standard.set(coord.longitude, forKey: "lastParkedLon")
+            UserDefaults.standard.set(destName, forKey: "lastParkedName")
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastParkedTime")
             // v1.90 到达震动提醒（骑行中不低头也感知到站）
             vibrationArrived()
             navigating = false

@@ -131,6 +131,8 @@ struct ContentView: View {
     /// v2.37 G1 状态反馈 toast：model.status 赋值后显示 2.5s（操作反馈不再不可见）
     @State private var statusVisible = false
     @State private var statusDismissTask: Task<Void, Never>?
+    /// v2.39 I2 导航中切换备选路线（高德式：导航页可换方案）
+    @State private var showRouteSwap = false
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
@@ -283,6 +285,39 @@ struct ContentView: View {
         }
         // v2.25 弹窗组（拆分以解决类型检查超时）
         .modifier(SheetGroup1Modifier(showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showTeamRide: $showTeamRide, footprints: footprints, team: team, selectedTab: $selectedTab))
+        // v2.39 I2 导航中切换路线 sheet：导航底卡"换路"按钮弹出
+        .sheet(isPresented: $showRouteSwap) {
+            if !model.routeChoices.isEmpty {
+                NavigationStack {
+                    List(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
+                        Button {
+                            haptic()
+                            model.applyRouteChoice(c)
+                            showRouteSwap = false
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("\(idx == 0 ? "推荐" : "备选\(idx)") · \(c.durationS / 60) 分钟 · \(String(format: "%.1f", Double(c.distanceM) / 1000.0)) 公里")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(c.label)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: idx == 0 ? "checkmark.circle.fill" : "arrow.right.circle")
+                                    .foregroundStyle(idx == 0 ? .green : .blue)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .navigationTitle("切换路线")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.medium])
+            }
+        }
         .modifier(SheetGroup2Modifier(showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput))
         .modifier(SheetGroup3Modifier(showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode))
         .modifier(SheetGroup4Modifier(showDiagnostics: $showDiagnostics))
@@ -683,6 +718,7 @@ struct ContentView: View {
                 appearanceSection
                 commonPlacesSection
                 rideSection
+                parkingSection
                 dataSection
                 searchKeySection
                 aboutSection
@@ -913,6 +949,46 @@ struct ContentView: View {
     }
 
     /// v1.99 足迹 / 离线地图 / 组队
+    /// v2.39 I4 停车位置记忆：到达时自动记录，一键规划回程找车
+    private var parkingSection: some View {
+        let lat = UserDefaults.standard.object(forKey: "lastParkedLat") as? Double
+        let lon = UserDefaults.standard.object(forKey: "lastParkedLon") as? Double
+        let name = UserDefaults.standard.string(forKey: "lastParkedName") ?? ""
+        let ts = UserDefaults.standard.object(forKey: "lastParkedTime") as? Double ?? 0
+        return Section {
+            if let lat, let lon, !name.isEmpty {
+                Button {
+                    haptic()
+                    model.planRoute(to: name, lat: lat, lon: lon)
+                    selectedTab = 0
+                } label: {
+                    HStack {
+                        Label("上次停车位置", systemImage: "parkingsign.circle")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(name)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            if ts > 0 {
+                                Text(Date(timeIntervalSince1970: ts), style: .date)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("到达目的地后自动记录，可一键导航回程")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("停车")
+        }
+    }
+
     private var dataSection: some View {
         Section("骑行数据") {
             Button {
@@ -3266,6 +3342,37 @@ struct ContentView: View {
                         .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
                 }
                 .buttonStyle(.plain)
+                // v2.39 I2 导航中切换备选路线（高德式）：方案列表 sheet，applyRouteChoice 应用
+                if model.routeChoices.count > 1 {
+                    Button {
+                        haptic()
+                        showRouteSwap = true
+                    } label: {
+                        Image(systemName: "arrow.triangle.swap")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(mainFg)
+                            .frame(width: 40, height: 34)
+                            .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                    }
+                    .buttonStyle(.plain)
+                }
+                // v2.39 I1 导航中搜索/换目的地（高德式）：退出导航保留路线卡 → 搜索框聚焦
+                Button {
+                    haptic()
+                    model.toggleNavigation()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        searchFocused = true
+                        searchExpanded = false
+                        uiHidden = false
+                    }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(mainFg)
+                        .frame(width: 40, height: 34)
+                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
                 .padding(.trailing, 12)
                 .padding(.leading, 10)
             }
@@ -3298,13 +3405,21 @@ struct ContentView: View {
                 }
                 Spacer(minLength: 4)
                 // v2.34 E7 播报中指示：最近 2.5s 内有播报 → 喇叭亮（风噪大时也能确认播报发生）
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    if Date().timeIntervalSince(model.lastSpeakAt) < 2.5 {
-                        Image(systemName: "speaker.wave.2.fill")
+                // v2.39 I3 喇叭改可点按钮：导航中一键静音/恢复（高德式），静音态灰色斜杠
+                Button {
+                    haptic()
+                    model.toggleVoiceMuted()
+                } label: {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        let speaking = Date().timeIntervalSince(model.lastSpeakAt) < 2.5
+                        Image(systemName: model.voiceMuted ? "speaker.slash.fill"
+                               : (speaking ? "speaker.wave.2.fill" : "speaker.wave.2"))
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                            .foregroundStyle(model.voiceMuted ? .gray
+                                             : (speaking ? Color(red: 0.16, green: 0.38, blue: 1.0) : dimFg))
                     }
                 }
+                .buttonStyle(.plain)
                 // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
                 let overSpeed = model.speedLimitKph > 0 && ns.speedKph > model.speedLimitKph
                 Text("\(Int(ns.speedKph.rounded()))")
