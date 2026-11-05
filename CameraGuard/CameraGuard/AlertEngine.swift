@@ -689,13 +689,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - TTS 播报（#1 讯飞折中：保留系统，讯飞接入点留壳）
 
-    /// 讯飞凭证格式预检：AppID 8 位、APIKey/APISecret 32 位。不完整直接走系统语音，避免把
-    /// “凭证不完整”误当成合成失败。真实鉴权失败仍由讯飞服务器返回具体错误。
+    /// 讯飞凭证格式预检（v1.14 放宽：仅防空值/过短，真实有效性由讯飞服务端判定；
+    /// APIKey 存在 24 位 hex 与 32 位等多种格式，过严的「32 位」会把有效凭证误拦回系统语音）
     static func iflytekCredentialLooksValid(appID: String, apiKey: String, apiSecret: String) -> Bool {
         let a = appID.trimmingCharacters(in: .whitespacesAndNewlines)
         let k = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let s = apiSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        return a.count == 8 && k.count == 32 && s.count == 32
+        return a.count == 8 && k.count >= 16 && s.count >= 16
     }
 
     private func speak(_ text: String, force: Bool = false) {

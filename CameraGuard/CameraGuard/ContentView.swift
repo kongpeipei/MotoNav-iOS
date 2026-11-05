@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.13/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.14/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -402,8 +402,10 @@ struct ContentView: View {
 
             Divider()
 
-            // #3 点位管理入口
-            NavigationLink(value: CameraGuardRoute.poiEditor) {
+            // #3 点位管理入口（v1.14：显式 navPath 推入，绕开 iOS17 ScrollView 内 NavigationLink 点击失效）
+            Button {
+                navPath.append(CameraGuardRoute.poiEditor)
+            } label: {
                 HStack {
                     Image(systemName: "map.circle.fill")
                         .foregroundStyle(.green)
@@ -422,11 +424,14 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
+            .buttonStyle(.plain)
 
             Divider()
 
-            // #1 语音引擎（折叠入口，点进去再选系统/讯飞；凭证收起防误操作）
-            NavigationLink(value: CameraGuardRoute.voiceEngine) {
+            // #1 语音引擎（v1.14：显式 navPath 推入；凭证收起防误操作）
+            Button {
+                navPath.append(CameraGuardRoute.voiceEngine)
+            } label: {
                 HStack {
                     Image(systemName: "waveform.circle.fill")
                         .foregroundStyle(.purple)
@@ -442,6 +447,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
+            .buttonStyle(.plain)
 
             Divider()
 

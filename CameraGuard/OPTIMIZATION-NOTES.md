@@ -377,3 +377,29 @@ v1.12 整体移除悬浮球覆盖层后，导航点击恢复正常。
 3. **不落盘明文**：凭证值等于内置值时 `saveSettings` 不写入 UserDefaults（保持走内置解密）；
    仅当用户在语音引擎页显式修改后才持久化用户自己的值。
 4. 语音引擎页提示更新：注明已内置默认凭证、留空即用内置、失败自动回退系统语音。
+
+---
+
+# 第十一轮（v1.14 · 修复设置页点不进去 + 放宽讯飞凭证预检）
+
+版本 1.13 → 1.14（构建号 14 → 15）。
+
+## 1. 修复：点位管理 / 语音引擎点不进去
+
+根因：iOS 17 在 ScrollView 内使用 `NavigationLink(value:)` + `navigationDestination` 存在
+点击失效的已知问题（点击无响应/页面不推入）。v1.14 改为**显式路径推入**：
+两个入口改为 `Button { navPath.append(CameraGuardRoute.xxx) }`，由 NavigationStack(path:)
+确定性驱动推入，不再依赖 NavigationLink 的命中测试/去重逻辑。
+
+## 2. 讯飞凭证预检放宽
+
+原预检要求 APIKey/APISecret 恰好 32 位，会把 24 位 hex 格式的有效 APIKey 误拦并回退
+系统语音。v1.14 放宽为「AppID 8 位 + Key/Secret 各 ≥16 位」，真实有效性交给讯飞服务端判定，
+App 只防空值。内置加密凭证逻辑不变（仍 AES-GCM 运行时解密、不落盘明文）。
+
+## 3. 凭证有效性实测（本机直连讯飞 tts-api.xfyun.cn）
+
+对当前内置凭证做了 WebSocket 直连验证：两种 APIKey 形式（原始 32 位 base64 样式、
+base64 解码后的 24 位 hex）均返回 HTTP 401 `apikey not found`——该 APIKey 在讯飞服务端
+不存在。App 在鉴权失败时回退系统语音并显示失败原因，属预期兜底行为；
+待提供在讯飞控制台核验过的正确 AppID/APIKey/APISecret 后即可开箱即用讯飞合成。
