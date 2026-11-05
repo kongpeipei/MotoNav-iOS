@@ -32,7 +32,7 @@ struct ContentView: View {
     @State private var renamingQuickPoiId: String?
     @State private var renamingQuickPoiName = ""
     /// v2.34 E9 首次使用引导横幅（见一次后关闭，不再打扰）
-    @State private var showIntro = !UserDefaults.standard.bool(forKey: "hasSeenIntro")"
+    @State private var showIntro = !UserDefaults.standard.bool(forKey: "hasSeenIntro")
     @State private var explainBody = ""
     @State private var showExplain = false
     /// v2.27 版本号连点计数（连点 7 次进入诊断页）
