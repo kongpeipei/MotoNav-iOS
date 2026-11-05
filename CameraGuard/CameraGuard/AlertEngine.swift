@@ -101,8 +101,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 当前打包版本号（读取 CFBundleShortVersionString，供分享文案使用）
     static var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.9"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.10"
     }
+
+    // MARK: - v1.10 CarPlay（音频类）
+
+    /// 是否已连接 CarPlay 车机（音频路由检测）
+    @Published var carPlayConnected = false
     /// 顶部弹窗当前文案（nil 表示不显示）
     @Published var bannerText: String?
     /// 是否处于抓拍预警状态（悬浮球红色 + 灵动岛警告态）
@@ -225,6 +230,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         invalidatePoiCache()
         rebuildIndex()
         configureAudio()
+        // v1.10 CarPlay：监听音频路由变化（连接/断开车机），连接时自动开始监听
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil
+        )
     }
 
     /// v1.5：从 UserDefaults 恢复语音包；无任何包但已有 vcn 时补一条同名包
@@ -330,6 +342,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         statusText = "监听中 · 已载入 \(pois.count) 个点位"
         // v1.9：开始监听时同步开启灵动岛实时活动（后台/锁屏可见）
         startLiveActivity()
+        // v1.10 CarPlay：启动静音占位流（保持「正在播放」，连接车机后自动恢复并走车载音响）
+        CarPlaySupport.isMonitoringSnapshot = true
+        CarPlaySupport.pointsCountSnapshot = pois.count
+        CarPlaySupport.startSilenceStream()
+        CarPlaySupport.updateNowPlaying()
     }
 
     /// v1.6：当前是否只是「使用期间」授权 —— 是则 App 启动时弹引导，建议升级为「始终」
@@ -348,6 +365,38 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         statusText = "已暂停监听"
         // v1.9：暂停监听时结束灵动岛实时活动
         endLiveActivity()
+        // v1.10 CarPlay：停止静音占位流并刷新卡片为「已暂停」
+        CarPlaySupport.isMonitoringSnapshot = false
+        CarPlaySupport.stopSilenceStream()
+        CarPlaySupport.updateNowPlaying()
+    }
+
+    // MARK: - v1.10 CarPlay 连接检测（AVAudioSession 路由变化）
+
+    @objc nonisolated private func handleAudioRouteChange(_ note: Notification) {
+        Task { @MainActor in self.processAudioRouteChange() }
+    }
+
+    private func processAudioRouteChange() {
+        let onCar = CarPlaySupport.isConnectedToCarPlay()
+        CarPlaySupport.isMonitoringSnapshot = isMonitoring
+        CarPlaySupport.pointsCountSnapshot = pois.count
+        if onCar != carPlayConnected {
+            carPlayConnected = onCar
+            if onCar {
+                statusText = isMonitoring ? "监听中 · 已连接 CarPlay" : "已连接 CarPlay · 自动开始监听"
+                // 用户诉求：连上 CarPlay 自动启动监听（已有定位授权时）
+                if !isMonitoring {
+                    let st = lm.authorizationStatus
+                    if st == .authorizedAlways || st == .authorizedWhenInUse {
+                        begin()
+                    }
+                }
+            } else {
+                statusText = isMonitoring ? "监听中" : "已暂停监听"
+            }
+        }
+        CarPlaySupport.updateNowPlaying()
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -436,6 +485,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 floatWarning = false
                 activeWarningId = nil
                 updateLiveActivity()
+                // v1.10 CarPlay：离开预警，卡片恢复默认标题
+                CarPlaySupport.updateNowPlaying()
             }
         } else if floatWarning {
             // 持续处于预警状态：每次定位刷新都同步灵动岛距离
@@ -455,6 +506,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let text = "前方\(Int(bestD))米，\(best.type.voiceText)，请谨慎行驶！"
         showBanner(text: text)
         speak(text)
+        // v1.10 CarPlay：播报瞬间，车机卡片同步显示当前提醒
+        CarPlaySupport.updateNowPlaying(title: "前方\(Int(bestD))米 · \(best.type.label)")
         // 优化 C：震动辅助
         vibrate()
         // v1.4：后台/锁屏时同步推一条本地通知，避免只靠语音导致漏提醒（此前申请了通知权限却从未使用）

@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.9/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.10/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -188,6 +188,15 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            // v1.10 CarPlay：已连接车机时显示小标签
+            if engine.carPlayConnected {
+                Label("CarPlay", systemImage: "car.fill")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.green.opacity(0.15), in: Capsule())
+            }
             Spacer()
             Button {
                 engine.isMonitoring

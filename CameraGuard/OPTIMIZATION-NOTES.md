@@ -290,3 +290,32 @@ CameraGuard/
   （GitHub Release 附件）+ 版本说明分享到微信/QQ/其他渠道。
 - 分享文案带版本号（读取 CFBundleShortVersionString 动态取）与「未签名需全能签重签」提示。
 - 每轮发布对应更新 `ContentView.ipaShareURL` 常量中的 release tag。
+
+---
+
+# 第七轮（v1.10 · CarPlay 音频类接入）
+
+版本 1.9 → 1.10（构建号 10 → 11）。
+
+## 背景与可行性结论
+
+- CarPlay 车机屏幕**没有自由悬浮层 API**，跨 App/车机悬浮球受沙盒与模板约束，不可行；
+- 仅**音频类**应用支持「连接 CarPlay 自动恢复播放 + 音频栏状态卡片」，导航类需 Apple 单独审批导航 entitlement（有真实导航能力要求，本 App 不满足，未采用）。
+
+## 实施方案（音频类，无审核风险）
+
+1. **静音占位流**：新增 `silence.wav`（0.6s 静音循环，音量 0），监听时持续播放，
+   系统判定 App「正在播放」→ 连上 CarPlay 时**自动恢复 = 自动进入监听**，无需手点。
+2. **CarPlay 连接检测**：监听 `AVAudioSession.routeChangeNotification`，输出端口含
+   `carAudio` 即判定已连接；连接且已有定位授权时自动 `begin()` 开始监听（用户诉求）。
+   断开时恢复普通状态文本。
+3. **Now Playing 状态卡片**：`MPNowPlayingInfoCenter` 展示「电子眼卫士 · 监听中 / 已暂停 /
+   前方 X 米 · 类型」，CarPlay 音频栏可看到；播报瞬间卡片同步当前提醒，离开预警恢复默认。
+4. 播报语音沿用 `.playback + .spokenAudio` 会话，自动从车载音响输出（无需改播报链路）。
+5. 首页状态栏新增 CarPlay 小标签（car.fill 绿标），连接时可见。
+6. 分享按钮 URL 更新为 `camera-guard-v1.10` release 附件。
+
+## 说明
+
+- CarPlay 连接后如需在车机音频列表出现，用户最近播放过本 App 即可（静音流保证状态）。
+- 实机验证点：连接车机后是否自动恢复播放并自动开始监听、播报是否从车载音响出声。
