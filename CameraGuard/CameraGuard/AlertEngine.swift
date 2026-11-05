@@ -961,6 +961,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             return
         }
         userPois.append(poi)
+        // v1.35：清除该点位已播报记录，确保新增后立即播报
+        announced.remove(poi.id)
         saveSettings(rebuildIndex: true)
         evaluateNearest(forceAnnounce: true)
     }
@@ -992,6 +994,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     func toggleUserPoi(id: String) {
         guard let idx = userPois.firstIndex(where: { $0.id == id }) else { return }
         userPois[idx].enabled.toggle()
+        // v1.35：启用已播报过的点位时清除去重记录，立即重新播报
+        announced.remove(id)
         saveSettings(rebuildIndex: true)
         evaluateNearest(forceAnnounce: true)
     }
@@ -1005,6 +1009,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         p.latitude = base.latitude
         p.longitude = base.longitude
         userPois[idx] = p
+        // v1.35：清除该点位已播报记录，修改后立即重新评估播报
+        announced.remove(poi.id)
         saveSettings(rebuildIndex: true)
         evaluateNearest(forceAnnounce: true)
     }
@@ -1024,6 +1030,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 恢复被删除的内置点位（撤销删除）
     func restoreBuiltinPoi(id: String) {
         guard deletedBuiltinIds.remove(id) != nil else { return }
+        // v1.35：清除该点位已播报记录，恢复后立即重新播报
+        announced.remove(id)
         saveSettings(rebuildIndex: true)
         evaluateNearest(forceAnnounce: true)
     }
@@ -1046,6 +1054,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         var p = builtinPatches[poi.id] ?? builtinPatches[Self.stableBuiltinId(for: poi)] ?? base
         p.enabled.toggle()
         builtinPatches[poi.id] = p
+        // v1.35：启用已播报过的内置点位时清除去重记录，立即重新播报
+        announced.remove(poi.id)
+        announced.remove(Self.stableBuiltinId(for: poi))
         saveSettings(rebuildIndex: true)
         evaluateNearest(forceAnnounce: true)
     }
@@ -1062,6 +1073,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         p.longitude = base.longitude
         builtinPatches[poi.id] = p
         builtinPatches.removeValue(forKey: Self.stableBuiltinId(for: poi))
+        // v1.35：清除该点位已播报记录，修改后立即重新评估播报
+        announced.remove(poi.id)
+        announced.remove(Self.stableBuiltinId(for: poi))
         saveSettings(rebuildIndex: true)
         evaluateNearest(forceAnnounce: true)
     }
@@ -1110,6 +1124,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                 continue
             }
             userPois.append(poi)
+            // v1.35：导入的点位若已播报过，清除记录确保立即播报
+            announced.remove(poi.id)
             added += 1
         }
         saveSettings(rebuildIndex: true)

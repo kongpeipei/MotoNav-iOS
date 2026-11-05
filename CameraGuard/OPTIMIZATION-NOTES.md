@@ -837,3 +837,25 @@ applyHibernationGate 进入休眠态，evaluateNearest 的休眠分支直接 ret
    即使处于休眠也立即评估播报。
 2. forceAnnounce 时有效播报距离直接用用户设置的基础距离（warnDistance），
    不加自适应系数，保证"在播报距离内"即触发。
+
+---
+
+# 第二十九轮（v1.35 · 新增/启用点位清除播报记录立即播报）
+
+版本 1.34 → 1.35（构建号 35 → 36）。用户反馈：新增和内置点位启用时，也可以立即播报。
+
+## 根因
+
+v1.31/v1.34 已对点位操作入口传 forceAnnounce=true，但 announced 去重记录会挡住：
+启用一个之前播报过的点位（或修改/恢复/新增坐标与已播报点位一致）时，
+`!announced.contains(best.id)` 不成立 → 不播报。
+
+## 改动
+
+新增/启用/修改/恢复/导入点位操作后清除该点位的 announced 已播报记录：
+- addUserPoi / updateUserPoi：移除 poi.id
+- toggleUserPoi：移除 id
+- restoreBuiltinPoi：移除 id
+- toggleBuiltinPoi / updateBuiltinPoi：移除 poi.id 与稳定 id
+- importPois：逐条移除导入点位 id
+（restoreAllBuiltinPois 已 removeAll，无需改动）
