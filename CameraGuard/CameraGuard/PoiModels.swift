@@ -50,9 +50,10 @@ enum PoiType: String, Codable, CaseIterable, Identifiable {
 
 /// 单个违法拍照点位（兼容仓库 poi.json：lat/lon、Int id、radiusM、enabled）
 struct Poi: Identifiable, Equatable, Codable {
-    /// 稳定标识：坐标固定到 6 位小数，避免浮点描述噪声导致同一坐标 id 抖动、SwiftUI 列表刷新异常
+    /// 稳定标识：坐标固定到 6 位小数，v1.17 起追加名称段，避免同类型同坐标但不同名的
+    /// 真实点位（如桥上/桥下、东西向两个方向）共用同一 id 导致 SwiftUI ForEach 断言崩溃。
     var id: String {
-        String(format: "%@-%.6f,%.6f", type.rawValue, latitude, longitude)
+        String(format: "%@-%.6f,%.6f#%@", type.rawValue, latitude, longitude, name)
     }
     var name: String
     var type: PoiType

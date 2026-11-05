@@ -449,3 +449,32 @@ v1.15 重新生成 AES-GCM 密文并替换内置常量（仍加密存储、运�
   `AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)`，避开 UIFeedbackGenerator
   统计链崩溃路径；新增 AudioToolbox import。
 - 内置讯飞凭证（v1.15 已验证组合）不变。
+
+---
+
+# 第十四轮（v1.17 · 修复点位管理感叹号/语音引擎进不去：ForEach 重复 id 根因）
+
+版本 1.16 → 1.17（构建号 17 → 18）。
+
+## 用户反馈（装 v1.16 后）
+
+- 语音包可用（内置讯飞凭证正常，说明 App 主体正常）
+- 点位管理点进去显示黄色感叹号页
+- 语音引擎点不进去
+
+## 根因
+
+Poi.id 是计算属性（类型+坐标6位小数）。检查仓库 poi.json（内置与云端同源 141 点）发现
+**2 组同类型且坐标 6 位小数完全相同的真实点位**（桥上/桥下、两个方向的路口）→ id 冲突 →
+PoiEditorView 的 ForEach(engine.builtinPois) 重复 id 断言失败 → iOS 26 SwiftUI 渲染错误
+占位（黄色感叹号）。语音引擎同理：老用户手动建档 + v1.13 自动补内置包可能出现同 vcn 重复
+语音包 → ForEach(engine.voicePacks) 断言。
+
+## v1.17 修复
+
+1. Poi.id 追加名称段（`类型-坐标6位#名称`）：同坐标不同名的真实点位各自独立；
+   id 为计算属性，已持久化的旧数据（remotePois/userPois）自动获得新 id。
+2. 台账双查兼容：builtinPois 的删除/补丁匹配同时查「新 id」与「稳定 id（类型+坐标6位）」，
+   老用户已删除/已修改的点不复活、不丢失；新操作按精确 id 隔离，删桥上不影响桥下。
+3. parsePois 按展示 id 去重（保首个），内置库与云端更新共用，杜绝未来数据再次冲突。
+4. loadVoicePacks 按 vcn 去重，清理旧版本可能留下的重复语音包。

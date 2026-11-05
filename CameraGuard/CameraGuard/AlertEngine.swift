@@ -113,10 +113,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var liveActivity: Activity<CameraGuardActivityAttributes>?
 
 
+    /// v1.8 起内置点位台账的稳定 id：类型+坐标6位（不含名称）。
+    /// v1.17 显示 id 追加名称段后，台账读写继续以稳定 id 兜底双查，保证老用户已删除/已补丁的
+    /// 点位不会复活或丢失，同时让「桥上/桥下」等同坐标真实点位各自独立。
+    static func stableBuiltinId(for p: Poi) -> String {
+        String(format: "%@-%.6f,%.6f", p.type.rawValue, p.latitude, p.longitude)
+    }
+
     /// 内置点位生效列表 = 内置 - 已删除，再叠加用户补丁（坐标与类型始终不变）
     var builtinPois: [Poi] {
-        basePois.filter { !deletedBuiltinIds.contains($0.id) }
-            .map { builtinPatches[$0.id] ?? $0 }
+        basePois
+            .filter { !deletedBuiltinIds.contains($0.id) && !deletedBuiltinIds.contains(Self.stableBuiltinId(for: $0)) }
+            .map { builtinPatches[$0.id] ?? builtinPatches[Self.stableBuiltinId(for: $0)] ?? $0 }
     }
 
     /// v1.11 内置点位基础库：云端更新库（在线更新后持久化）优先，否则回退 Bundle 内置库
@@ -254,7 +262,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let defaults = UserDefaults.standard
         if let data = defaults.data(forKey: "voicePacks"),
            let decoded = try? JSONDecoder().decode([VoicePack].self, from: data) {
-            voicePacks = decoded
+            // v1.17：按 vcn 去重，旧版本多次建档可能留下同 vcn 重复包，会导致列表 ForEach 断言崩溃
+            var seen = Set<String>()
+            voicePacks = decoded.filter { seen.insert($0.vcn).inserted }
         }
         let savedVcn = (defaults.string(forKey: "xfVcn") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveVcn = savedVcn.isEmpty ? xfVcn : savedVcn
@@ -287,9 +297,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 云端点位库地址：仓库 main 分支的 poi.json（随仓库更新即全网同步，零服务器成本）
     static let remotePointsURL = "https://raw.githubusercontent.com/kongpeipei/MotoNav-iOS/main/CameraGuard/CameraGuard/poi.json"
 
-    /// 逐条解析点位数组（坏条目跳过），Bundle 内置库与云端更新共用同一解析
+    /// 逐条解析点位数组（坏条目跳过；v1.17 按展示 id 去重，防重复点导致 ForEach 断言）。
+    /// Bundle 内置库与云端更新共用同一解析。
     private static func parsePois(_ raw: [[String: Any]]) -> [Poi] {
-        raw.compactMap { dict -> Poi? in
+        var seen = Set<String>()
+        return raw.compactMap { dict -> Poi? in
             guard let name = dict["name"] as? String,
                   let typeRaw = dict["type"] as? String,
                   let type = PoiType(rawValue: typeRaw),
@@ -299,6 +311,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
                        radiusM: (dict["radiusM"] as? NSNumber)?.doubleValue ?? 500,
                        enabled: (dict["enabled"] as? Bool) ?? true)
         }
+        .filter { seen.insert($0.id).inserted }
     }
 
     /// 恢复上次在线更新保存的云端点位库
