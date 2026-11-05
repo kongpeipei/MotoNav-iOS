@@ -23,6 +23,9 @@
 		CA0000000000000000000014 /* CarPlaySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000011 /* CarPlaySupport.swift */; };
 		CA0000000000000000000015 /* silence.wav in Resources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000012 /* silence.wav */; };
 		CA0000000000000000000016 /* XfyunCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000013 /* XfyunCredentials.swift */; };
+		CA0000000000000000000017 /* RingLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000014 /* RingLog.swift */; };
+		CA0000000000000000000018 /* LogViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000015 /* LogViewer.swift */; };
+		CA0000000000000000000019 /* LogExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0000000000000000000016 /* LogExporter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +48,9 @@
 		CB0000000000000000000011 /* CarPlaySupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySupport.swift; sourceTree = "<group>"; };
 		CB0000000000000000000012 /* silence.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = silence.wav; sourceTree = "<group>"; };
 		CB0000000000000000000013 /* XfyunCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XfyunCredentials.swift; sourceTree = "<group>"; };
+		CB0000000000000000000014 /* RingLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingLog.swift; sourceTree = "<group>"; };
+		CB0000000000000000000015 /* LogViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogViewer.swift; sourceTree = "<group>"; };
+		CB0000000000000000000016 /* LogExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogExporter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +94,9 @@
 				CB0000000000000000000010 /* ActivityAttributes.swift */,
 				CB0000000000000000000011 /* CarPlaySupport.swift */,
 				CB0000000000000000000013 /* XfyunCredentials.swift */,
+				CB0000000000000000000014 /* RingLog.swift */,
+				CB0000000000000000000015 /* LogViewer.swift */,
+				CB0000000000000000000016 /* LogExporter.swift */,
 				CB0000000000000000000007 /* Assets.xcassets */,
 				CB0000000000000000000006 /* poi.json */,
 				CB0000000000000000000012 /* silence.wav */,
@@ -240,6 +249,9 @@
 				CA0000000000000000000012 /* ActivityAttributes.swift in Sources */,
 				CA0000000000000000000016 /* XfyunCredentials.swift in Sources */,
 				CA0000000000000000000014 /* CarPlaySupport.swift in Sources */,
+				CA0000000000000000000017 /* RingLog.swift in Sources */,
+				CA0000000000000000000018 /* LogViewer.swift in Sources */,
+				CA0000000000000000000019 /* LogExporter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
