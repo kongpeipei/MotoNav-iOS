@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.21/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.22/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -172,9 +172,23 @@ struct ContentView: View {
     private var nearestCard: some View {
         VStack(spacing: 8) {
             if let p = engine.nearest, engine.nearestDistance < .greatestFiniteMagnitude {
-                Text(distanceText(engine.nearestDistance))
-                    .font(.system(size: 44, weight: .heavy, design: .rounded))
-                    .foregroundStyle(engine.nearestDistance <= effectiveWarn ? .red : .primary)
+                // v1.22：两公里内有抓拍点 → 距离后方显示红色小三角（白色感叹号）
+                HStack(alignment: .center, spacing: 10) {
+                    Text(distanceText(engine.nearestDistance))
+                        .font(.system(size: 44, weight: .heavy, design: .rounded))
+                        .foregroundStyle(engine.nearestDistance <= effectiveWarn ? .red : .primary)
+                    if engine.nearestDistance <= 2000 {
+                        TriangleShape()
+                            .fill(Color.red)
+                            .frame(width: 15, height: 13)
+                            .overlay(
+                                Text("!")
+                                    .font(.system(size: 9, weight: .heavy))
+                                    .foregroundStyle(.white)
+                            )
+                            .accessibilityLabel("两公里内有抓拍点")
+                    }
+                }
 
                 HStack(spacing: 6) {
                     Image(systemName: p.type.icon)
@@ -559,5 +573,19 @@ struct ContentView: View {
 
     private var voiceEngineSummary: String {
         engine.ttsProvider == .system ? "系统语音" : "讯飞 · \(engine.voiceDisplayName)"
+    }
+}
+
+// MARK: - v1.22 两公里警告三角（红色小三角 + 白色感叹号）
+
+/// 等边三角路径：顶点在上、底边在下
+struct TriangleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
