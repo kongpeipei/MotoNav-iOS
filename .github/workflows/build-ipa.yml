@@ -14,8 +14,8 @@
 #      ExportOptions 合并进 2 个步骤，减少 step 启动开销。
 #   4. 瘦身与装包合并：归档后只解包一次、压缩一次（旧版 zip→unzip→zip 三轮）。
 #   5. 产物上传用 compression-level 0（IPA 已是压缩包，再压纯属浪费 CPU）。
-#   6. 保留安全校验：PlugIns 已剥离（v2.03 起刻意不带扩展，避免重签后启动闪退）、
-#      CarPlay 场景声明已移除、主程序 Info 完整。
+#   6. 安全校验：v2.31 起保留 Widget 扩展（灵动岛/锁屏提醒必需，与 CameraGuard 同链路），
+#      校验 PlugIns 存在、CarPlay 场景声明已移除、主程序 Info 完整。
 # =============================================================================
 name: Build IPA
 
@@ -253,14 +253,10 @@ jobs:
           APP=$(find "$RUNNER_TEMP/MotoNav.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' | head -1)
           cp -R "$APP" "$W/Payload/"
 
-          # v2.03 关键：剥离 Widget 扩展（PlugIns）
-          # 第三方签名服务（企业证书/全能签一类）重签时经常只签主 App、漏签或错签 appex，
-          # 或者改了主 App 的 BundleID 却没同步改 appex 的子标识；
-          # 这两种情况 iOS 启动校验都会直接杀掉主进程 —— 现象就是「点图标闪一下退回桌面」。
-          # 扩展只用于灵动岛/锁屏提醒，剥离后 App 全部功能正常，只是没有灵动岛卡片，
-          # 换来的是重签成功率的数量级提升（单二进制，签名工具没有出错空间）。
-          rm -rf "$W/Payload"/*.app/PlugIns
-          echo "== 已剥离扩展 =="
+          # v2.31：保留 Widget 扩展（PlugIns）
+          # 灵动岛/锁屏提醒必须依赖 Widget 扩展；与 CameraGuard 同链路（v1.30 起验证可用）。
+          # 全能签重签时会对 app + appex 一并重签，bundleID 子标识已在工程内对齐。
+          echo "== 保留 Widget 扩展（灵动岛必需）=="
 
           # 瘦身：调试附件 + Swift 模块接口（重签后无用）
           find "$W/Payload" -name '*.dSYM' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -279,15 +275,14 @@ jobs:
           echo "== 冒烟检查 =="
           python3 .ci/smoke_ipa.py "$OUT" "$MARKETING"
 
-          # ---- 结构校验：v2.03 起刻意不带扩展；带扩展反而会让重签失败 ----
+          # ---- 结构校验：v2.31 起必须带 Widget 扩展（灵动岛必需） ----
           echo "== IPA 结构 =="
           APPIN="Payload/$(basename "$APP")/"   # 末尾斜杠：下面所有拼接都靠它
-          if unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/"; then
-            echo "!! 包内仍残留 PlugIns（会导致重签后启动即闪退）"
-            unzip -Z1 "$OUT" | grep PlugIns | head
+          if ! unzip -Z1 "$OUT" | grep -q "^${APPIN}PlugIns/"; then
+            echo "!! 包内缺少 PlugIns（灵动岛/锁屏提醒无法工作）"
             exit 1
           fi
-          echo "  PlugIns: 已剥离（单二进制，重签最稳）"
+          echo "  PlugIns: 已保留（Widget 扩展，灵动岛/锁屏提醒可用）"
           echo "  CarPlay 场景声明: $(unzip -p "$OUT" "${APPIN}Info.plist" | /usr/libexec/PlistBuddy -c 'Print :UIApplicationSceneManifest' 2>/dev/null >/dev/null && echo '存在(异常)' || echo '已移除')"
           echo "== 主程序 Info =="
           unzip -p "$OUT" "${APPIN}Info.plist" > "$RUNNER_TEMP/main.plist"

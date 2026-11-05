@@ -72,12 +72,12 @@ def main():
     app = app_dirs.pop()
     print(f"  主程序: {app}")
 
-    # ── 2. PlugIns（重签失败的头号原因）────────────────────────
+    # ── 2. PlugIns（v2.31 起必须保留：灵动岛/锁屏提醒依赖 Widget 扩展）──
     plugins = [n for n in names if "/PlugIns/" in n]
-    if plugins:
-        fail(f"包内残留 PlugIns（会导致重签后启动即闪退）：{plugins[:3]}", errors)
+    if not plugins:
+        fail("包内缺少 PlugIns（Widget 扩展缺失，灵动岛/锁屏提醒无法工作）", errors)
     else:
-        notes.append("PlugIns: 已剥离（单二进制，重签最稳）")
+        notes.append(f"PlugIns: 已保留（{len(plugins)} 个扩展，灵动岛可用）")
 
     # ── 3. CarPlay 场景声明 ───────────────────────────────────
     plist_name = f"Payload/{app}/Info.plist"
