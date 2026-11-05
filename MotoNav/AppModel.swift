@@ -154,9 +154,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.34 体验审查 E7：最近一次播报时间（供导航底卡"播报中"喇叭指示，2.5s 内高亮）
     @Published private(set) var lastSpeakAt = Date.distantPast
     /// v2.36 F2 灵动岛更新节流：Live Activity 更新是 XPC 开销，5 秒一次足够锁屏读数
-    private var lastActivityUpdate: TimeInterval = 0
+    private var lastActivityUpdate = Date(timeIntervalSince1970: 0)
     /// v2.36 F5 超速播报节流（30 秒内不重复；回到限速内后重置）
-    private var lastOverspeedSpeak: TimeInterval = 0
+    private var lastOverspeedSpeak = Date(timeIntervalSince1970: 0)
     /// v2.38 H1 实际行驶距离累计（m，导航中每次发布移动 >5m 累加）：
     /// 行程卡/足迹显示真实里程，而非高德规划距离（偏航绕路时规划值偏小）
     private var actualTripM = 0.0
@@ -1449,9 +1449,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let loc = locations.last else { return }
         let coord = loc.coordinate
         // v2.34 前后台切换时刷新定位采样频率（后台 50m / 前台按运动状态分级）
-        if UIApplication.shared.applicationState != lastLocationFilterAppState {
-            lastLocationFilterAppState = UIApplication.shared.applicationState
-            Task { @MainActor in self.updateLocationFilter() }
+        // v2.47 修复：didUpdateLocations 为非隔离上下文，属性访问须进 MainActor
+        Task { @MainActor in
+            if UIApplication.shared.applicationState != self.lastLocationFilterAppState {
+                self.lastLocationFilterAppState = UIApplication.shared.applicationState
+                self.updateLocationFilter()
+            }
         }
         Task { @MainActor in
             // v2.14 发布降频：位置/精度/速度是「界面重建」的触发器。
@@ -1501,7 +1504,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                         speak("您已超速，当前速度\(Int(currentSpeed * 3.6))", priority: 2)
                     }
                 } else {
-                    lastOverspeedSpeak = 0
+                    lastOverspeedSpeak = Date(timeIntervalSince1970: 0)
                 }
             }
             // v1.99 组队位置上报（未组队时是空操作）
@@ -1591,7 +1594,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 startMonitoring()
             } else if status == .denied || status == .restricted {
                 locationDenied = true
-                status = "需要定位权限才能导航，点上方横幅可去设置开启"
+                self.status = "需要定位权限才能导航，点上方横幅可去设置开启"
             }
         }
     }
