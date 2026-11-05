@@ -65,14 +65,12 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     /// v2.12 外观跟随：手动浅色/深色时地图底图一起切（导航中始终深色）
     @Environment(\.colorScheme) private var colorScheme
-    let pois: [Poi]
     let userLocation: CLLocationCoordinate2D?
     let route: [CLLocationCoordinate2D]
     /// 全部路线方案折线（规划态同时显示：推荐草绿 + 备选浅绿，高德式）
     let choiceRoutes: [[CLLocationCoordinate2D]]
     /// 当前选中方案下标（高德式：选中草绿实线，其余浅绿虚线）
     let selectedRouteIdx: Int
-    let routePois: [Poi]
     /// 定位请求计数（点击定位按钮 +1，触发地图回中）
     let locateTick: Int
     /// 路线全览请求计数（规划完成 +1，触发地图缩放全览）
@@ -107,11 +105,6 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// v2.01 比例尺回调（缩放时把"58pt 代表多少米"回传给 SwiftUI 右上角比例尺）
     var onScaleChange: ((String) -> Void)?
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
-    var onPoiLongPress: ((Poi) -> Void)?
-    var onPoiMoved: ((Poi, Double, Double) -> Void)?
-    var onPoiSelect: ((Poi) -> Void)?
-    /// v2.26 电警点轻点回调（官方公示点位 → 弹出分享/删除卡片）
-    var onCameraSelect: ((PoliceCamera) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
     var onPlaceLongPress: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -137,14 +130,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     var teamMembers: [TeamMember] = []
     /// v1.69 地图加载回调（ok=true 渲染完成 / ok=false 失败原因）
     var onMapLoad: ((Bool, String) -> Void)?
-    /// v2.04 官方电警点位（图层开启时传入，关闭传空数组）
-    var cameraMarks: [PoliceCamera] = []
-    /// v2.04 刚触发语音提醒的点位 id（地图上该点放大高亮 2 秒，视觉与语音对齐）
-    var hotCameraId: Int = 0
     /// v2.19 路线途经点（WGS-84，橙色"途"标注，随卡片增删同步）
     var waypointMarks: [CLLocationCoordinate2D] = []
-    /// v2.20 电警点被手动拖动后的新坐标（WGS-84，id + lat + lon）
-    var onCameraMoved: ((Int, Double, Double) -> Void)?
     /// v2.23 搜索选点连线：当前定位点 → 搜索选点（WGS-84）。nil = 不画。
     /// 用于"点联想地点后地图跳到该点，并用黑线连回我的位置"，一眼看出直线距离。
     var searchLinkFrom: CLLocationCoordinate2D? = nil
@@ -226,14 +213,8 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.onLongPress = onLongPress
-        context.coordinator.onPoiLongPress = onPoiLongPress
-        context.coordinator.onPoiMoved = onPoiMoved
-        context.coordinator.onCameraMoved = onCameraMoved
         context.coordinator.traveledIdx = traveledIdx
         context.coordinator.onUserMovedChanged = onUserMovedChanged
-        context.coordinator.onPoiSelect = onPoiSelect
-        // v2.26 电警点轻点 → 分享/删除卡片
-        context.coordinator.onCameraSelect = onCameraSelect
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onPlaceLongPress = onPlaceLongPress
         context.coordinator.onCategorySelect = onCategorySelect
@@ -254,11 +235,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         } else if !context.coordinator.hasCentered, let loc = userLocation {
-            // 首次定位：设置初始区域
+            // 首次定位：设置初始区域（v2.33 3000m→1200m：冷启动看清街道与路口，而非城市级大视野）
             context.coordinator.hasCentered = true
             context.coordinator.setRegionProgrammatically {
                 map.setRegion(
-                    MKCoordinateRegion(center: MapGeo.toGCJ(loc), latitudinalMeters: 3000, longitudinalMeters: 3000),
+                    MKCoordinateRegion(center: MapGeo.toGCJ(loc), latitudinalMeters: 1200, longitudinalMeters: 1200),
                     animated: false)
             }
         }
@@ -268,7 +249,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let tf = tipFit {
                 // v1.81.1 地点信息卡：地图定位到该点（不画黄圈，卡片沉底展示）
                 context.coordinator.setRegionProgrammatically {
-                    map.setRegion(MKCoordinateRegion(center: MapGeo.toGCJ(tf), latitudinalMeters: 3000, longitudinalMeters: 3000), animated: true)
+                    map.setRegion(MKCoordinateRegion(center: MapGeo.toGCJ(tf), latitudinalMeters: 1200, longitudinalMeters: 1200), animated: true)
                 }
             } else if route.count > 1 {
                 var rect = MKMapRect.null
@@ -293,100 +274,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
                 map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
-            }
-        }
-        // 【v2.12 性能】标注同步：内容键 + 一次性索引
-        // 旧写法是 `for p in pois { map.annotations.contains { ... } }` —— O(点位 × 全部标注)。
-        // 内置点位 300+、地名标签最多 600、电警 56，一帧就是几十万次比较；
-        // 而 updateUIView 每秒会被定位/状态变化触发多次，这是地图页卡顿的主因。
-        // 现在先算内容键，没变直接跳过；变了才遍历一次 annotations 建索引。
-        var poiHasher = Hasher()
-        poiHasher.combine(pois.count)
-        poiHasher.combine(minimal)
-        for p in pois {
-            poiHasher.combine(p.id); poiHasher.combine(p.enabled); poiHasher.combine(p.lat)
-            poiHasher.combine(p.lon); poiHasher.combine(p.type.rawValue); poiHasher.combine(p.isCustom)
-        }
-        for p in routePois { poiHasher.combine(p.id) }
-        let poiKey = poiHasher.finalize()
-
-        if poiKey != context.coordinator.lastPoiKey {
-            context.coordinator.lastPoiKey = poiKey
-            var index: [Int64: PoiAnnotation] = [:]
-            for a in map.annotations {
-                if let x = a as? PoiAnnotation { index[x.poi.id] = x }
-            }
-            let ids = Set(pois.map(\.id))
-            let onRouteIds = Set(routePois.map(\.id))
-            for (id, a) in index where !ids.contains(id) {
-                map.removeAnnotation(a)
-                index[id] = nil
-            }
-            for p in pois {
-                let onRoute = onRouteIds.contains(p.id)
-                if let a = index[p.id] {
-                    if a.poi.coordinate != p.coordinate || a.poi.isCustom != p.isCustom {
-                        // 坐标/自定义标记变化（拖动或编辑后）：移除重建以刷新 marker 视图
-                        map.removeAnnotation(a)
-                        let na = PoiAnnotation(poi: p, onRoute: onRoute)
-                        map.addAnnotation(na)
-                        index[p.id] = na
-                    } else {
-                        a.poi = p
-                        a.onRoute = onRoute
-                    }
-                } else {
-                    let na = PoiAnnotation(poi: p, onRoute: onRoute)
-                    map.addAnnotation(na)
-                    index[p.id] = na
-                }
-            }
-        }
-
-        // v2.04 官方电警点位图层（按 id 增量同步）
-        var camHasher = Hasher()
-        camHasher.combine(cameraMarks.count)
-        for c in cameraMarks { camHasher.combine(c.id); camHasher.combine(c.lat); camHasher.combine(c.lon) }
-        let camKey = camHasher.finalize()
-        if camKey != context.coordinator.lastCamKey {
-            context.coordinator.lastCamKey = camKey
-            let camIds = Set(cameraMarks.map(\.id))
-            var existing: [Int: CameraAnnotation] = [:]
-            for a in map.annotations {
-                if let x = a as? CameraAnnotation { existing[x.cameraId] = x }
-            }
-            for (id, a) in existing where !camIds.contains(id) {
-                map.removeAnnotation(a)
-                existing[id] = nil
-            }
-            for c in cameraMarks {
-                if let a = existing[c.id] {
-                    // v2.20 人工校准/恢复官方坐标后，把标注挪到新位置
-                    // （拖动中的那个点跳过，否则会被拉回旧坐标）
-                    if context.coordinator.draggingCameraId != c.id {
-                        let want = MapGeo.toGCJ(c.coordinate)
-                        if abs(a.coordinate.latitude - want.latitude) > 1e-7
-                            || abs(a.coordinate.longitude - want.longitude) > 1e-7 {
-                            a.setCoordinate(want)
-                        }
-                    }
-                } else {
-                    let na = CameraAnnotation(camera: c, hot: 0)
-                    map.addAnnotation(na)
-                    existing[c.id] = na
-                }
-            }
-        }
-        // 刚播报的点位：外圈加粗 + 放大，让"听到的"和"看到的"是同一个点
-        // v2.12：只在 hotCameraId 变化时扫一遍，不再每帧遍历全部标注
-        if hotCameraId != context.coordinator.lastHotCameraId {
-            context.coordinator.lastHotCameraId = hotCameraId
-            for a in map.annotations.compactMap({ $0 as? CameraAnnotation }) {
-                let want = (a.cameraId == hotCameraId && hotCameraId != 0)
-                if a.isHot != want {
-                    a.isHot = want
-                    (map.view(for: a) as? CameraPinView)?.setHot(want)
-                }
             }
         }
         // v2.19 途经点标注（高德式橙色"途"，内容键相同跳过）
@@ -451,7 +338,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .none
                     map.setRegion(
-                        MKCoordinateRegion(center: MapGeo.toGCJ(p), latitudinalMeters: 3000, longitudinalMeters: 3000),
+                        MKCoordinateRegion(center: MapGeo.toGCJ(p), latitudinalMeters: 1200, longitudinalMeters: 1200),
                         animated: true)
                 }
             }
@@ -745,6 +632,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         if !context.coordinator.userMoved {
             map.camera.heading = CLLocationDirection(heading)
         }
+        // v2.32 MapKit 3D 俯视加固：部分机型在 followWithHeading 下会把 pitch 重置回 0
+        // （MapKit known issue：3D 相机由系统接管）。导航态每 ≥3 秒检测一次，
+        // 俯角被吞（<30°）就恢复 45°；不打断手势、不每次刷新。
+        if navigating, pitchDeg > 0, !context.coordinator.userMoved,
+           Date().timeIntervalSince(context.coordinator.lastPitchRestoreAt) > 3,
+           map.camera.pitch < 30 {
+            context.coordinator.lastPitchRestoreAt = Date()
+            context.coordinator.setRegionProgrammatically {
+                var cam = map.camera
+                cam.pitch = 45
+                map.camera = cam
+            }
+        }
         // v1.81 地点查看：强制北向上一次（暂停朝向跟随，避免下一帧转回）
         if northUpTick != context.coordinator.lastNorthUpTick {
             context.coordinator.lastNorthUpTick = northUpTick
@@ -796,6 +696,12 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // v2.28：与 navScaleTick 用同一套换算（真实物理尺寸）
                     cam.centerCoordinateDistance = MapViewRepresentable.altitudeForScale(navScaleTarget,
                                                                            screenH: map.bounds.height)
+                } else {
+                    // v2.33 退出导航/到达/清路线：回 2D 平视，导航 45° 俯视不残留
+                    // （到达终点分支此前没把 pitchDeg 置 0，地图会一直停在俯视视角）
+                    var cam = map.camera
+                    cam.pitch = 0
+                    map.camera = cam
                 }
             }
         }
@@ -833,7 +739,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         } else if navigating, let loc = userLocation {
             context.coordinator.navLastFollow = loc
         }
-        // v1.84 巡航模式：进入时缩放巡航视野（约 3000m 高，平视），随后定位点跟随（GPS 抖动 >25m 才更新相机）
+        // v1.84 巡航模式：进入时缩放巡航视野（约 2000m 高，平视），随后定位点跟随（GPS 抖动 >25m 才更新相机）
         if cruise != context.coordinator.lastCruise {
             context.coordinator.lastCruise = cruise
             if cruise, let loc = userLocation {
@@ -842,7 +748,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.setRegionProgrammatically {
                     var cam = map.camera
                     cam.centerCoordinate = MapGeo.toGCJ(loc)
-                    cam.altitude = 3000
+                    cam.altitude = 2000
                     cam.pitch = 0
                     map.camera = cam
                 }
@@ -906,19 +812,6 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var onLongPress: ((CLLocationCoordinate2D) -> Void)?
-        var onPoiLongPress: ((Poi) -> Void)?
-        var onPoiMoved: ((Poi, Double, Double) -> Void)?
-        /// v2.20 电警点拖动落点回调（id, lat, lon —— WGS）
-        var onCameraMoved: ((Int, Double, Double) -> Void)?
-        /// v2.20 正在被拖动的电警点 id（拖动中不覆盖坐标）
-        var draggingCameraId: Int = 0
-        /// 长按拖动校准状态
-        private var dragAnnotation: PoiAnnotation?
-        private var dragStartPt: CGPoint = .zero
-        private var dragStartCoord: CLLocationCoordinate2D?
-        var onPoiSelect: ((Poi) -> Void)?
-        /// v2.26 电警点轻点回调（官方公示点位 → 弹出分享/删除卡片）
-        var onCameraSelect: ((PoliceCamera) -> Void)?
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onPlaceLongPress: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -1005,6 +898,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastFocusTick = -1
         /// v2.22 已处理过的视野档位
         var lastNavScaleTick = -1
+        // v2.32 MapKit 3D 俯视加固：导航态节流检查 pitch 是否被系统重置
+        var lastPitchRestoreAt = Date.distantPast
         /// v2.22 已走过的折线索引（灰色部分）
         var traveledIdx = 0
         /// v2.22 已走过的折线（灰色层）
@@ -1035,14 +930,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastScaleText = ""
         /// v2.02 折线重建键（内容不变就不重建，避免闪烁/卡顿）
         var lastRouteKey = ""
-        /// v2.12 标注同步键：点位/电警/加油站/地名/类别内容不变就整段跳过，
+        /// v2.12 标注同步键：加油站/地名/类别内容不变就整段跳过，
         /// 避免每秒多次全表扫描（原来一帧要几十万次比较，是地图页卡顿的主因）
-        var lastPoiKey: Int?
-        var lastCamKey: Int?
         var lastGasKey: Int?
         var lastPlaceKey: Int?
         var lastCatKey: Int?
-        var lastHotCameraId: Int?
         var lastEndKey = ""
         /// v2.14 首屏加载完成只上报一次（详见 mapViewDidFinishRenderingMap）
         var loadReadyReported = false
@@ -1165,81 +1057,23 @@ struct MapViewRepresentable: UIViewRepresentable {
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
             guard let map = gesture.view as? MKMapView else { return }
             let pt = gesture.location(in: map)
-            switch gesture.state {
-            case .began:
-                // v2.20 电警点用 MapKit 原生拖拽（跟手），长按别去抢它：
-                // 命中电警标注时直接放行，避免拖动时又弹出地点卡
-                for a in map.annotations {
-                    if let ca = a as? CameraAnnotation {
-                        let ap = map.convert(ca.coordinate, toPointTo: map)
-                        if hypot(pt.x - ap.x, pt.y - ap.y) < 34 { return }
-                    }
+            guard gesture.state == .began else { return }
+            // 命中地点名标签 → 地点信息卡；否则空白长按
+            var bestPlace: PlaceLabel?
+            var bestPlaceDist = CGFloat.greatestFiniteMagnitude
+            for a in map.annotations {
+                if let pla = a as? PlaceAnnotation {
+                    let ap = map.convert(pla.coordinate, toPointTo: map)
+                    let d = hypot(pt.x - ap.x, pt.y - ap.y)
+                    if d < 44 && d < bestPlaceDist { bestPlaceDist = d; bestPlace = pla.place }
                 }
-                // 命中已有点位标注 → 进入拖动校准；否则空白长按菜单
-                var best: Poi?
-                var bestDist = CGFloat.greatestFiniteMagnitude
-                for a in map.annotations {
-                    if let pa = a as? PoiAnnotation {
-                        let ap = map.convert(pa.coordinate, toPointTo: map)
-                        let d = hypot(pt.x - ap.x, pt.y - ap.y)
-                        if d < 40 && d < bestDist { bestDist = d; best = pa.poi }
-                    }
-                }
-                if let p = best {
-                    dragStartPt = pt
-                    dragStartCoord = p.coordinate
-                    dragAnnotation = map.annotations
-                        .compactMap { $0 as? PoiAnnotation }
-                        .first { $0.poi.id == p.id }
-                } else {
-                    // v1.81：长按地点名标签 → 地图高亮+北向上+地点信息卡
-                    var bestPlace: PlaceLabel?
-                    var bestPlaceDist = CGFloat.greatestFiniteMagnitude
-                    for a in map.annotations {
-                        if let pla = a as? PlaceAnnotation {
-                            let ap = map.convert(pla.coordinate, toPointTo: map)
-                            let d = hypot(pt.x - ap.x, pt.y - ap.y)
-                            if d < 44 && d < bestPlaceDist { bestPlaceDist = d; bestPlace = pla.place }
-                        }
-                    }
-                    if let p = bestPlace {
-                        onPlaceLongPress?(p)
-                    } else {
-                        // v2.00 地图返回 GCJ，业务层要 WGS
-                        let coord = MapGeo.toWGS(map.convert(pt, toCoordinateFrom: map))
-                        onLongPress?(coord)
-                    }
-                }
-            case .changed:
-                if let ann = dragAnnotation {
-                    // v2.00 dragCoordinate 存 WGS（coordinate 输出时会再转 GCJ）
-                    let newCoord = MapGeo.toWGS(map.convert(pt, toCoordinateFrom: map))
-                    ann.dragCoordinate = newCoord
-                    // 地图跟随平移（高德拖拽标记行为）：标注始终保持在手指下，可拖出屏幕范围继续移动
-                    let ap = map.convert(ann.coordinate, toPointTo: map)
-                    let dx = pt.x - ap.x
-                    let dy = pt.y - ap.y
-                    if abs(dx) > 1 || abs(dy) > 1 {
-                        let center = map.convert(
-                            CGPoint(x: map.bounds.midX + dx, y: map.bounds.midY + dy),
-                            toCoordinateFrom: map)
-                        setRegionProgrammatically {
-                            map.setCenter(center, animated: false)
-                        }
-                    }
-                }
-            case .ended, .cancelled:
-                guard let ann = dragAnnotation, let poi = dragStartCoord != nil ? ann.poi : nil else { return }
-                let moved = hypot(pt.x - dragStartPt.x, pt.y - dragStartPt.y) > 20
-                let final = ann.dragCoordinate ?? dragStartCoord!
-                ann.dragCoordinate = nil
-                dragAnnotation = nil
-                if moved && gesture.state == .ended {
-                    onPoiMoved?(poi, final.latitude, final.longitude)
-                } else if gesture.state == .ended {
-                    onPoiLongPress?(poi)
-                }
-            default: break
+            }
+            if let p = bestPlace {
+                onPlaceLongPress?(p)
+            } else {
+                // v2.00 地图返回 GCJ，业务层要 WGS
+                let coord = MapGeo.toWGS(map.convert(pt, toCoordinateFrom: map))
+                onLongPress?(coord)
             }
         }
 
@@ -1295,7 +1129,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 } else if let ca = a as? CategoryAnnotation {
                     onCategorySelect?(ca.result)
                 }
-                // 其它标注（拍照点位/起终点/加油站）维持原样：吞掉点击，不当作空白
+                // 其它标注（起终点/加油站）维持原样：吞掉点击，不当作空白
                 return
             }
             onMapTap?(coord)
@@ -1359,71 +1193,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             onMapLoad?(false, error.localizedDescription)
         }
 
-        /// v2.20 电警点拖动：跟手移动 → 松手落点 → 回写坐标（持久化）
-        func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView,
-                     didChange newState: MKAnnotationView.DragState,
-                     fromOldState oldState: MKAnnotationView.DragState) {
-            guard let cam = view.annotation as? CameraAnnotation else { return }
-            switch newState {
-            case .starting:
-                cam.beginDrag()
-                draggingCameraId = cam.cameraId
-            case .dragging:
-                // MapKit 已把 annotation.coordinate 更新为新位置（GCJ）
-                // v2.20 拖到屏幕边缘时地图跟着走，避免标注被拖出可视区找不回来
-                let p = mapView.convert(cam.coordinate, toPointTo: mapView)
-                let b = mapView.bounds
-                let margin: CGFloat = 90
-                var dx: CGFloat = 0, dy: CGFloat = 0
-                if p.x < b.minX + margin { dx = p.x - (b.minX + margin) }
-                else if p.x > b.maxX - margin { dx = p.x - (b.maxX - margin) }
-                if p.y < b.minY + margin { dy = p.y - (b.minY + margin) }
-                else if p.y > b.maxY - margin { dy = p.y - (b.maxY - margin) }
-                if dx != 0 || dy != 0 {
-                    let center = mapView.convert(CGPoint(x: b.midX + dx, y: b.midY + dy),
-                                                toCoordinateFrom: mapView)
-                    mapView.setCenter(center, animated: false)
-                }
-            case .ending:
-                draggingCameraId = 0
-                // 以"图钉最终屏幕位置"反算坐标（不依赖 MapKit 是否回写 annotation.coordinate），
-                // 保证松手落点与手指位置一致
-                let gcj = mapView.convert(view.center, toCoordinateFrom: mapView)
-                cam.setCoordinate(gcj)
-                let wgs = MapGeo.toWGS(gcj)
-                // 几乎没动就不写覆盖表（避免误触产生一堆无效校准）
-                let dx = (wgs.latitude - cam.originWGS.latitude) * 111_000
-                let dy = (wgs.longitude - cam.originWGS.longitude) * 94_000
-                if hypot(dx, dy) > 3 {
-                    onCameraMoved?(cam.cameraId, wgs.latitude, wgs.longitude)
-                }
-            case .canceling:
-                draggingCameraId = 0
-                cam.cancelDrag()
-            case .none:
-                draggingCameraId = 0
-            @unknown default:
-                draggingCameraId = 0
-            }
-        }
-
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            // 点击地点：高亮显示名称并回调（取消系统选中态，避免遮挡）
-            if let pa = view.annotation as? PoiAnnotation {
-                mapView.deselectAnnotation(view.annotation, animated: false)
-                onPoiSelect?(pa.poi)
-            } else if let pla = view.annotation as? PlaceAnnotation {
+            // 点击标注：取消系统选中态（避免遮挡）
+            if let pla = view.annotation as? PlaceAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onPlaceSelect?(pla.place)
             } else if let ca = view.annotation as? CategoryAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onCategorySelect?(ca.result)
-            } else if let cam = view.annotation as? CameraAnnotation {
-                // v2.26 轻点官方电警点 → 弹出"分享 + 删除"卡片（此前点击完全没反应）
-                mapView.deselectAnnotation(view.annotation, animated: false)
-                if let c = cam.camera {
-                    onCameraSelect?(c)
-                }
             }
         }
 
@@ -1533,37 +1310,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.displayPriority = .required
                 return v
             }
-            // v2.04 官方电警点位：红底相机图标（比 MKMarker 轻，几十个点也不拖慢瓦片）
-            if let cam = annotation as? CameraAnnotation {
-                let id = "policeCam"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? CameraPinView
-                    ?? CameraPinView(annotation: cam, reuseIdentifier: id)
-                v.annotation = cam
-                // v2.27（建议 #29）网络同步的点位标成"待校准"样式（缩小一号，提示可拖动修正）
-                v.configure(kind: cam.kind, pending: cam.isPending)
-                v.setHot(cam.isHot)
-                // v2.20 电警点可跟手拖动：MapKit 原生拖拽，手指点哪落到哪
-                v.isDraggable = true
-                return v
-            }
-            guard let pa = annotation as? PoiAnnotation else { return nil }
-            let id = "poi"
-            let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
-                ?? MKMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
-            v.markerTintColor = pa.poi.type.color
-            v.titleVisibility = .adaptive
-            v.glyphText = String(pa.poi.type.label.prefix(1))
-            // 沿途点位：白色描边高亮（优先）；用户自定义/移动过的点位：橙色描边（可与内置点位区分）
-            if pa.onRoute {
-                v.layer.borderWidth = 2.5
-                v.layer.borderColor = UIColor.white.cgColor
-            } else if pa.poi.isCustom {
-                v.layer.borderWidth = 2
-                v.layer.borderColor = UIColor.orange.cgColor
-            } else {
-                v.layer.borderWidth = 0
-            }
-            return v
+            return nil
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -1702,22 +1449,6 @@ final class RouteEndAnnotation: NSObject, MKAnnotation {
     }
 }
 
-final class PoiAnnotation: NSObject, MKAnnotation {
-    var poi: Poi
-    var onRoute: Bool
-    /// 拖动校准中的临时坐标（nil = 使用点位原始坐标）；v2.00 起存 WGS
-    var dragCoordinate: CLLocationCoordinate2D?
-    init(poi: Poi, onRoute: Bool = false) {
-        self.poi = poi
-        self.onRoute = onRoute
-        super.init()
-    }
-    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(dragCoordinate ?? poi.coordinate) }
-    var title: String? { poi.name }
-    var subtitle: String? { poi.type.label }
-}
-
-/// 搜索预览点（绿色高亮）
 final class PreviewAnnotation: NSObject, MKAnnotation {
     private var wgs: CLLocationCoordinate2D
     var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
@@ -1846,154 +1577,4 @@ extension MapViewRepresentable {
     }
 }
 
-// MARK: - v2.04 官方电警点位标注
 
-/// 合肥交警公示的电警/卡口点位标注。
-/// 注意坐标空间：MapKit 国内按 GCJ-02 解释 addAnnotation，内部存 WGS，
-/// 所以这里统一走 MapGeo.toGCJ，和路线折线用同一层转换，不会出现"路线对齐了、点位偏了"。
-final class CameraAnnotation: NSObject, MKAnnotation {
-    let cameraId: Int
-    let kind: CameraKind
-    let cameraName: String
-    let dirs: String
-    /// v2.26 保留原始 PoliceCamera，点击电警点时要把完整点位信息交给上层（分享/删除要用）
-    let camera: PoliceCamera?
-    /// v2.27（建议 #29）是否"待校准"（网络同步 / 估算位置）—— 决定标注用不用缩小样式
-    let isPending: Bool
-    /// 是否处于"刚播报"高亮态
-    var isHot = false
-
-    @objc dynamic var coordinate: CLLocationCoordinate2D
-    /// v2.20 拖动前的坐标（取消拖动时回滚）
-    private var originCoordinate: CLLocationCoordinate2D
-    /// v2.20 拖动前的 WGS 坐标（判断是否真的移动过）；Coordinator 里要用，故 fileprivate
-    fileprivate var originWGS: CLLocationCoordinate2D
-
-    init(camera: PoliceCamera, hot: Int) {
-        self.cameraId = camera.id
-        self.kind = camera.type
-        self.cameraName = camera.name
-        self.dirs = camera.dirs
-        self.camera = camera
-        // v2.27（建议 #29）网络同步 / 估算位置的点位标为"待校准"
-        self.isPending = camera.isFromWeb || camera.accuracyGrade.isEstimated
-        let gcj = MapGeo.toGCJ(camera.coordinate)
-        self.coordinate = gcj
-        self.originCoordinate = gcj
-        self.originWGS = camera.coordinate
-        self.isHot = (hot == camera.id && hot != 0)
-        super.init()
-    }
-
-    /// v2.20 更新坐标（MapKit 拖拽或人工校准后调用）
-    /// coordinate 是 @objc dynamic 属性，赋值自带 KVO 通知，MapKit 会自动移动大头针
-    func setCoordinate(_ gcj: CLLocationCoordinate2D) {
-        coordinate = gcj
-    }
-
-    /// v2.20 拖动开始：记录原坐标（用于取消回滚 / 判断是否真的移动过）
-    func beginDrag() {
-        originCoordinate = coordinate
-        originWGS = MapGeo.toWGS(coordinate)
-    }
-
-    /// v2.20 拖动取消：回到原坐标
-    func cancelDrag() { setCoordinate(originCoordinate) }
-
-    var title: String? { "\(kind.title) · \(cameraName)" }
-    var subtitle: String? { dirs.isEmpty ? "" : "抓拍方向：\(dirs)" }
-}
-
-/// 轻量点位视图：圆形色块 + 相机图标。不用 MKMarkerAnnotationView 是因为
-/// 几十个 marker 一起改尺寸会触发地图重新布局，v2.02 的"雪花点"就是这么来的。
-final class CameraPinView: MKAnnotationView {
-    private let badge = UIView()
-    private let icon = UIImageView()
-
-    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
-        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        backgroundColor = .clear
-        canShowCallout = true
-        collisionMode = .rectangle
-        displayPriority = .defaultHigh
-        setUp()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    private func setUp() {
-        badge.layer.cornerRadius = 14
-        badge.layer.borderWidth = 2
-        badge.layer.borderColor = UIColor.white.cgColor
-        badge.layer.shadowColor = UIColor.black.cgColor
-        badge.layer.shadowOpacity = 0.28
-        badge.layer.shadowRadius = 3
-        badge.layer.shadowOffset = CGSize(width: 0, height: 1.5)
-        badge.isUserInteractionEnabled = false
-        addSubview(badge)
-
-        icon.contentMode = .scaleAspectFit
-        icon.tintColor = .white
-        icon.isUserInteractionEnabled = false
-        addSubview(icon)
-    }
-
-    private var configuredKind: CameraKind?
-    /// v2.27（优化建议 #29）当前是否"待校准"（网络同步的点位）
-    private var configuredPending = false
-
-    /// 配置标注样式
-    /// - Parameters:
-    ///   - kind: 点位类型（决定图标与主色）
-    ///   - pending: 是否为"待校准"（网络同步来的点位）—— 用虚线边框区分，
-    ///     提示用户这个位置是估算的、可以长按拖动修正
-    func configure(kind: CameraKind, pending: Bool = false) {
-        // 复用时会反复调 viewFor，样式没变就不要重设 frame（每次重设会让地图重新布局）
-        guard configuredKind != kind || configuredPending != pending else { return }
-        configuredKind = kind
-        configuredPending = pending
-        badge.backgroundColor = kind.color
-        icon.image = UIImage(systemName: kind.icon,
-                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .bold))
-        frame = CGRect(x: 0, y: 0, width: 30, height: 30)
-        badge.frame = CGRect(x: 0, y: 0, width: 28, height: 28)
-        badge.center = CGPoint(x: 15, y: 15)
-        icon.frame = CGRect(x: 0, y: 0, width: 16, height: 16)
-        icon.center = CGPoint(x: 15, y: 15)
-        centerOffset = .zero
-        applyPendingStyle()
-    }
-
-    /// v2.27（建议 #29）待校准样式：虚线边框 + 略小一号
-    ///
-    /// 网络同步来的点位坐标来自地名解析，可能偏差几百米。
-    /// 用虚线边框把它和官方精确点位区分开，用户一眼能看出"这个点该自己校一下"。
-    private func applyPendingStyle() {
-        if configuredPending {
-            badge.layer.borderWidth = 2
-            badge.layer.borderColor = UIColor.white.cgColor
-            // v2.27：CALayer 没有 borderDashPattern（那是 CAShapeLayer 才有的属性），
-            // 所以"待校准"用缩小一号 + 降低不透明度来表达区别，
-            // 而不是虚线边框（想用虚线得换成 CAShapeLayer，成本更高、收益不大）。
-            badge.alpha = 0.75
-            badge.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-            badge.center = CGPoint(x: 15, y: 15)
-        } else {
-            badge.layer.borderWidth = 2
-            badge.layer.borderColor = UIColor.white.cgColor
-            badge.alpha = 1
-            badge.transform = .identity
-            badge.center = CGPoint(x: 15, y: 15)
-        }
-    }
-
-    /// 播报时放大并加白圈，播完缩回，避免地图上"一堆点分不清哪个在提醒"
-    func setHot(_ hot: Bool) {
-        let s: CGFloat = hot ? 1.45 : 1.0
-        UIView.animate(withDuration: 0.22, delay: 0,
-                       options: [.beginFromCurrentState, .allowUserInteraction]) {
-            self.badge.transform = CGAffineTransform(scaleX: s, y: s)
-            self.badge.layer.borderWidth = hot ? 3 : 2
-        }
-    }
-}

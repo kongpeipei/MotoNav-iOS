@@ -24,24 +24,12 @@ struct ContentView: View {
     @StateObject private var team = TeamRide.shared
     /// v1.99 足迹（我的-足迹）
     @StateObject private var footprints = FootprintStore.shared
-    /// v2.04 官方电警点位库（合肥交警公示）
-    @StateObject private var camStore = PoliceCameraStore.shared
-    /// v2.26 手动同步点位信息服务
-    @StateObject private var camSync = CameraSyncService()
-    /// v2.26 电警点轻点弹出的详情卡（分享 + 删除）
-    @State private var cameraTapCard: PoliceCamera?
-    /// v2.26 手动同步后等待用户确认的候选点位（网络来源）
-    @State private var syncCandidates: [CameraCandidate] = []
-    /// v2.26 顶部提示框的状态：nil=不显示；.found=发现新点位待确认；.confirmCancel=二次确认取消
-    @State private var syncPromptState: SyncPromptState?
-    /// v2.26 最近一轮同步的结果摘要（显示在"我的"页）
-    @State private var syncSummaryText = ""
-    /// v2.27 官方渠道的错误信息（用于显示"人话提示 + 下一步指引"）
-    @State private var lastSyncOfficialError = ""
-    /// v2.27 电警点位管理页
-    @State private var showCameraManage = false
     /// v2.27 开发者诊断页
     @State private var showDiagnostics = false
+    /// v2.33 选项说明卡片（问号点击弹出；说明小字不再直接铺在页面上）
+    @State private var explainTitle = ""
+    @State private var explainBody = ""
+    @State private var showExplain = false
     /// v2.27 版本号连点计数（连点 7 次进入诊断页）
     @State private var versionTapCount = 0
     @State private var versionTapResetTask: Task<Void, Never>?
@@ -74,12 +62,6 @@ struct ContentView: View {
     }
 
     /// v2.26 同步提示框状态机
-    enum SyncPromptState {
-        /// 发现新点位，等用户点"添加"或"取消"
-        case found
-        /// 用户点了"取消"，再问一次：确认取消 / 不取消
-        case confirmCancel
-    }
 
     /// v1.90 省电模式总开关（"我的"页可关；关闭后低电量也不再降频/调暗）
     @AppStorage("powerSaveEnabled") private var powerSaveEnabled = true
@@ -112,33 +94,14 @@ struct ContentView: View {
     /// 高德搜索 Key 输入弹窗
     @State private var showAmapKeyInput = false
     @State private var amapKeyInput = ""
-    /// 标记该点：待标记坐标 + 备注输入
-    @State private var pendingMarkCoord: CLLocationCoordinate2D?
-    @State private var showMarkNameAlert = false
-    @State private var markName = ""
-    /// 点位详情气泡（点击点位弹出：距离/收藏/分享/导航）
-    @State private var poiDetail: Poi?
-    @State private var editPoi: Poi?
-    @State private var typeFilter: Set<PoiType> = Set(PoiType.allCases)
-
     @FocusState private var searchFocused: Bool
     @State private var pendingCoord: CLLocationCoordinate2D?
-    @State private var showTypePicker = false
-    @State private var poiManagePoi: Poi?
-    /// v2.15 长按「违法拍照点」弹出的专用卡片：只做删除 / 更改类型 / 分享
-    @State private var cameraPoiCard: Poi?
-    /// 更改拍照类型的选择框
-    @State private var showCameraKindPicker = false
-    /// 删除拍照点前的二次确认
-    @State private var showCameraPoiDeleteConfirm = false
     @State private var headingNeedleTick = 0
     /// 待导航目标（搜索预览 / 点击地图地点）
     @State private var goHereName: String?
     @State private var goHereLat = 0.0
     @State private var goHereLon = 0.0
     @State private var goHereLabel = ""
-    /// 顶部搜索胶囊展开标记（规划态搜索框移至底部时，点击顶部胶囊重新展开搜索）
-    @State private var showSearchField = false
     /// 搜索框当前高度（手指上下滑动调整）
     @State private var searchHeight: CGFloat = 54
     /// 底部选项卡：0=导航主页，1=我的
@@ -227,22 +190,12 @@ struct ContentView: View {
                     // 沉浸模式：仅保留右下角当前定位按钮
                     AnyView(locateButtonOnly)
                 }
-                // v2.04 接近电警横幅：沉浸/导航状态下也要显示（安全提醒优先于界面整洁）
-                if let alert = model.cameraAlert {
-                    AnyView(cameraAlertBanner(alert))
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 96)
-                        .padding(.horizontal, 16)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .allowsHitTesting(false)
-                        .zIndex(20)
-                }
                 // v2.25 抽出为子视图（见 mapTopOverlayGroup 的说明：降低 body 推断复杂度）
                 AnyView(navOverlayGroup)
-                // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/抓拍/速度/道路/预计到达），
+                // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/速度/道路/预计到达），
                 // 移除顶部重复的大数字条 navTopBar，避免信息分散（高德同款单卡片式导航状态）
-                // v1.84 巡航模式顶部卡片（白底：速度 + 最近拍照点）
-                if model.cruiseMode && !model.navigating {
+                // v1.84 巡航模式顶部卡片（白底：实时速度）
+                if model.cruiseMode && !model.navigating && !uiHidden {
                     AnyView(cruiseCard)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -254,13 +207,6 @@ struct ContentView: View {
             // v1.80 底部选项卡：仅"我的"页保留（导航主页已合并进底部主卡片，导航/我的按钮在卡片内）
             if !model.navigating && !uiHidden && selectedTab == 1 {
                 AnyView(bottomTabBar)
-            }
-            // v2.26 手动同步点位信息：发现新点位时的顶部提示框
-            // 放在 ZStack 最后（最上层），确保盖住所有其它 UI；
-            // 提示框不可关闭，必须"添加"或"确认取消"才能继续正常使用软件。
-            if syncPromptState != nil {
-                AnyView(syncPromptOverlay)
-                    .zIndex(100)
             }
         }
     }
@@ -314,18 +260,13 @@ struct ContentView: View {
         .onChange(of: model.categoryResults.isEmpty) { _, empty in
             if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
         }
-        // v2.25 弹窗组 1 已抽到 SheetGroup1Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup1Modifier(poiDetail: $poiDetail, cameraTapCard: $cameraTapCard, showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showTeamRide: $showTeamRide, footprints: footprints, team: team, selectedTab: $selectedTab, camStore: camStore))
-        // v2.25 弹窗组 2 已抽到 SheetGroup2Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup2Modifier(editPoi: $editPoi, showMarkNameAlert: $showMarkNameAlert, markName: $markName, showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput, showTypePicker: $showTypePicker, pendingMarkCoord: $pendingMarkCoord, onAddPoiAtPending: { addPoiAtPending(type: $0) }, onCameraKindTitle: { cameraKindTitle($0) }))
-        // v2.25 弹窗组 3 已抽到 SheetGroup3Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup3Modifier(showCameraKindPicker: $showCameraKindPicker, showCameraPoiDeleteConfirm: $showCameraPoiDeleteConfirm, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, onChangeCameraPoiType: { changeCameraPoiType($0) }, onDeleteCameraPoi: { deleteCameraPoi() }, onCameraKindTitle: { cameraKindTitle($0) }, cameraKindsForPicker: cameraKindsForPicker, cameraPoiCard: $cameraPoiCard, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, poiManagePoi: $poiManagePoi, editPoi: $editPoi))
-        // v2.27 弹窗组 4：电警点位管理页（单独一组，控制类型推断复杂度）
-        .modifier(SheetGroup4Modifier(showCameraManage: $showCameraManage, showDiagnostics: $showDiagnostics, camStore: camStore))
+        // v2.25 弹窗组（拆分以解决类型检查超时）
+        .modifier(SheetGroup1Modifier(showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showTeamRide: $showTeamRide, footprints: footprints, team: team, selectedTab: $selectedTab))
+        .modifier(SheetGroup2Modifier(showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput))
+        .modifier(SheetGroup3Modifier(showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode))
+        .modifier(SheetGroup4Modifier(showDiagnostics: $showDiagnostics))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
-        // v2.15 长按拍照点 →「更改」：四种类型（顺序按骑手最常被拍的来排）
-        // v2.15 长按拍照点 →「删除」：不可撤销，先确认一次
         // v1.69 搜索面板"+"选点命名弹窗
         .onAppear {
             model.authorizeAndStart()
@@ -392,12 +333,10 @@ struct ContentView: View {
     /// 地图全屏层（高德式：地图在上，搜索框下置）
     private var mapLayer: some View {
         MapViewRepresentable(
-            pois: model.pois,
             userLocation: model.currentLocation,
             route: model.route,
             choiceRoutes: model.routeChoices.map(\.points),
             selectedRouteIdx: model.selectedRouteIdx,
-            routePois: model.routePois,
             locateTick: model.locateTick,
             fitTick: model.fitTick,
             heading: model.heading,
@@ -421,31 +360,8 @@ struct ContentView: View {
                 model.setScale(t)
             },
             onLongPress: { coord in
-                // v2.02 长按只做一件事：出地点卡（添加违法拍照已移到卡片最下方）
+                // v2.02 长按只做一件事：出地点卡
                 showTapPlace(coord)
-            },
-            onPoiLongPress: { p in
-                // v2.15：长按「违法拍照点」走专用卡片（删除 / 更改类型 / 分享），
-                // 其它点位仍用原来的「点位操作」菜单（导航 / 收藏 / 编辑 / 删除）
-                if p.type.isCamera {
-                    haptic()
-                    cameraPoiCard = p
-                } else {
-                    poiManagePoi = p
-                }
-            },
-            onPoiMoved: { p, nLat, nLon in
-                model.updatePoi(id: p.id, type: p.type, name: p.name, lat: nLat, lon: nLon, radiusM: p.radiusM)
-                model.status = "已移动「\(p.name)」到新位置（橙色=自定义点位）"
-            },
-            onPoiSelect: { p in
-                haptic()
-                poiDetail = p
-            },
-            // v2.26 轻点官方电警点 → 弹出分享/删除卡片（此前点击完全没反应）
-            onCameraSelect: { c in
-                haptic()
-                cameraTapCard = c
             },
             onPlaceSelect: { pl in
                 // v1.96 轻点地点名文字 → 直接弹地点介绍卡（原先是只设"去这里"预览，点了几乎没反应）
@@ -471,6 +387,8 @@ struct ContentView: View {
                     model.status = "已退出足迹回放"
                     return
                 }
+                // v1.69 搜索面板"+"选点模式：轻点地图即命名生成快捷卡片
+                //（v2.33 删除电警时误删此分支，功能链断开，已恢复）
                 if quickPickMode {
                     pendingQuickCoord = coord
                     quickName = placeNameNear(coord)
@@ -480,8 +398,7 @@ struct ContentView: View {
                 // 沉浸态下轻点＝恢复界面（否则隐藏 UI 后没有出口）
                 // v2.16：若此时正亮着长按卡，先把卡收掉（沉浸保持），再点一次才恢复整套 UI
                 if uiHidden {
-                    if tapPlace != nil || cameraPoiCard != nil || tipCard != nil {
-                        cameraPoiCard = nil
+                    if tapPlace != nil || tipCard != nil {
                         closeTapPlace()
                         closeTipCard()
                         return
@@ -539,17 +456,7 @@ struct ContentView: View {
                     }
                 }
             },
-            // v2.04 官方电警点位图层（关闭时传空数组，地图上立即消失）
-            cameraMarks: camStore.layerOn ? camStore.all : [],
-            hotCameraId: model.hotCameraId,
             waypointMarks: model.waypoints.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) },
-            onCameraMoved: { id, lat, lon in
-                // v2.20 电警点手动拖动 → 落点写回仓库（持久化，重启仍生效）
-                camStore.adjust(id: id, lat: lat, lon: lon)
-                if let c = camStore.all.first(where: { $0.id == id }) {
-                    model.status = "已校准「\(c.name)」位置"
-                }
-            },
             searchLinkFrom: searchLinkFrom,
             searchLinkTo: searchLinkTo,
             searchHit: searchHitCoord.map { SearchHit(coord: $0, title: searchHitTitle) },
@@ -650,23 +557,6 @@ struct ContentView: View {
         }
     }
 
-    /// v2.04 接近官方电警的横幅（红底白字，与地图上放大的那个点位一一对应）
-    private func cameraAlertBanner(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "camera.fill")
-                .font(.system(size: 15, weight: .black))
-            Text(text)
-                .font(.system(size: 14, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(Color(red: 0.86, green: 0.15, blue: 0.18), in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 1))
-        .shadow(color: .black.opacity(0.28), radius: 6, y: 3)
-    }
 
     /// v2.01 右上角比例尺：白底半透明胶囊 + 一段 58pt 比例尺线（数值随缩放变化）
     private var scaleOverlay: some View {
@@ -767,12 +657,16 @@ struct ContentView: View {
                 commonPlacesSection
                 rideSection
                 dataSection
-                syncSection
                 searchKeySection
                 aboutSection
             }
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
+            .alert(explainTitle, isPresented: $showExplain) {
+                Button("知道了", role: .cancel) {}
+            } message: {
+                Text(explainBody)
+            }
             .safeAreaInset(edge: .bottom) {
                 Color.clear.frame(height: 8)
             }
@@ -784,14 +678,15 @@ struct ContentView: View {
     /// 省电模式（放到最上方）
     private var powerSection: some View {
         Section {
-            Toggle("省电模式", isOn: $powerSaveEnabled)
-                .onChange(of: powerSaveEnabled) { _, _ in
-                    model.applyPowerSaving()
-                }
+            HStack {
+                Toggle("省电模式", isOn: $powerSaveEnabled)
+                    .onChange(of: powerSaveEnabled) { _, _ in
+                        model.applyPowerSaving()
+                    }
+                explainButton("省电模式", "电量低于 20% 或系统低电量模式时，自动降低定位频率并调暗地图节省电量；恢复后自动还原。")
+            }
         } header: {
             Text("省电")
-        } footer: {
-            Text("电量低于 20% 或系统低电量模式时，自动降低定位频率并调暗地图节省电量；恢复后自动还原。")
         }
     }
 
@@ -810,8 +705,6 @@ struct ContentView: View {
             .pickerStyle(.segmented)
         } header: {
             Text("显示")
-        } footer: {
-            Text("自动跟随系统深浅色；手动切换立即生效。导航中地图始终使用深色底图，保证路口与电子眼清晰可辨。")
         }
     }
 
@@ -874,78 +767,7 @@ struct ContentView: View {
                         .textInputAutocapitalization(.never)
                 }
             }
-        } footer: {
-            Text("点右侧铅笔可重新搜索选择地点；除「家」「公司」和「添加常用地点」外，其余选项左滑可删除。")
         }
-    }
-
-    /// v2.26 手动同步点位信息（放在省电下方）
-    ///
-    /// 点一下会做两件事：
-    ///   ① 去合肥市公安局官网找近一年的摩托车电警点位公示 → 新的**直接**加进地图；
-    ///   ② 去抖音/百度/小红书等平台搜近一年合肥摩托车违法记录位置 → 发现的走顶部提示框让用户确认。
-    private var syncSection: some View {
-        Section {
-            Button {
-                runCameraSync()
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.blue)
-                        .frame(width: 22)
-                    Text(camSync.syncing ? "正在同步点位…" : "手动同步点位信息")
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 8)
-                    if camSync.syncing {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .disabled(camSync.syncing)
-            // v2.27 新增：电警点位管理（粘贴导入 / 导出 / 最近删除）
-            // 官网有反爬时，这是用户唯一走得通的路
-            Button {
-                showCameraManage = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "list.bullet.rectangle")
-                        .foregroundStyle(.blue)
-                        .frame(width: 22)
-                    Text("电警点位管理")
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            if !syncSummaryText.isEmpty {
-                Text(syncSummaryText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            // v2.27 同步失败时给出"下一步该做什么"，而不是只报错
-            if let hint = syncFailureHint {
-                Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-        } header: {
-            Text("点位数据")
-        } footer: {
-            Text("同步合肥市公安局近一年的摩托车电警点位公示（官方来源直接入图），并在抖音、百度、小红书等平台检索近一年合肥摩托车违法记录位置（网络来源需你确认后才添加）。")
-        }
-    }
-
-    /// v2.27 同步失败时的人话提示 + 下一步指引（建议 #20）
-    private var syncFailureHint: String? {
-        guard !lastSyncOfficialError.isEmpty else { return nil }
-        return "官方站点读取失败：" + lastSyncOfficialError
-            + "\n可在浏览器打开合肥市公安局网站，复制新增点位列表，到「电警点位管理」里粘贴导入。"
     }
 
     /// v1.99 骑行偏好：播报分级 + 摩托车优先（避开高速/高架）
@@ -958,31 +780,33 @@ struct ContentView: View {
                     Text(lv.title).tag(lv.rawValue)
                 }
             } label: {
-                Label("语音播报", systemImage: "speaker.wave.2.fill")
+                HStack {
+                    Label("语音播报", systemImage: "speaker.wave.2.fill")
+                    Spacer()
+                    explainButton("语音播报", "简洁：只报转弯与到达；标准：再加前方 800 米级提醒；详细：再加路名与剩余里程。")
+                }
             }
             .pickerStyle(.segmented)
 
-            Toggle(isOn: Binding(
-                get: { model.avoidHighway },
-                set: { model.avoidHighway = $0 }
-            )) {
-                Label("避开高速/高架", systemImage: "road.lanes")
+            HStack {
+                Toggle(isOn: Binding(
+                    get: { model.avoidHighway },
+                    set: { model.avoidHighway = $0 }
+                )) {
+                    Label("避开高速/高架", systemImage: "road.lanes")
+                }
+                explainButton("避开高速/高架", "规划时优先选择禁摩风险更少的方案；导航到风险路段前会语音提醒。")
             }
 
             // v2.29 自动视野（按速度切换近/中/远景）
-            Toggle(isOn: Binding(
-                get: { model.autoNavScale },
-                set: { model.autoNavScale = $0 }
-            )) {
-                Label("按速度自动切换视野", systemImage: "speedometer")
-            }
-
-            // v2.29 骑行省电地图（v2.31 底图换 MapKit 原生后保留开关兼容历史设置）
-            Toggle(isOn: Binding(
-                get: { model.ridingPowerSaveMap },
-                set: { model.ridingPowerSaveMap = $0 }
-            )) {
-                Label("省电地图（低细节）", systemImage: "leaf.fill")
+            HStack {
+                Toggle(isOn: Binding(
+                    get: { model.autoNavScale },
+                    set: { model.autoNavScale = $0 }
+                )) {
+                    Label("按速度自动切换视野", systemImage: "speedometer")
+                }
+                explainButton("按速度自动切换视野", "慢速看清下一个路口，上了快速路自动拉远看前方排队；手动调过视野后 20 秒内不会自动覆盖。")
             }
 
             // v2.29 骑行极简模式（竞品空白点）
@@ -991,11 +815,14 @@ struct ContentView: View {
             // 但摩托车骑手戴头盔，视野只有一条缝 —— 底卡塞满信息反而看不清。
             // 开启后：底卡只留「下一动作 + 距离 + 车速」，字号放大，
             // 隐藏车道图、红绿灯读秒、地图缩放组与比例尺。
-            Toggle(isOn: Binding(
-                get: { model.ridingMinimalUI },
-                set: { model.ridingMinimalUI = $0 }
-            )) {
-                Label("骑行极简界面", systemImage: "rectangle.on.rectangle.angled")
+            HStack {
+                Toggle(isOn: Binding(
+                    get: { model.ridingMinimalUI },
+                    set: { model.ridingMinimalUI = $0 }
+                )) {
+                    Label("骑行极简界面", systemImage: "rectangle.on.rectangle.angled")
+                }
+                explainButton("骑行极简界面", "把屏幕信息降到最少、字号放大：只留下一动作、距离与车速，隐藏车道图、红绿灯读秒、缩放组与比例尺，适合戴头盔用余光看。")
             }
 
             if !model.riderRisks.isEmpty {
@@ -1017,8 +844,6 @@ struct ContentView: View {
             }
         } header: {
             Text("骑行偏好")
-        } footer: {
-            Text("播报：简洁只报转弯；标准加电子眼；详细再加路名与剩余里程。开启「避开高速/高架」后，规划会优先选择禁摩风险更少的方案，导航到风险路段前会语音提醒。\n\n「骑行极简界面」把屏幕信息降到最少、字号放大，适合戴头盔骑行时用余光看（高德/百度都还没做这个）。\n\n「按速度自动切换视野」：慢速看清下一个路口，上了快速路自动拉远看前方排队（手动调过视野后 20 秒内不会自动覆盖）。\n\n「省电地图」降低瓦片细节与并发请求数，骑行时手机没法插充电时更耐用。")
         }
     }
 
@@ -1054,6 +879,21 @@ struct ContentView: View {
 
     private func distanceText(_ m: Int) -> String {
         m >= 1000 ? String(format: "%.1f km", Double(m) / 1000) : "\(m) m"
+    }
+
+    /// v2.33 选项说明问号：点击弹出说明卡片（说明小字不再直接铺在设置页）
+    private func explainButton(_ title: String, _ body: String) -> some View {
+        Button {
+            haptic()
+            explainTitle = title
+            explainBody = body
+            showExplain = true
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 15))
+                .foregroundStyle(.tertiary)
+        }
+        .buttonStyle(.plain)
     }
 
     /// v2.12 Key 展示：只露首尾 4 位，中间打点（避免整串 Key 明晃晃挂在界面上）
@@ -1122,253 +962,6 @@ struct ContentView: View {
     }
 
     // MARK: - v2.26 手动同步点位信息
-
-    /// 执行一轮同步
-    ///
-    /// 流程（严格按需求）：
-    ///   ① 官方公示的新点位 → 直接写进地图（官方来源权威，不需要问用户）
-    ///   ② 网络平台发现的新点位 → 存进 syncCandidates，弹顶部提示框等用户确认
-    ///
-    /// 提示框一旦弹出就**不可关闭**：只有"添加"或"取消→确认取消"两条路能走完。
-    private func runCameraSync() {
-        guard !camSync.syncing else { return }
-        Task {
-            let result = await camSync.sync(amapKey: model.amapKey)
-
-            // ① 官方新增：直接入图（官方来源权威，不需要问用户）
-            var officialAddedCount = 0
-            for c in result.officialAdded {
-                // 判重：官方库里已有的同名/同位置点位跳过
-                if camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) != nil { continue }
-                _ = camStore.addSynced(name: c.name, district: c.district,
-                                      lat: c.lat, lon: c.lon, type: .redLight,
-                                      dirs: c.dirs, source: c.source)
-                officialAddedCount += 1
-            }
-
-            // ② 网络来源：进待确认列表
-            let pending = result.webCandidates.filter { c in
-                camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) == nil
-            }
-            syncCandidates = pending
-
-            // 汇总文案
-            var parts: [String] = []
-            if officialAddedCount > 0 {
-                parts.append("官方新增 \(officialAddedCount) 个")
-            } else if !result.officialAdded.isEmpty {
-                parts.append("官方公示无新增（均已收录）")
-            } else {
-                parts.append("官方公示无新增")
-            }
-            if !pending.isEmpty { parts.append("网络发现 \(pending.count) 个待确认") }
-            if !result.officialError.isEmpty { parts.append("官方站点：" + result.officialError) }
-            if !result.webError.isEmpty { parts.append("网络检索：" + result.webError) }
-            syncSummaryText = parts.joined(separator: " · ")
-            // v2.27：官方错误单独存一份，用于显示"人话提示 + 下一步指引"
-            lastSyncOfficialError = result.officialError
-
-            model.status = syncSummaryText
-
-            // 有待确认点位 → 弹顶部提示框
-            if !pending.isEmpty {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                    syncPromptState = .found
-                }
-                // v2.27 安全：30 秒倒计时，到点自动确认取消（优化建议 #27）
-                // 强制不可关闭的框若在骑行中弹出，用户点不到屏幕就没法继续用软件，
-                // 这是真实的安全隐患，所以给一条自动出路。
-                startSyncCountdown(seconds: 30)
-            }
-        }
-    }
-
-    /// v2.27 启动同步提示框的倒计时
-    private func startSyncCountdown(seconds: Int) {
-        syncCountdownTask?.cancel()
-        syncCountdown = seconds
-        syncCountdownTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    guard syncCountdown > 0 else { return }
-                    syncCountdown -= 1
-                    if syncCountdown == 0 {
-                        // 到点：自动确认取消（保守：不添加点位），恢复正常使用
-                        syncPromptState = nil
-                        syncCandidates = []
-                        model.status = "超时未选择，已自动取消添加新点位"
-                    }
-                }
-            }
-        }
-    }
-
-    /// v2.27 停止倒计时
-    private func stopSyncCountdown() {
-        syncCountdownTask?.cancel()
-        syncCountdownTask = nil
-        syncCountdown = 0
-    }
-
-    /// v2.27 顶部提示框：发现新点位 → 添加 / 取消
-    ///
-    /// 需求：提示框不可删除，只有确认取消或者添加点位才能正常使用软件功能。
-    /// 所以这里用**全屏遮罩 + 置顶卡片**实现，而不是系统 alert
-    /// （系统 alert 能被"忽略/下滑"绕过）。
-    ///
-    /// v2.27 安全增强（优化建议 #27）：
-    /// 强制不可关闭有个真实风险 —— 用户正在骑行时弹出这个框，
-    /// 没法点确认取消就被挡住，无法操作导航。
-    /// 所以加一个 **30 秒倒计时**，到点自动"确认取消"（保守选择：不添加点位），
-    /// 既满足"必须处理才能继续"的要求，又不会把用户困住。
-    private var syncPromptOverlay: some View {
-        ZStack {
-            // 半透明遮罩：吞掉所有点击，逼用户做出选择
-            Color.black.opacity(0.35)
-                .ignoresSafeArea()
-                .onTapGesture { }   // 故意不关闭
-            VStack {
-                Spacer(minLength: 0)
-                syncPromptCard
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 28)
-            }
-        }
-    }
-
-    @ViewBuilder private var syncPromptCard: some View {
-        // 注意：syncPromptState 是 Optional<SyncPromptState>，
-        // 用 `if let` 取出具体状态再 switch，比直接 switch Optional 更清晰，
-        // 也避免 Optional 提升带来的可读性问题。
-        if let state = syncPromptState {
-            switch state {
-            case .found:
-                VStack(spacing: 14) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "mappin.and.ellipse")
-                            .foregroundStyle(.orange)
-                        Text("已发现新点位是否添加")
-                            .font(.headline)
-                        Spacer()
-                    }
-                    Text(syncCandidateSummary)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    // v2.27 倒计时提示：告诉用户多久会自动确认取消
-                    if syncCountdown > 0 {
-                        Text("\(syncCountdown) 秒后自动取消添加")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    HStack(spacing: 10) {
-                        Button {
-                            // 取消 → 二次确认
-                            stopSyncCountdown()
-                            withAnimation(.easeOut(duration: 0.18)) { syncPromptState = .confirmCancel }
-                            startSyncCountdown(seconds: 30)
-                        } label: {
-                            Text("取消")
-                                .font(.footnote.bold())
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(Color.gray.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
-                        }
-                        Button {
-                            stopSyncCountdown()
-                            addSyncCandidates()
-                        } label: {
-                            Text("添加")
-                                .font(.footnote.bold())
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(Color.orange, in: RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-                }
-                .padding(18)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-                .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
-            case .confirmCancel:
-                VStack(spacing: 14) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "questionmark.circle")
-                            .foregroundStyle(.orange)
-                        Text("确认取消添加？")
-                            .font(.headline)
-                        Spacer()
-                    }
-                    Text("取消后这些新点位不会加入地图。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 10) {
-                        Button {
-                            // 确认取消 → 丢弃，不添加
-                            stopSyncCountdown()
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                syncPromptState = nil
-                                syncCandidates = []
-                            }
-                            model.status = "已取消添加新点位"
-                        } label: {
-                            Text("确认取消")
-                                .font(.footnote.bold())
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(Color.red, in: RoundedRectangle(cornerRadius: 10))
-                        }
-                        Button {
-                            // 不取消 → 回到刚才的提示框
-                            withAnimation(.easeOut(duration: 0.18)) { syncPromptState = .found }
-                            startSyncCountdown(seconds: 30)
-                        } label: {
-                            Text("不取消")
-                                .font(.footnote.bold())
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(Color.orange, in: RoundedRectangle(cornerRadius: 10))
-                        }
-                    }
-                }
-                .padding(18)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-                .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
-            }
-        }
-    }
-
-    /// 顶部提示框里的候选点位摘要（最多列 3 个）
-    private var syncCandidateSummary: String {
-        guard !syncCandidates.isEmpty else { return "" }
-        let names = syncCandidates.prefix(3).map { "「\($0.name)」" }.joined(separator: "、")
-        let more = syncCandidates.count > 3 ? " 等 \(syncCandidates.count) 个" : ""
-        return "来源：网络平台（抖音/百度/小红书等）\n待添加：" + names + more
-    }
-
-    /// 点"添加"：把候选点位写入地图
-    private func addSyncCandidates() {
-        var added = 0
-        for c in syncCandidates {
-            if camStore.existingMatch(name: c.name, lat: c.lat, lon: c.lon) != nil { continue }
-            _ = camStore.addSynced(name: c.name, district: c.district, lat: c.lat, lon: c.lon,
-                                  type: .redLight, dirs: c.dirs, source: c.source)
-            added += 1
-        }
-        withAnimation(.easeOut(duration: 0.18)) {
-            syncPromptState = nil
-            syncCandidates = []
-        }
-        model.status = "已添加 \(added) 个新点位到地图"
-        syncSummaryText = "已添加 \(added) 个新点位"
-    }
 
     // MARK: - 常用地点行
 
@@ -1508,7 +1101,6 @@ struct ContentView: View {
         searchText = cur.map { displayName($0.name) } ?? ""
         showSuggestions = !searchText.trimmingCharacters(in: .whitespaces).isEmpty
         searchExpanded = false
-        showSearchField = true
         model.status = "设置「\(slot.title)」：搜索或点地图地点，再点地点卡收藏键确认"
         // 等搜索框挂载后再聚焦，键盘/联想才会弹出
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -1624,45 +1216,10 @@ struct ContentView: View {
         .fixedSize()
     }
 
-    /// 规划态顶部路线胶囊：显示"我的位置 → 目的地"，点击重新搜索（高德规划态顶部搜索框）
-    private var routeBarOverlay: some View {
-        VStack {
-            HStack {
-                Spacer()
-                if !model.navigating, !model.routeChoices.isEmpty, !showSearchField {
-                    Button {
-                        haptic()
-                        showSearchField = true
-                        searchFocused = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(model.originName)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Image(systemName: "arrow.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Text(model.destName)
-                                .font(.caption.bold())
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            Image(systemName: "magnifyingglass")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 40)
-                }
-                Spacer()
-            }
-            Spacer()
-        }
-    }
+            // v2.33 已删除规划态顶部路线胶囊：点击后搜索框不可见（规划卡遮挡 bottomMainCard），
+            // 只会弹出键盘且无输入框，属无效按钮；改终点走返回箭头→重新搜索。
+            // 地图缩放 + / - 按钮（含当前定位按钮）
+            // 地点卡出现时暂时收起，避免整组压在卡片上
 
     /// 底部浮层：类别结果 + 历史 + 导航信息卡 + 去这里 + 搜索框/退出导航 + 清空路线
     private var bottomOverlay: some View {
@@ -1671,7 +1228,7 @@ struct ContentView: View {
         // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
             if !model.navigating && !model.cruiseMode {
-                if cameraPoiCard != nil || tapPlace != nil || tipCard != nil {
+                if tapPlace != nil || tipCard != nil {
                     AnyView(poiCardStack)
                 } else if !model.routeChoices.isEmpty {
                     // v2.21 路线规划卡拆成上下两张（高德式）：
@@ -1701,27 +1258,25 @@ struct ContentView: View {
                     // 地图上再挂一条既挡视线又重复
                 }
                 // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
-                if tapPlace == nil && tipCard == nil && cameraPoiCard == nil && model.routeChoices.isEmpty {
+                if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true) { AnyView(bottomMainCard) }
                 }
             } else {
-                // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大 + 抓拍条
-                DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.70)) { AnyView(turnAheadCard) }
-                DraggableFloat(key: "snapalert", defaultPos: CGPoint(x: 0.5, y: 0.80)) { AnyView(snapAlertCard) }
+                // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大
+                // v2.32 默认位置上移 0.70→0.66：与退出卡清晰分层（路口放大图在上、退出卡贴底）。
+                // v2.32 全览时一并隐藏：全览条在 y0.70，不清掉这两卡会叠在全览条上
+                if !showRouteOverview {
+                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.66)) { AnyView(turnAheadCard) }
+                }
             }
         }
     }
 
-    /// 长按/轻点出来的卡（拍照点卡 / 地点卡 / 提示点卡）——三者互斥，只出一张。
+    /// 长按/轻点出来的卡（地点卡 / 提示点卡）——互斥，只出一张。
     /// v2.16 抽成独立视图，好让「沉浸态」也能单独把这张卡亮出来而不带其它 UI。
     @ViewBuilder private var poiCardStack: some View {
-        if let cp = cameraPoiCard {
-            // v2.15 长按违法拍照点：专用卡（分享在右上角，下面只有「更改类型」「删除」）
-            DraggableFloat(key: "campoicard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
-                           deleteLabel: "关闭",
-                           onSwipeLeft: { cameraPoiCard = nil }) { AnyView(cameraPoiCardView(cp)) }
-        } else if let tp = tapPlace {
+ else if let tp = tapPlace {
             // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
             DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
                            deleteLabel: "关闭",
@@ -1799,6 +1354,13 @@ struct ContentView: View {
     @discardableResult
     private func goBackOneLevel() -> Bool {
         guard !model.navigating else { return false }
+        if quickPickMode {
+            quickPickMode = false
+            pendingQuickCoord = nil
+            showQuickNameAlert = false
+            model.status = "已取消地图选点"
+            return true
+        }
         if waypointSelecting {
             waypointSelecting = false
             searchFocused = false
@@ -1816,10 +1378,6 @@ struct ContentView: View {
             showSuggestions = false
             searchExpanded = false
             dismissKeyboard()
-            return true
-        }
-        if cameraPoiCard != nil {
-            cameraPoiCard = nil
             return true
         }
         if tapPlace != nil {
@@ -1865,8 +1423,9 @@ struct ContentView: View {
     /// v1.96 轻点非地点区域：收起全部卡片 + 隐藏所有浮层（只留右下角定位按钮），再轻点恢复
     private func hideAllOnBlankTap() {
         haptic()
-        // v1.97 常用地点设置中：只收卡片，不进入沉浸模式（否则设置提示条和搜索框都会消失）
-        if slotTarget != nil {
+        // 编辑态（常用地点设置 / 途经点选择）：只收卡片，不进入沉浸模式
+        //（v1.97 常用地点设置；v2.33 途经点选择同语义——否则编辑提示条与搜索框会一起消失）
+        if slotTarget != nil || waypointSelecting {
             tapPlace = nil
             tipCard = nil
             tipRoad = nil
@@ -1884,176 +1443,18 @@ struct ContentView: View {
         withAnimation(.easeOut(duration: 0.2)) { uiHidden = true }
     }
 
-    /// 地点介绍卡：名称 / 类型 / 地址 / 距离 / 收藏·搜周边·标记·分享 / 导航
-    /// v2.15 更改类型时的候选，顺序按骑手最常被拍的来排：闯红灯 → 超速 → 压线 → 禁摩
-    private var cameraKindsForPicker: [PoiType] { [.RED_LIGHT, .SPEED, .LANE, .RESTRICTION] }
 
-    /// v2.15 四个短标签（"限行/禁摩"在骑手语境里就是"禁摩"，列表和卡片统一用短词）
-    private func cameraKindTitle(_ t: PoiType) -> String {
-        switch t {
-        case .RED_LIGHT: return "闯红灯"
-        case .SPEED: return "超速"
-        case .LANE: return "压线"
-        case .RESTRICTION: return "禁摩"
-        default: return t.label
-        }
-    }
 
-    /// v2.15 长按「违法拍照点」专用卡。
-    ///
-    /// 与地点卡分开做的原因：地点卡是"去看看/去那里"的语义（收藏、导航、设为家/公司），
-    /// 而自己新增的拍照点只关心三件事 —— 这个点拍什么、改类型、删掉。
-    /// 分享按钮保留，按用户要求放在卡片右上角（关闭键左边）。
-    private func cameraPoiCardView(_ p: Poi) -> some View {
-        // 用 model.pois 里的最新值，改动类型后卡片能立刻反映出来
-        let live = model.pois.first(where: { $0.id == p.id }) ?? p
-        let tint = Color(live.type.color)
-        return VStack(spacing: 0) {
-            // ── 头部：类型图标 + 名称 + 右上角分享/关闭 ──
-            HStack(alignment: .top, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(tint.opacity(0.14))
-                    Image(systemName: live.type.alertIcon)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(tint)
-                }
-                .frame(width: 38, height: 38)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(live.name)
-                        .font(.headline)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Text(cameraKindTitle(live.type))
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(tint)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(tint.opacity(0.12), in: Capsule())
-                        if let d = distText(live.lat, live.lon) {
-                            Text(d)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Spacer(minLength: 4)
 
-                // 分享（保留原功能，位置按用户要求放到卡片右上方）
-                Button {
-                    haptic()
-                    PlaceShare.present(PlaceShare.payload(name: live.name,
-                                                          address: "",
-                                                          type: live.type.label,
-                                                          road: "",
-                                                          lat: live.lat, lon: live.lon))
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    haptic()
-                    cameraPoiCard = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 19))
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
-
-            Divider()
-
-            // ── 操作：更改类型 / 删除 ──
-            HStack(spacing: 10) {
-                Button {
-                    haptic()
-                    showCameraKindPicker = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 14, weight: .bold))
-                        Text("更改类型")
-                            .font(.subheadline.bold())
-                    }
-                    .foregroundStyle(tint)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    haptic()
-                    showCameraPoiDeleteConfirm = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "trash.fill")
-                            .font(.system(size: 14, weight: .bold))
-                        Text("删除")
-                            .font(.subheadline.bold())
-                    }
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
-        }
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.black.opacity(0.06))
-        )
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
-        .padding(.horizontal, 16)
-    }
-
-    /// v2.15 改类型：写回模型后卡片跟着刷新（Poi 是值类型，重新赋一次）
-    private func changeCameraPoiType(_ t: PoiType) {
-        guard let p = cameraPoiCard else { return }
-        guard p.type != t else { return }
-        let newName = autoRenameForType(p.name, to: t)
-        model.updatePoi(id: p.id, type: t, name: newName, lat: p.lat, lon: p.lon, radiusM: p.radiusM)
-        var updated = p
-        updated.type = t
-        updated.name = newName
-        cameraPoiCard = updated
-        model.status = "已改为「\(cameraKindTitle(t))」拍照"
-    }
-
-    /// 点位如果是「添加违法拍照」时自动命名的（地图新增闯红灯拍照点），
+    /// v2.33 电警点位已移除（原「添加违法拍照」自动命名逻辑一并删除）
     /// 改类型时把名字里的类型一起换掉，否则会出现标题写"闯红灯"、标签标"超速"的矛盾。
     /// 用户自己改过名字的（不以"地图新增"开头）一律不动。
-    private func autoRenameForType(_ name: String, to t: PoiType) -> String {
-        guard name.hasPrefix("地图新增") else { return name }
-        return "地图新增\(t.label)点"
-    }
 
-    /// v2.15 删除拍照点
-    private func deleteCameraPoi() {
-        guard let p = cameraPoiCard else { return }
-        model.deletePoi(id: p.id)
-        cameraPoiCard = nil
-        model.status = "已删除拍照点「\(p.name)」"
-    }
 
     private func tapPlaceCard(_ p: TapPlaceInfo) -> some View {
         // v2.02 重排：信息（名称/地址/距离）在上，操作按"次要图标 → 主按钮 → 上报"三层，
-        // 「添加违法拍照」固定放在卡片最下方（原来藏在地图长按菜单里，几乎没人发现）
+        // v2.33 电警点位已移除（原「添加违法拍照」入口一并删除）
         let starOn = slotTarget != nil
             ? slotStarOn(lat: p.lat, lon: p.lon)
             : model.isTipFavorite(lat: p.lat, lon: p.lon)
@@ -2151,12 +1552,6 @@ struct ContentView: View {
                     closeTapPlace()
                     aroundSearch(tip)
                 }
-                placeAction(icon: "mappin.and.ellipse", title: "标记") {
-                    haptic()
-                    pendingMarkCoord = p.coordinate
-                    markName = p.name
-                    showMarkNameAlert = true
-                }
                 placeAction(icon: "square.and.arrow.up", title: "分享") {
                     haptic()
                     PlaceShare.present(PlaceShare.payload(name: p.name,
@@ -2217,32 +1612,6 @@ struct ContentView: View {
 
             Divider()
 
-            // ── 最下方：添加违法拍照（从地图长按菜单移过来，位置固定好找） ──
-            Button {
-                haptic()
-                pendingCoord = p.coordinate
-                showTypePicker = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "camera.viewfinder")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.86, green: 0.36, blue: 0.16))
-                    Text("添加违法拍照")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text("限速 · 压线 · 禁摩")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
         }
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -2298,7 +1667,6 @@ struct ContentView: View {
     private func closeRoutePlan() {
         waypointSelecting = false
         model.route = []
-        model.routePois = []
         model.routeTurns = []
         model.routeChoices = []
     }
@@ -2759,13 +2127,11 @@ struct ContentView: View {
         uiHidden = false
         tapPlace = nil
         tipCard = nil
-        cameraPoiCard = nil
         onlineTips = []
         searchText = ""
         showSuggestions = false
         searchExpanded = false
         waypointSelecting = true
-        showSearchField = true
         model.cancelWaypointCandidate()
         model.status = "添加途经点：搜索地点或点地图选点，选完可对比时长再确认"
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -2995,39 +2361,6 @@ struct ContentView: View {
         }
     }
 
-    /// 导航中抓拍预警条（最近路线点位 + 类型图标 + 距离）
-    private var snapAlertCard: some View {
-        Group {
-            if !model.routePois.isEmpty, let loc = model.currentLocation {
-                let nearest = model.routePois.min {
-                    model.distance(to: $0, from: loc) < model.distance(to: $1, from: loc)
-                }
-                if let n = nearest {
-                    let d = model.distance(to: n, from: loc)
-                    if d < 900 {
-                        HStack(spacing: 6) {
-                            // v1.90 电子眼图标按类型细分（红绿灯/测速/压线/限行）
-                            Image(systemName: n.type.alertIcon)
-                                .font(.footnote.bold())
-                                .foregroundStyle(.yellow)
-                            Text("前方\(Int(d))米 \(n.type.voicePrefix) · \(n.name)")
-                                .font(.footnote.bold())
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color(red: 0.9, green: 0.3, blue: 0.2).opacity(0.85),
-                                    in: RoundedRectangle(cornerRadius: 8))
-                        .padding(.horizontal)
-                        .padding(.bottom, 6)
-                    }
-                }
-            }
-        }
-    }
-
     /// 车道箭头图标（lane indication）
     private func navLaneIcon(_ lane: String) -> String {
         switch lane {
@@ -3151,7 +2484,7 @@ struct ContentView: View {
         }
     }
 
-    /// 高德式多路线方案：顶部"我的位置→目的地"，下方横排方案卡（大分钟+里程·抓拍+标签）
+    /// 高德式多路线方案：顶部"我的位置→目的地"，下方横排方案卡（大分钟+里程+标签）
     private var routeChoiceList: some View {
         Group {
             if !model.routeChoices.isEmpty {
@@ -3253,16 +2586,6 @@ struct ContentView: View {
                     }
                     .foregroundStyle(.secondary)
                 }
-                // 沿途抓拍点（骑手最关心的信息）
-                if c.poiCount > 0 {
-                    HStack(spacing: 2) {
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 9, weight: .semibold))
-                        Text("\(c.poiCount)")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(.orange)
-                }
             }
             // 标签 + 禁摩风险徽标
             HStack(spacing: 4) {
@@ -3361,64 +2684,14 @@ struct ContentView: View {
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                     }
-                    // v2.04 官方电警点位（点开小菜单：图层 / 语音 / 看最近的）
-                    Menu {
-                        Toggle(isOn: $camStore.layerOn) {
-                            Label("地图显示电警点位", systemImage: "camera.fill")
-                        }
-                        Toggle(isOn: $camStore.voiceOn) {
-                            Label("接近时语音提醒", systemImage: "speaker.wave.2.fill")
-                        }
-                        Divider()
-                        Button {
-                            model.describeNearbyCameras()
-                        } label: {
-                            Label("看离我最近的拍照点", systemImage: "location.circle")
-                        }
-                        Divider()
-                        Button {
-                            camStore.restoreAll()
-                            model.status = "已恢复全部电警点的官方公示坐标"
-                        } label: {
-                            Label("恢复全部官方坐标", systemImage: "arrow.uturn.backward.circle")
-                        }
-                        .disabled(camStore.adjustedCount == 0)
-                        // v2.26 新增：恢复被用户删除的点位（删除后地图上就没有了）
-                        Button {
-                            camStore.restoreAllDeleted()
-                            model.status = "已恢复被删除的电警点"
-                        } label: {
-                            Label("恢复已删除点位", systemImage: "arrow.uturn.backward.square")
-                        }
-                        .disabled(camStore.deletedIds.isEmpty)
-                        Divider()
-                        Text("已收录 \(camStore.all.count) 个点位")
-                        if camStore.adjustedCount > 0 {
-                            Text("已人工校准 \(camStore.adjustedCount) 个（可长按拖动修正）")
-                        }
-                        Text("来源：合肥市公安局交警支队公示")
-                    } label: {
-                        ZStack {
-                            Circle().fill(camStore.layerOn
-                                          ? Color(red: 0.90, green: 0.16, blue: 0.20)
-                                          : Color.white)
-                            Image(systemName: camStore.layerOn ? "camera.fill" : "camera")
-                                .font(.system(size: 17, weight: .bold))
-                                .foregroundStyle(camStore.layerOn ? .white : .primary)
-                        }
-                        .frame(width: 44, height: 44)
-                        .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                    }
         }
     }
 
     /// 高德式顶部导航条：剩余里程 + 时间 + 下一转向预告（<500米显示，高德顶部主条样式）
     /// v1.65 顶部导航综合条（高德式合并布局，自上而下不重叠）：
     /// 第一行：剩余距离 + 剩余时间 + 实时速度；第二行：下一转向指示（图标+距离+路名+车道）
-    /// v1.84 巡航模式顶部卡片（白底，高德同款）：实时速度 + 最近拍照点，右上角×关闭巡航
+    /// v1.84 巡航模式顶部卡片（白底，高德同款）：实时速度，右上角×关闭巡航
     private var cruiseCard: some View {
-        let cam = model.nearestCruiseCamera
         let speed = Int(model.currentSpeed * 3.6)
         return HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
@@ -3440,18 +2713,6 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("最近拍照")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(cam.name)
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.black)
-                    .lineLimit(1)
-                Text(cam.dist > 0 ? "约\(cam.dist)米" : "附近暂无")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            }
             Button {
                 haptic()
                 withAnimation(.easeOut(duration: 0.2)) { model.exitCruise() }
@@ -3470,7 +2731,8 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0.14), radius: 10, y: 3)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .top)
-        .position(x: UIScreen.main.bounds.width / 2, y: 150)
+        // v2.32 固定 150pt → 屏幕高度 18%：iPhone SE(667) 与 17 Pro Max(874) 上位置比例一致
+        .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.18)
     }
 
     private var navTopBar: some View {
@@ -3611,8 +2873,8 @@ struct ContentView: View {
             // 朝向数据本身保留 —— 导航时地图仍跟随手机方向自动旋转。
             // v1.90 顶部居中道路名胶囊（导航中显示当前道路名）
             if model.navigating { AnyView(roadNamePill) }
-            // 规划态顶部路线胶囊（"我的位置 → 目的地"，点击重新搜索）
-            DraggableFloat(key: "routebar", defaultPos: CGPoint(x: 0.5, y: 0.10)) { AnyView(routeBarOverlay) }
+            // v2.33 已删除规划态顶部路线胶囊：点击后搜索框不可见（规划卡遮挡 bottomMainCard），
+            // 只会弹出键盘且无输入框，属无效按钮；改终点走返回箭头→重新搜索。
             // 地图缩放 + / - 按钮（含当前定位按钮）
             // 地点卡出现时暂时收起，避免整组压在卡片上
             //
@@ -3629,7 +2891,8 @@ struct ContentView: View {
         }
     }
 
-    /// v2.25 导航浮层组（顶部提示卡 / 右侧进度条 / 退出按钮 / 全览条 / 左侧竖排）
+    /// v2.25 导航浮层组（顶部提示卡 / 退出按钮 / 全览条 / 左侧竖排）
+    /// v2.33 已移除右侧竖直路程进度条（用户要求）
     @ViewBuilder
     private var navOverlayGroup: some View {
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
@@ -3638,13 +2901,6 @@ struct ContentView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
-        }
-        // v2.22 右侧竖直绿色路程进度条
-        if model.navigating && !showRouteOverview {
-            AnyView(navProgressBar)
-                .frame(maxHeight: .infinity, alignment: .trailing)
-                .padding(.trailing, 6)
-                .padding(.vertical, 130)
         }
         // 导航中悬浮退出按钮（仅上下移动；全览时隐藏）
         if model.navigating && !showRouteOverview {
@@ -3724,35 +2980,6 @@ struct ContentView: View {
                 .allowsHitTesting(false)
             }
         }
-    }
-
-    /// v2.22 导航右侧竖直绿色路程进度条（已走比例）
-    private var navProgressBar: some View {
-        let p = max(0, min(1, model.navProgress))
-        return VStack(spacing: 0) {
-            // 剩余部分（灰）
-            GeometryReader { geo in
-                ZStack(alignment: .bottom) {
-                    Capsule()
-                        .fill(Color.white.opacity(0.22))
-                        .frame(width: 5)
-                    // 已走部分（绿）：从下往上生长
-                    Capsule()
-                        .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
-                        .frame(width: 5, height: max(4, geo.size.height * p))
-                }
-                .frame(width: 5)
-                .frame(maxHeight: .infinity)
-            }
-            // 当前位置圆点
-            Circle()
-                .fill(Color.white)
-                .frame(width: 7, height: 7)
-                .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
-                .offset(y: -4)
-        }
-        .frame(width: 7)
-        .allowsHitTesting(false)
     }
 
     /// v1.65 退出导航按钮：最下方中间，加大红色胶囊（骑行时单手易点）
@@ -4273,15 +3500,6 @@ struct ContentView: View {
         }
     }
 
-    /// 分享点位（v1.96 统一走 PlaceShare：给的是高德/苹果/百度三条通用导航链接，
-    /// 对方没装本 App 也能直接导航；原先的 motonav:// 深链对方打不开，微信也会拒收）
-    private func sharePoi(_ p: Poi) {
-        PlaceShare.present(PlaceShare.payload(name: p.name,
-                                              address: "",
-                                              type: p.type.label,
-                                              road: "",
-                                              lat: p.lat, lon: p.lon))
-    }
 
     /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
     /// v1.90 顶部居中道路名胶囊（高德式）：导航中显示当前道路名，黑色半透明底，不挡地图
@@ -4296,7 +3514,9 @@ struct ContentView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
                     .background(Color.black.opacity(0.55), in: Capsule())
-                    .padding(.top, 58)
+                    // v2.32 顶部下移到提示卡下方：提示卡(top 8, 高约66~78)与路名胶囊(top 58)重叠约16pt，
+                    // 深色导航中白卡叠黑胶囊视觉糊成一团；移到 88 后两者垂直排开。
+                    .padding(.top, 88)
             }
             Spacer()
         }
@@ -4361,7 +3581,6 @@ struct ContentView: View {
         tipPolygon = nil
         // 清掉此前规划的路线/方案卡残留，只留地点卡
         model.route = []
-        model.routePois = []
         model.routeTurns = []
         model.routeChoices = []
         // v2.25 地图跳转到该搜索点并保持居中，同时：
@@ -4409,7 +3628,7 @@ struct ContentView: View {
         }
     }
 
-    /// v1.81 地点信息卡：距离 / 摩托时间 / 沿途抓拍 / 所在道路
+    /// v1.81 地点信息卡：距离 / 摩托时间 / 所在道路
     private func tipInfoCard(_ t: AppModel.AmapTip) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -4419,10 +3638,7 @@ struct ContentView: View {
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
-                // v1.81.3 右上角关闭按钮移除，改为整卡左滑关闭
-                Text("左滑关闭")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+
             }
             HStack(spacing: 12) {
                 if let d = distText(t.lat, t.lon) {
@@ -4435,9 +3651,6 @@ struct ContentView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             HStack(spacing: 12) {
-                if let loc = model.currentLocation {
-                    Label("沿途抓拍 \(model.snapCountBetween(loc, CLLocationCoordinate2D(latitude: t.lat, longitude: t.lon))) 个", systemImage: "camera.fill")
-                }
                 if let road = tipRoad ?? (!t.sub.isEmpty ? t.sub : nil) {
                     Label("位于\(road)", systemImage: "road.lanes")
                         .lineLimit(1)
@@ -4547,12 +3760,6 @@ struct ContentView: View {
         .padding(.horizontal, 14)
     }
 
-    private func addPoiAtPending(type: PoiType) {
-        guard let c = pendingCoord else { return }
-        model.addPoi(type: type, name: "地图新增\(type.label)点", lat: c.latitude, lon: c.longitude)
-        model.status = "已添加：地图新增\(type.label)点"
-        pendingCoord = nil
-    }
 
     /// v1.80 首页底部主卡片：搜索框 + 导航/我的 合并为一个整体卡片
     private var bottomMainCard: some View {
@@ -5115,18 +4322,6 @@ struct ContentView: View {
             model.status = "已定位，点「去这里」规划路线"
             return
         }
-        let hits = model.searchPois(q)
-        if !hits.isEmpty {
-            // 点击联想的地图内地点名称 → 直接跳转并显示绿色"导航去此处"（多命中优先完全同名）
-            let p = hits.first(where: { $0.name == q }) ?? hits[0]
-            model.selectedPoi = p
-            model.setPreview(p.name, lat: p.lat, lon: p.lon)
-            goHereLabel = "导航去此处"
-            goHereName = p.name
-            goHereLat = p.lat; goHereLon = p.lon
-            model.status = "已定位到「\(displayName(p.name))」，点「导航去此处」规划路线"
-            return
-        }
         // 本地地标词典命中：离线直接出结果（殡仪馆/车站/机场/医院/公园等）
         if let lm = model.matchLandmark(q) {
             showSuggestions = false
@@ -5139,8 +4334,8 @@ struct ContentView: View {
             model.status = "已定位「\(lm.name)」（坐标为估算），点「去这里」规划路线"
             return
         }
-        // 合肥小区/商铺：联想命中则在线查询坐标（精确）后预览
-        if model.hfPois.contains(where: { $0.localizedCaseInsensitiveContains(q) }) {
+        // 合肥小区/商铺：地图标签联想命中则在线查询坐标（精确）后预览
+        if model.placeLabels.contains(where: { $0.name.localizedCaseInsensitiveContains(q) }) {
             model.status = "正在查询「\(q)」位置…"
             Task {
                 if let c = await model.findHefeiCoordinate(q, fuzzy: false) {

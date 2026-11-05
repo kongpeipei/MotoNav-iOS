@@ -11,7 +11,7 @@ import SwiftUI
 /// 播报详细程度（"我的 - 语音播报"）
 enum SpeechLevel: Int, CaseIterable, Identifiable {
     case simple = 0      // 只报关键转向
-    case standard = 1    // 转向 + 红绿灯/测速 + 到达
+    case standard = 1    // 转向 + 前方提醒 + 到达
     case detailed = 2    // 再加路名、剩余里程、弯道、限行提醒
 
     var id: Int { rawValue }
@@ -19,7 +19,7 @@ enum SpeechLevel: Int, CaseIterable, Identifiable {
     var caption: String {
         switch self {
         case .simple: return "只播报转弯与到达"
-        case .standard: return "转弯 + 电子眼 + 到达（推荐）"
+        case .standard: return "转弯 + 前方提醒 + 到达（推荐）"
         case .detailed: return "再加路名、剩余里程、弯道与限行提醒"
         }
     }

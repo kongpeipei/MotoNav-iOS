@@ -76,7 +76,6 @@ struct RouteChoice {
     let durationS: Int
     let turns: [RouteTurn]
     let label: String
-    let poiCount: Int
     /// v1.99 路况分段（高德 tmc），只在拥堵/缓行段有值
     var traffic: [TrafficSpan] = []
     /// v2.18 红绿灯个数（高德 path.traffic_lights；拿不到为 -1）
@@ -195,7 +194,7 @@ enum RouteFetcher {
                 used.insert(label)
                 out.append(RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
-                                       label: label, poiCount: c.poiCount,
+                                       label: label,
                                        traffic: c.traffic, trafficLights: c.trafficLights))
             }
             result = out
@@ -467,7 +466,7 @@ enum RouteFetcher {
         }
         let lights = Int(p["traffic_lights"] as? String ?? "") ?? -1
         return RouteChoice(points: points, distanceM: distanceM, durationS: durationS,
-                           turns: turns, label: label, poiCount: 0, traffic: traffic,
+                           turns: turns, label: label, traffic: traffic,
                            trafficLights: lights)
     }
 
@@ -557,12 +556,12 @@ enum RouteFetcher {
             default: label = "备选"
             }
             out.append(RouteChoice(points: rr.points, distanceM: rr.distanceM,
-                                   durationS: rr.durationS, turns: rr.turns, label: label, poiCount: 0))
+                                   durationS: rr.durationS, turns: rr.turns, label: label))
         }
         if out.count == 1 {
             out[0] = RouteChoice(points: out[0].points, distanceM: out[0].distanceM,
                                  durationS: out[0].durationS, turns: out[0].turns,
-                                 label: "推荐", poiCount: 0)
+                                 label: "推荐")
         }
         return out
     }

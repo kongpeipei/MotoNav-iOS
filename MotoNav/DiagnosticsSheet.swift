@@ -28,7 +28,6 @@ import CoreLocation
 struct DiagnosticsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppModel
-    @ObservedObject var camStore: PoliceCameraStore
     /// 刷新计数（用于触发重算）
     @State private var tick = 0
     /// 上次采样时的电量
@@ -75,17 +74,12 @@ struct DiagnosticsSheet: View {
                     row("当前道路", model.currentRoadName.isEmpty ? "未知" : model.currentRoadName)
                 }
 
-                // ── 路线与点位 ──────────────────────────────────
-                Section("路线与点位") {
+                // ── 路线 ──────────────────────────────────
+                Section("路线") {
                     row("导航中", model.navigating ? "是" : "否")
                     row("路线折线点数", "\(model.route.count)")
                     row("转向步骤数", "\(model.routeTurns.count)")
                     row("已走过索引", "\(model.traveledIdx)")
-                    row("自建点位", "\(model.pois.count)")
-                    row("官方电警点", "\(camStore.all.count)")
-                    row("已删除电警点", "\(camStore.deletedIds.count)")
-                    row("已校准电警点", "\(camStore.adjustedCount)")
-                    row("同步新增点位", "\(camStore.syncedExtra.count)")
                 }
 
                 // ── 最近日志 ────────────────────────────────────

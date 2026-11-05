@@ -9,10 +9,8 @@ import CryptoKit
 import AudioToolbox
 
 extension Notification.Name {
-    /// 触发点位提醒（object 为 Poi）
     static let motoAlert = Notification.Name("motoAlert")
     /// 点位列表变化（供 CarPlay 同步）
-    static let motoPoisChanged = Notification.Name("motoPoisChanged")
 }
 
 /// v2.13 指南针独立状态。
@@ -48,7 +46,6 @@ struct RouteWaypoint: Identifiable, Equatable {
 final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = AppModel()
 
-    @Published var pois: [Poi] = []
     @Published var currentLocation: CLLocationCoordinate2D?
     /// 定位精度（米），越小信号越好
     @Published var locationAccuracy: CLLocationAccuracy = 0
@@ -56,10 +53,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var simulating = false
     @Published var status = "等待定位…"
     @Published var route: [CLLocationCoordinate2D] = []
-    @Published var routePois: [Poi] = []
     /// 多路线方案（点"去这里"后展示，选择后应用）
     @Published var routeChoices: [RouteChoice] = []
-    @Published var selectedPoi: Poi?
     @Published var navigating = false {
         // v1.92：开始/结束导航时同步定位频率——导航中强制取消 50 米降频，保证提醒时效
         didSet { if oldValue != navigating { updateLocationFilter() } }
@@ -80,19 +75,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.02 比例尺文本（放在 ObservableObject 里而不是 View 的 @State：
     /// 地图回调改 @State 会在 SwiftUI 更新周期内触发"下一轮更新"，形成循环，是启动卡顿/闪退的根因之一）
     @Published var scaleText = "200 米"
-    // MARK: v2.04 官方电警接近提醒
-    /// 正在提醒的点位 id（地图上该点放大 1.45 倍 + 白圈加粗）
-    @Published var hotCameraId: Int = 0
-    /// 接近横幅文案（nil 表示不显示）
-    @Published var cameraAlert: String?
-    /// 已进入 260m 圈的点位（离开 400m 后移除，实现"每次靠近只播一次"）
-    private var camArmed: Set<Int> = []
-    /// 每个点位最近一次播报时间（2 分钟内不重复，防止路口来回抖动刷屏）
-    private var camSpokenAt: [Int: Date] = [:]
-    /// 上次做接近判定的位置（位移 <20m 直接跳过，静止时不做无用计算）
-    private var camLastPos: CLLocationCoordinate2D?
-    /// 横幅自动消失任务
-    private var camBannerTask: DispatchWorkItem?
     /// 导航跟随触发（导航开始/结束/到达时递增，地图进入跟随模式）
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
@@ -133,7 +115,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var placeLabels: [PlaceLabel] = []
 
     /// 合肥小区/商铺联想库（内置 + 在线刷新）
-    @Published var hfPois: [String] = []
 
     /// 高德开放平台 Web 服务 Key（可选；填写后搜索联想走高德「输入提示」接口，最接近高德搜索体验）
     /// 高德开放平台 Web 服务 Key（v1.92：内置 Key 改由构建期注入，源码不再含明文）
@@ -152,12 +133,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         var id: String { "\(name)#\(lat)#\(lon)" }
     }
 
-    /// 类型筛选（默认全部启用）
-    var enabledTypes: Set<PoiType> = Set(PoiType.allCases)
-    /// 点位总开关
-    var allPoiEnabled = true
-
-    private let repo = PoiRepository()
     private let lm = CLLocationManager()
     private let speech = AVSpeechSynthesizer()
     /// v1.61 恢复：讯飞在线语音合成（真四川话女声，失败自动降级系统语音）
@@ -171,13 +146,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastSpeakAt = Date.distantPast
     private var lastSpeakPriority = 0
     private var lastSpeakText = ""
-    /// 违拍提醒 Live Activity（灵动岛/锁屏实时显示前方抓拍点，导航中生效）
+    /// 导航巡航 Live Activity（灵动岛/锁屏：头盔 + 已出发/去往目的地，导航中生效）
     private var liveActivity: Activity<MotoNavAttributes>?
     private var simTimer: Timer?
     private var simStep = 0
-    private var lastTrigger: [Int64: Date] = [:]
-    /// 预警分档播报状态：0=未播 1=500m档 2=300m档（按点位）
-    private var alertStage: [Int64: Int] = [:]
     /// 偏离路线检测
     private var offRouteCount = 0
     private var lastReroute = Date(timeIntervalSince1970: 0)
@@ -207,7 +179,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let destName: String
         let distanceM: Int
         let durationS: Int
-        let snapCount: Int
         let avgSpeedKmh: Double
     }
     @Published var tripSummary: TripSummary?
@@ -389,8 +360,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navScaleTick = 0
     /// v2.22 已行驶折线点索引（用于"走过的路变灰"）
     @Published var traveledIdx = 0
-    /// v2.22 导航进度 0~1（右侧竖直进度条）
-    @Published var navProgress = 0.0
     /// v2.22 顶部路线提示（高德式："请先去往出口" / "前方xx米路口直行"）
     @Published var navTopHint = ""
     @Published var navTopHintIcon = "straight.up"
@@ -422,7 +391,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let historyKey = "search_history"
     private let historyLimit = 10
-    private let hfKey = "hf_pois"
 
     // MARK: - 本地高频地标词典（离线可用：殡仪馆/车站/机场/医院/高校/公园/商圈）
     struct SearchLandmark {
@@ -505,9 +473,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         lm.delegate = self
         lm.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-        pois = repo.load()
         loadHistory()
-        loadHefeiPois()
         loadFavorites()
         loadHomeWork()
         loadQuickPois()
@@ -524,6 +490,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             Task { @MainActor in self?.applyPowerSaving() }
         }
         applyPowerSaving()
+        // v2.32 冷启动清理残留灵动岛：App 被上滑清除后系统仍会保留 Live Activity，
+        // 下次打开时立即结束所有遗留活动（与 CameraGuard 同款兜底）。
+        cleanupStaleLiveActivities()
         NotificationCenter.default.addObserver(
             self, selector: #selector(authorizeAndStart),
             name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -677,17 +646,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func isFavorite(_ p: Poi) -> Bool {
-        favorites["\(p.lat),\(p.lon)"] != nil
+    /// v2.33 电警点位已整体移除（为电子眼融合做准备）；收藏按 name/lat/lon 判定
+    func isFavorite(name: String, lat: Double, lon: Double) -> Bool {
+        favorites["\(lat),\(lon)"] != nil
     }
 
-    func toggleFavorite(_ p: Poi) {
-        let key = "\(p.lat),\(p.lon)"
+    /// v2.33 切换收藏（name/lat/lon，与联想地点收藏共用收藏夹）
+    func toggleFavorite(name: String, lat: Double, lon: Double) {
+        let key = "\(lat),\(lon)"
         if favorites[key] != nil {
             favorites.removeValue(forKey: key)
             favoriteTimes.removeValue(forKey: key)
         } else {
-            favorites[key] = p.name
+            favorites[key] = name
             favoriteTimes[key] = Date().timeIntervalSince1970
         }
         UserDefaults.standard.set(favorites, forKey: favKey)
@@ -752,14 +723,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    func setHome(_ p: Poi) {
-        homePlace = SavedPlace(name: p.name, lat: p.lat, lon: p.lon)
+    /// v2.33 电警点位已移除：家/公司改 name/lat/lon 入参
+    func setHome(name: String, lat: Double, lon: Double) {
+        homePlace = SavedPlace(name: name, lat: lat, lon: lon)
         let ud = UserDefaults.standard
         if let d = try? JSONEncoder().encode(homePlace) { ud.set(d, forKey: homeKey) }
     }
 
-    func setWork(_ p: Poi) {
-        workPlace = SavedPlace(name: p.name, lat: p.lat, lon: p.lon)
+    /// v2.33 电警点位已移除：家/公司改 name/lat/lon 入参
+    func setWork(name: String, lat: Double, lon: Double) {
+        workPlace = SavedPlace(name: name, lat: lat, lon: lon)
         let ud = UserDefaults.standard
         if let d = try? JSONEncoder().encode(workPlace) { ud.set(d, forKey: workKey) }
     }
@@ -943,26 +916,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 合肥小区/商铺联想
 
-    private func loadHefeiPois() {
-        // 1) 本地缓存
-        if let cached = UserDefaults.standard.stringArray(forKey: hfKey), !cached.isEmpty {
-            hfPois = cached
-        }
-        // 2) 内置资源
-        if hfPois.isEmpty,
-           let url = Bundle.main.url(forResource: "hefei_pois", withExtension: "json"),
-           let data = try? Data(contentsOf: url),
-           let arr = try? JSONSerialization.jsonObject(with: data) as? [String] {
-            hfPois = arr
-        }
-        // 3) 在线刷新（失败静默）
-        Task {
-            if let fresh = await fetchHefeiPoisOnline() {
-                hfPois = fresh
-                UserDefaults.standard.set(fresh, forKey: hfKey)
-            }
-        }
-    }
 
     /// 在线拉取当前位置周边小区/商铺名称（Overpass 免费接口，范围跟随定位）
     private func fetchHefeiPoisOnline() async -> [String]? {
@@ -1462,7 +1415,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v2.14 发布降频：位置/精度/速度是「界面重建」的触发器。
             // 静止时 GPS 会以 1Hz 左右抖动（每次几米），而 ContentView.body 是一整棵树，
             // 每重算一次都要重建几十个浮层 —— 抖动叠加起来就是「界面完整但点不动」。
-            // 移动超过 5 米或速度明显变化才写 @Published；下面的业务逻辑（电警/导航/巡航）
+            // 移动超过 5 米或速度明显变化才写 @Published；下面的业务逻辑（导航/巡航）
             // 仍然每次定位都执行，不受影响。
             let speed = loc.speed > 0 ? loc.speed : 0
             let moved: Double = currentLocation.map { distanceM($0, coord) } ?? .greatestFiniteMagnitude
@@ -1495,9 +1448,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v2.17 在线搜索按「当前城市」收敛：定位一到位就把城市名预热好，
             // 免得第一次输入关键词时才临时多发一次逆地理（首字联想会慢半拍）
             if cityCache == nil { Task { _ = await self.currentCityName() } }
-            checkAlerts(at: coord)
-            // v2.04 官方电警接近提醒：不看是否在导航，只要在移动就判
-            checkPoliceCameras(at: coord)
+            // v2.33 电警播报引擎已整体移除（为电子眼融合做准备）
             checkNavigation(at: coord)
             updateCruise(at: coord)
         }
@@ -1530,19 +1481,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         cruiseMode = false
         cruiseBase = nil
         cruiseTick += 1
-    }
-
-    /// 巡航卡片"最近拍照点"：距离当前位置最近的启用电警点位
-    var nearestCruiseCamera: (name: String, dist: Int) {
-        guard let loc = currentLocation else { return ("暂无拍照点", 0) }
-        var best: Poi?
-        var bd = Double.greatestFiniteMagnitude
-        for p in pois where p.enabled && p.type.isCamera {
-            let d = distanceM(loc, p.coordinate)
-            if d < bd { bd = d; best = p }
-        }
-        if let b = best { return (b.name, Int(bd)) }
-        return ("暂无拍照点", 0)
     }
 
     nonisolated func locationManager(
@@ -1614,63 +1552,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 接近提醒引擎
 
-    func checkAlerts(at coord: CLLocationCoordinate2D) {
-        let now = Date()
-        // 导航中：三档播报只播最近的一个路线点位（避免同路口多点位语音重叠/连播）
-        if navigating {
-            var nearest: Poi?
-            var nd = Double.greatestFiniteMagnitude
-            for p in pois where p.enabled && allPoiEnabled && enabledTypes.contains(p.type) && routePois.contains(where: { $0.id == p.id }) {
-                let d = distanceM(coord, p.coordinate)
-                if d < nd { nd = d; nearest = p }
-            }
-            if let p = nearest {
-                let stage = alertStage[p.id] ?? 0
-                if nd <= 500 && stage < 1 {
-                    alertStage[p.id] = 1
-                    status = "前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意"
-                    speak("前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意")
-                    updateLiveActivity(phase: "warning", title: p.name, detail: "\(p.type.label) · 距您\(Int(nd))米", distanceM: Int(nd), icon: p.type.rawValue)
-                } else if nd <= 300 && stage < 2 {
-                    alertStage[p.id] = 2
-                    status = "接近\(p.type.voicePrefix)点位：\(p.name)，请减速"
-                    speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速")
-                    updateLiveActivity(phase: "warning", title: p.name, detail: "\(p.type.label) · 距您\(Int(nd))米", distanceM: Int(nd), icon: p.type.rawValue)
-                } else if nd <= p.radiusM && stage < 3 {
-                    alertStage[p.id] = 3
-                    triggerAlert(p, distance: nd)
-                    updateLiveActivity(phase: "warning", title: p.name, detail: "\(p.type.label) · 距您\(Int(nd))米", distanceM: Int(nd), icon: p.type.rawValue)
-                } else if nd > 500 {
-                    alertStage[p.id] = 0
-                    // v2.31 巡航态：右侧距离数字始终显示（绿），随最近点位距离实时变化
-                    updateLiveActivity(phase: "cruising", title: p.name, detail: p.type.label, distanceM: Int(nd), icon: p.type.rawValue)
-                }
-            } else {
-                // 无路线点位：巡航态显示 0m
-                updateLiveActivity(phase: "cruising", title: "已出发", detail: "去往 \(destName)", distanceM: 0, icon: "")
-            }
-            return
-        }
-        for p in pois where p.enabled && allPoiEnabled && enabledTypes.contains(p.type) {
-            let d = distanceM(coord, p.coordinate)
-            if d <= p.radiusM {
-                if let last = lastTrigger[p.id], now.timeIntervalSince(last) < 90 { continue }
-                lastTrigger[p.id] = now
-                triggerAlert(p, distance: d)
-            } else {
-                lastTrigger.removeValue(forKey: p.id)
-            }
-        }
-    }
 
-    private func triggerAlert(_ p: Poi, distance: Double) {
-        let msg = "前方约\(Int(distance))米\(p.type.voicePrefix)，\(p.name)，请提前减速、注意信号灯"
-        status = msg
-        selectedPoi = p
-        speak(msg)
-        postLocalNotification(p, distance: distance)
-        NotificationCenter.default.post(name: .motoAlert, object: p)
-    }
 
     func distanceM(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
         CLLocation(latitude: a.latitude, longitude: a.longitude)
@@ -1678,9 +1560,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 当前定位到点位的直线距离（UI 用）
-    func distance(to p: Poi, from coord: CLLocationCoordinate2D) -> Double {
-        distanceM(coord, p.coordinate)
-    }
 
     // MARK: - 语音（讯飞在线四川话女声优先，失败自动降级系统 TTS 川味甜妹）
 
@@ -1957,18 +1836,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 本地通知
 
-    private func postLocalNotification(_ p: Poi, distance: Double) {
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        let content = UNMutableNotificationContent()
-        content.title = "前方\(p.type.voicePrefix)"
-        content.body = "\(p.name) · 距离约\(Int(distance))米 · 请提前减速、注意信号灯"
-        content.sound = .default
-        let req = UNNotificationRequest(
-            identifier: "moto_\(p.id)", content: content,
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.5, repeats: false))
-        center.add(req)
-    }
 
     // MARK: - 模拟测试
 
@@ -1998,79 +1865,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         simStep += 2
         currentLocation = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         status = String(format: "模拟行驶中 %.5f,%.5f", lat, lon)
-        checkAlerts(at: currentLocation!)
-    }
-
-    // MARK: - 点位增删改
-
-    func addPoi(type: PoiType, name: String, lat: Double, lon: Double, radiusM: Double = 150) {
-        repo.add(type: type, name: name, lat: lat, lon: lon, radiusM: radiusM)
-        refreshPois()
-    }
-
-    func updatePoi(id: Int64, type: PoiType, name: String, lat: Double, lon: Double, radiusM: Double) {
-        repo.update(id: id, type: type, name: name, lat: lat, lon: lon, radiusM: radiusM)
-        refreshPois()
-    }
-
-    func deletePoi(id: Int64) {
-        repo.remove(id: id)
-        refreshPois()
-    }
-
-    func togglePoi(id: Int64) {
-        guard let p = pois.first(where: { $0.id == id }) else { return }
-        repo.setEnabled(id: id, enabled: !p.enabled)
-        refreshPois()
-    }
-
-    func importPois(_ text: String) -> Int {
-        let n = repo.importJson(text)
-        refreshPois()
-        return n
-    }
-
-    func exportPois() -> String { repo.exportJson() }
-
-    private func refreshPois() {
-        pois = repo.all()
-        NotificationCenter.default.post(name: .motoPoisChanged, object: nil)
-    }
-
-    /// CarPlay 展示用：附近启用点位
-    func nearbyPois(withinM meters: Double = 8000) -> [Poi] {
-        guard let loc = currentLocation else { return pois.filter(\.enabled) }
-        return pois.filter { $0.enabled && distanceM(loc, $0.coordinate) <= meters }
-    }
-
-    // MARK: - 点位筛选与总开关
-
-    func setAllPoiEnabled(_ enabled: Bool) {
-        allPoiEnabled = enabled
-        checkFilterChanged()
-    }
-
-    func setTypeEnabled(_ type: PoiType, enabled: Bool) {
-        if enabled { enabledTypes.insert(type) } else { enabledTypes.remove(type) }
-        checkFilterChanged()
-    }
-
-    private func checkFilterChanged() {
-        if !allPoiEnabled {
-            status = "点位提醒已全部关闭"
-        } else {
-            status = "点位筛选：" + enabledTypes.map(\.label).joined(separator: "、")
-        }
-        NotificationCenter.default.post(name: .motoPoisChanged, object: nil)
     }
 
     // MARK: - 目的地搜索与路线规划
 
     /// 按名称在点位库中搜索；返回匹配列表（含类型标签）
-    func searchPois(_ query: String) -> [Poi] {
-        guard !query.isEmpty else { return [] }
-        return pois.filter { fuzzyMatch($0.name, query) }
-    }
 
     // MARK: - 拼音/错别字模糊匹配（v1.29）
     private func pinyinOf(_ s: String) -> (full: String, initials: String) {
@@ -2098,15 +1897,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 无匹配时给出"在线搜索「关键词」"入口
     func searchSuggestions(_ query: String) -> [String] {
         var pool = Set<String>()
-        for p in pois { pool.insert(p.name) }
         for h in searchHistory { pool.insert(h) }
-        for hf in hfPois { pool.insert(hf) }
         for lm in searchLandmarks where lm.matches(query) { pool.insert(lm.name) }
         // v1.45：地图上的小区/商铺/道路名标注全部进联想池（截图里的朱山郢、油坊新城等可搜到）
         for pl in placeLabels { pool.insert(pl.name) }
         let q = query.trimmingCharacters(in: .whitespaces)
         if q.isEmpty {
-            // 空输入：收藏 ⭐ 优先，其次历史，其次常驻点位
+            // 空输入：收藏 ⭐ 优先，其次历史
             var ordered: [String] = []
             for n in favorites.values where !ordered.contains(n) { ordered.append(n) }
             for h in searchHistory where !ordered.contains(h) { ordered.append(h) }
@@ -2365,19 +2162,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         locateTick += 1
     }
 
-    /// v1.81 两点矩形范围内抓拍点位数量（沿途估算）
-    func snapCountBetween(_ from: CLLocationCoordinate2D, _ to: CLLocationCoordinate2D) -> Int {
-        guard !pois.isEmpty else { return 0 }
-        let minLat = min(from.latitude, to.latitude) - 0.004
-        let maxLat = max(from.latitude, to.latitude) + 0.004
-        let minLon = min(from.longitude, to.longitude) - 0.004
-        let maxLon = max(from.longitude, to.longitude) + 0.004
-        return pois.filter { p in
-            p.enabled && allPoiEnabled && enabledTypes.contains(p.type)
-                && p.lat >= minLat && p.lat <= maxLat
-                && p.lon >= minLon && p.lon <= maxLon
-        }.count
-    }
 
     /// v1.81 高德逆地理：道路描述 + 区域（AOI）名称与多边形（extensions=all）
     func amapRegeoInfo(lat: Double, lon: Double) async -> (road: String?, aoiName: String?, polygon: [CLLocationCoordinate2D]?) {
@@ -2491,8 +2275,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 规划到任意目的地并高亮沿途抓拍点位（起点/终点自动吸附到最近道路出入口）
+    /// 规划到任意目的地（起点/终点自动吸附到最近道路出入口）
     func planRoute(to name: String, lat: Double, lon: Double) {
+        if cruiseMode { exitCruise() }   // v2.33 巡航中规划：退出巡航，避免顶部巡航卡与规划卡并存
         guard let start = resolvedOrigin else {
             status = "请先定位后再规划路线"
             return
@@ -2513,7 +2298,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     routeChoices = choices.map { c -> RouteChoice in
                         RouteChoice(points: c.points, distanceM: c.distanceM, durationS: c.durationS,
                                     turns: c.turns, label: c.label,
-                                    poiCount: nearbyPoisOnRoute(c.points).count, traffic: c.traffic,
+                                    traffic: c.traffic,
                                     trafficLights: c.trafficLights)
                     }
                     selectedRouteIdx = 0
@@ -2524,13 +2309,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeDurationS = r.durationS
                 lastTurnSpoken = -1
                 farAnnounced.removeAll()
-                let near = nearbyPoisOnRoute(r.points)
-                routePois = near
                 fitTick += 1
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
                 trafficSpans = r.traffic
                 trafficLights = TrafficLightBuilder.lights(turns: r.turns)
-                status = routeSummary(name, distanceM: r.distanceM, durationS: r.durationS, poiCount: near.count)
+                status = routeSummary(name, distanceM: r.distanceM, durationS: r.durationS)
             } else {
                 fallbackStraightLine(from: from, to: rawEnd, name: name, lat: lat, lon: lon)
             }
@@ -2541,7 +2324,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func fallbackStraightLine(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D,
                                       name: String, lat: Double, lon: Double, walkLeg: [CLLocationCoordinate2D] = []) {
         route = walkLeg.isEmpty ? [from, to] : walkLeg + [to]
-        routePois = nearbyPoisOnRoute(route)
         routeTurns = []
         routeDistanceM = 0
         routeDurationS = 0
@@ -2557,10 +2339,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                                     via: self.waypointCoords)
             if retry.isEmpty { return }
             let list = retry.map { c -> RouteChoice in
-                let n = nearbyPoisOnRoute(c.points).count
                 return RouteChoice(points: c.points, distanceM: c.distanceM,
                                    durationS: c.durationS, turns: c.turns,
-                                   label: c.label, poiCount: n, traffic: c.traffic,
+                                   label: c.label, traffic: c.traffic,
                                    trafficLights: c.trafficLights)
             }
             routeChoices = list
@@ -2571,10 +2352,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 路线摘要文字（高德式：短距离显示米、短时间显示"1分钟内"，避免"0.0公里/0分钟"）
-    private func routeSummary(_ name: String, distanceM: Int, durationS: Int, poiCount: Int) -> String {
+    /// v2.33 电警点位已移除：不再显示"沿途抓拍点 N 处"
+    private func routeSummary(_ name: String, distanceM: Int, durationS: Int) -> String {
         let distTxt = distanceM < 1000 ? "\(distanceM)米" : String(format: "%.1f公里", Double(distanceM) / 1000.0)
         let timeTxt = durationS < 60 ? "1分钟内" : "\(durationS / 60)分钟"
-        return "到「\(name)」约\(distTxt)，预计\(timeTxt)，沿途抓拍点\(poiCount)处，请留意"
+        return "到「\(name)」约\(distTxt)，预计\(timeTxt)"
     }
 
     func clearRoute() {
@@ -2582,7 +2364,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         UIApplication.shared.isIdleTimerDisabled = false
         navigateFollowTick += 1
         route = []
-        routePois = []
         routeTurns = []
         routeChoices = []
         trafficLights = []
@@ -2637,13 +2418,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.lastTurnSpoken = -1
             self.farAnnounced.removeAll()
             self.riskSpokenStage.removeAll()
-            let near = self.nearbyPoisOnRoute(best.points)
-            self.routePois = near
             self.riderRisks = RiderAnalyzer.risks(best.turns, totalM: best.distanceM)
             self.trafficSpans = best.traffic
             self.trafficLights = TrafficLightBuilder.lights(turns: best.turns)
             self.status = self.routeSummary(name, distanceM: best.distanceM,
-                                            durationS: best.durationS, poiCount: near.count)
+                                            durationS: best.durationS)
             // 直接进导航（导航跟随会接管相机，不做路线全览）
             self.toggleNavigation()
         }
@@ -2652,6 +2431,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// "去这里/导航到这里"触发：获取多路线方案（起点=当前定位点，终点吸附到最近道路出入口）
     /// autoStart=true 时路线就绪后自动进入导航（地点信息卡"导航"按钮）
     func fetchRouteChoices(to name: String, lat: Double, lon: Double, autoStart: Bool = false) {
+        if cruiseMode { exitCruise() }   // v2.33 巡航中规划：退出巡航，避免顶部巡航卡与规划卡并存
         guard let start = resolvedOrigin else {
             status = "请先定位后再规划路线"
             return
@@ -2681,10 +2461,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 self.degradedPlan = false
                 // 高德式：默认选中推荐方案并画路线，卡片可切换，底部绿色"开始导航"
                 let list = self.preferMotoRoutes(choices).map { c -> RouteChoice in
-                    let n = nearbyPoisOnRoute(c.points).count
                     return RouteChoice(points: c.points, distanceM: c.distanceM,
                                        durationS: c.durationS, turns: c.turns,
-                                       label: c.label, poiCount: n, traffic: c.traffic,
+                                       label: c.label, traffic: c.traffic,
                                    trafficLights: c.trafficLights)
                 }
                 routeChoices = list
@@ -2725,15 +2504,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routeDurationS = c.durationS
         lastTurnSpoken = -1
         farAnnounced.removeAll()
-        let near = nearbyPoisOnRoute(c.points)
-        routePois = near
         fitTick += 1
         // v1.99 骑行风险 + 路况（切方案时同步刷新）
         riderRisks = RiderAnalyzer.risks(c.turns, totalM: c.distanceM)
         trafficSpans = c.traffic
         trafficLights = TrafficLightBuilder.lights(turns: c.turns)
         riskSpokenStage.removeAll()
-        status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS, poiCount: near.count)
+        status = routeSummary(n, distanceM: c.distanceM, durationS: c.durationS)
         if !riderRisks.isEmpty {
             let blocked = riderRisks.contains { $0.kind.motoBlocked }
             status += "；" + (blocked ? "⚠️ 含禁摩风险路段：" : "注意：") + RiderAnalyzer.summary(riderRisks)
@@ -2741,18 +2518,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// 筛选距路线折线 130 米内的点位
-    private func nearbyPoisOnRoute(_ points: [CLLocationCoordinate2D]) -> [Poi] {
-        guard points.count >= 2 else { return [] }
-        return pois.filter { p in
-            guard p.enabled && allPoiEnabled && enabledTypes.contains(p.type) else { return false }
-            var minD = Double.greatestFiniteMagnitude
-            for i in 0..<(points.count - 1) {
-                let d = distToSegment(p.coordinate, points[i], points[i + 1])
-                if d < minD { minD = d }
-            }
-            return minD <= 130.0
-        }
-    }
 
     /// 点 p 到线段 ab 的垂直距离（局部平面近似，米）
     private func distToSegment(_ p: CLLocationCoordinate2D, _ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
@@ -2802,7 +2567,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             trackPoints.removeAll()
             maxSpeedKph = 0
             riskSpokenStage.removeAll()
-            alertStage = [:]
             offRouteCount = 0
             arriveAnnounced = false
             startMonitoring()
@@ -2844,30 +2608,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// v2.31 灵动岛状态更新时间（节流巡航更新，避免 ActivityKit 更新频率限制）
-    private var lastLiveCruiseAt: Date = .distantPast
-
-    /// 更新灵动岛内容：phase="warning" 预警红 / "cruising" 巡航绿
-    /// 巡航更新节流：10 秒内且距离变化 < 50 米跳过（ActivityKit 对 update 频率有系统限制）
-    private func updateLiveActivity(phase: String, title: String, detail: String, distanceM: Int, icon: String, force: Bool = false) {
-        guard let act = liveActivity else { return }
-        if phase != "warning", !force {
-            let now = Date()
-            guard now.timeIntervalSince(lastLiveCruiseAt) > 10 else { return }
-            lastLiveCruiseAt = now
-        }
-        let state = MotoNavAttributes.ContentState(phase: phase, title: title, detail: detail, distanceM: distanceM, icon: icon)
-        Task {
-            await act.update(using: state)
-        }
-    }
-
     /// 到达/退出导航/清空路线 → 结束灵动岛活动
     private func endLiveActivity() {
         guard let act = liveActivity else { return }
         liveActivity = nil
         Task {
             await act.end(using: nil, dismissalPolicy: .immediate)
+        }
+    }
+
+    /// v2.32 冷启动清理残留：App 被上滑清除后系统仍会保留灵动岛显示，
+    /// 下次打开 App 时把所有遗留活动立即结束（上滑清除无系统回调，只能冷启动兜底）。
+    private func cleanupStaleLiveActivities() {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        liveActivity = nil
+        for activity in Activity<MotoNavAttributes>.activities {
+            Task { await activity.end(dismissalPolicy: .immediate) }
         }
     }
 
@@ -2880,7 +2636,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             destName: destName,
             distanceM: routeDistanceM,
             durationS: dur,
-            snapCount: routePois.count,
             avgSpeedKmh: avg)
         // v1.99 足迹存档：轨迹抽稀后写入本地（里程过短不记）
         let pts = trackPoints.count >= 2 ? trackPoints : route
@@ -2931,10 +2686,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeTurns = r.turns
                 routeDistanceM = r.distanceM
                 routeDurationS = r.durationS
-                routePois = nearbyPoisOnRoute(r.points)
                 lastTurnSpoken = -1
                 farAnnounced.removeAll()
-                alertStage = [:]
                 fitTick += 1
                 // v1.99 偏航重规划后风险/路况同步刷新
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
@@ -2999,7 +2752,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
         let f = ordered[0]
         ordered[0] = RouteChoice(points: f.points, distanceM: f.distanceM, durationS: f.durationS,
-                                 turns: f.turns, label: "推荐", poiCount: f.poiCount, traffic: f.traffic,
+                                 turns: f.turns, label: "推荐", traffic: f.traffic,
                                  trafficLights: f.trafficLights)
         return ordered
     }
@@ -3010,119 +2763,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             && a.points.count == b.points.count
     }
 
-    // MARK: - v2.04 官方电警接近提醒（不需要导航）
-
-    /// 接近合肥交警公示的电警/卡口点位时提醒一次。
-    ///
-    /// 三条设计约束，都是踩过的坑：
-    /// 1. **用位移判定"在移动"而不是 speed**：隧道、树荫、桥下 speed 长期为 0，
-    ///    用 speed 判断会出现"车在开却不提醒"；位移 ≥20m 更稳。
-    /// 2. **进入 260m 播报、离开 400m 重新武装**：单个阈值会在临界点反复触发刷屏。
-    /// 3. **和导航播报错峰**：转向指令优先级 2/3，这里用 1，撞车时延迟 3.5 秒再补一次，
-    ///    否则「前方 200 米左转」刚播完，电警提醒会被 2.5 秒静默窗口吞掉。
-    func checkPoliceCameras(at coord: CLLocationCoordinate2D, force: Bool = false) {
-        let store = PoliceCameraStore.shared
-        guard store.voiceOn else { return }
-        if !force {
-            let moved = camLastPos.map { distanceM($0, coord) } ?? .greatestFiniteMagnitude
-            guard moved >= 20 else { return }
-            camLastPos = coord
-        }
-
-        // 已经离开 400m 的点位解除武装（下次靠近还能再报）
-        if !camArmed.isEmpty {
-            var keep: Set<Int> = []
-            for c in store.all where camArmed.contains(c.id) {
-                if distanceM(coord, c.coordinate) <= 400 { keep.insert(c.id) }
-            }
-            camArmed = keep
-        }
-
-        // 找 260m 内最近的一个
-        var best: (PoliceCamera, Double)?
-        for c in store.all {
-            let d = distanceM(coord, c.coordinate)
-            if d <= 260 {
-                if best == nil || d < best!.1 { best = (c, d) }
-            }
-        }
-        guard let (cam, d) = best else { return }
-        guard !camArmed.contains(cam.id) else { return }
-        if let t = camSpokenAt[cam.id], Date().timeIntervalSince(t) < 120 {
-            camArmed.insert(cam.id)
-            return
-        }
-        // 与导航播报错峰：3 秒内刚播过别的内容，就 3.5 秒后再来（此时人已更靠近，判定仍有效）
-        if !force, Date().timeIntervalSince(lastSpeakAt) < 3.0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
-                guard let self, let loc = self.currentLocation else { return }
-                self.checkPoliceCameras(at: loc, force: true)
-            }
-            return
-        }
-
-        camArmed.insert(cam.id)
-        camSpokenAt[cam.id] = Date()
-        hotCameraId = cam.id
-
-        // v2.27（优化建议 #7）按坐标精度分级提醒：
-        //   · 路口POI（±30m）→ 正常 260m 内提醒
-        //   · 交点推算/近似（±100m）→ 提前到 350m 提醒（免得骑过了才发现）
-        //   · 地理编码（±300m）→ 提前到 420m 提醒，并在语音里说明"位置为估算"
-        // 为什么要分级：内置库里"地理编码(待校准)"的点位误差可达 ±300 米，
-        // 用同样的 260m 提醒，骑手会先收到提醒、真正到路口时却已经过去了 ——
-        // 这种"假提醒"比不提醒更让人不信任。
-        let grade = cam.accuracyGrade
-        let triggerM = grade.triggerRadiusM
-        // 重新按分级阈值找最近点（上面已按 260m 找过，这里放宽）
-        var picked: (PoliceCamera, Double)?
-        if triggerM > 260 {
-            for c in store.all {
-                let dd = distanceM(coord, c.coordinate)
-                if dd <= triggerM, camArmed.contains(c.id) == false {
-                    if picked == nil || dd < picked!.1 { picked = (c, dd) }
-                }
-            }
-        }
-        let (finalCam, finalD) = picked ?? (cam, d)
-        let meters = max(10, Int((finalD / 10).rounded()) * 10)
-        var msg = "前方\(meters)米，\(finalCam.spokenName)，\(finalCam.type.voiceAction)"
-        // 估算位置要明说，让骑手心里有数
-        if finalCam.accuracyGrade.isEstimated {
-            msg += "，位置为估算"
-        }
-        speak(msg, priority: 1)
-        showCameraBanner("\(cam.type.title) · \(cam.spokenName) · \(meters) 米")
-    }
-
-    /// 顶部横幅：8 秒后自动收起，同时把地图上高亮的点恢复
-    private func showCameraBanner(_ text: String) {
-        camBannerTask?.cancel()
-        cameraAlert = text
-        let task = DispatchWorkItem { [weak self] in
-            self?.cameraAlert = nil
-            self?.hotCameraId = 0
-        }
-        camBannerTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: task)
-    }
-
-    /// 手动点"电警"按钮时看一眼附近：给用户一个"离我最近的拍照点在哪"的反馈
-    func describeNearbyCameras() {
-        guard let loc = currentLocation else {
-            status = "还没定位到，稍后再试"
-            return
-        }
-        let near = PoliceCameraStore.shared.nearest(to: loc, limit: 3)
-        guard let first = near.first else {
-            status = "附近 5 公里内没有已收录的官方电警点位"
-            return
-        }
-        let parts = near.map { c, d in "\(c.name) \(Int(d))米" }
-        status = "最近拍照点：" + parts.joined(separator: "；")
-        hotCameraId = first.0.id
-        showCameraBanner("\(first.0.type.title) · \(first.0.spokenName) · \(Int(first.1)) 米")
-    }
 
     /// 导航中：向前 500 米内出现禁摩/隧道/高架等风险段时播报（每段只报一次）
     /// v2.29 已播报过的风险（记录播报到了哪一档）
@@ -3471,7 +3111,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             navigateFollowTick += 1
             finishTrip()
             endLiveActivity()
-            routePois = []
             return
         }
         // 接近终点播报（高德式：剩余500米提示即将到达）
@@ -3556,7 +3195,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// v2.28 导航状态（**纯函数**，不做任何状态写入）
     ///
-    /// 之前这个方法在 body 求值期间写 @Published（traveledIdx / navProgress），
+    /// 之前这个方法在 body 求值期间写 @Published（traveledIdx），
     /// 而它被 UI 调了 3 次（turnAheadCard / navTopBar / navBottomCard），
     /// 于是形成死循环：
     ///   body 求值 → 写 @Published → SwiftUI 标记需重算 → body 再求值 → 再写 …
@@ -3582,13 +3221,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// v2.28 导航进度更新（由定位回调驱动，**不在 body 求值期调用**）
     ///
-    /// "已走过的路变灰"（traveledIdx）和右侧竖直进度条（navProgress）
+    /// "已走过的路变灰"（traveledIdx）
     /// 都需要随位置变化更新，但更新动作绝不能发生在 body 求值期间 ——
     /// 那会触发 SwiftUI 的无限重算循环（见 navigationStatus 的说明）。
     ///
     /// 这里做两件事：
     /// 1. 只在值真的变化时才写 @Published（避免无谓的整树重算）；
-    /// 2. traveledIdx / navProgress 的计算全部走 O(1) 的缓存路径。
+    /// 2. traveledIdx 的计算全部走 O(1) 的缓存路径。
     func updateNavProgress(at coord: CLLocationCoordinate2D?) {
         guard navigating, !route.isEmpty else { return }
         let loc = coord ?? currentLocation
@@ -3610,14 +3249,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // 已走过的路变灰：折线最近点索引
         let idx = nearestRouteIndex(route, loc)
         if idx != traveledIdx { traveledIdx = idx }
-        // 右侧进度条
-        let total = routeDistanceM
-        if total > 0 {
-            let traveled = traveledM(route, loc)
-            let p = min(1, max(0, Double(traveled) / Double(total)))
-            // 变化小于 0.3% 就不写 —— 肉眼看不出差异，但能显著减少重算次数
-            if abs(p - navProgress) > 0.003 { navProgress = p }
-        }
     }
 
     /// v2.22 最近折线点索引（走过的路变灰用；带缓存，增量搜索）
@@ -3777,17 +3408,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard navScaleTarget != metersPerCm else { return }
         navScaleTarget = metersPerCm
         navScaleTick += 1
-    }
-
-    /// v2.29 骑行省电地图（OsmAnd/Komoot 都有这个）
-    ///
-    /// 降低瓦片层级与并发请求数，省流量与 GPU。
-    /// 骑行时手机在导航、没法插充电，这一档比手机导航更该有。
-    /// v2.31 底图换 MapKit 原生后，此开关不再影响瓦片渲染（保留字段兼容历史设置与 UI）
-    @Published var ridingPowerSaveMap: Bool = UserDefaults.standard.object(forKey: "ridingPowerSaveMap") as? Bool ?? false {
-        didSet {
-            UserDefaults.standard.set(ridingPowerSaveMap, forKey: "ridingPowerSaveMap")
-        }
     }
 
     /// v2.29 自动视野档位开关（按速度切换）
