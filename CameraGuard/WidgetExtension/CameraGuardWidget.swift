@@ -222,12 +222,10 @@ struct CameraGuardActivityWidget: Widget {
                         .foregroundStyle(warning ? .red : .green)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    // v1.30：右侧始终显示提示卡数字；无有效距离时留空（与提示卡一致，不再显示 scope 图标）
-                    if context.state.distanceM > 0 {
-                        Text("\(context.state.distanceM)m")
-                            .font(.headline.monospacedDigit())
-                            .foregroundStyle(warning ? .red : .green)
-                    }
+                    // v1.32：右侧一直显示提示卡距离数字，颜色随巡航绿/预警红变化
+                    Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "0m")
+                        .font(.headline.monospacedDigit())
+                        .foregroundStyle(warning ? .red : .green)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 2) {
@@ -251,12 +249,10 @@ struct CameraGuardActivityWidget: Widget {
                 Image(systemName: warning ? "exclamationmark.triangle.fill" : "scope")
                     .foregroundStyle(warning ? .red : .green)
             } compactTrailing: {
-                // v1.30：右侧始终显示提示卡数字；无有效距离时留空（不再显示 scope 图标）
-                if context.state.distanceM > 0 {
-                    Text("\(context.state.distanceM)m")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(warning ? .red : .green)
-                }
+                // v1.32：右侧一直显示提示卡距离数字，颜色随巡航绿/预警红变化
+                Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "0m")
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(warning ? .red : .green)
             } minimal: {
                 Image(systemName: warning ? "exclamationmark.triangle.fill" : "scope")
                     .foregroundStyle(warning ? .red : .green)
@@ -292,12 +288,10 @@ struct LiveActivityCard: View {
                     .foregroundStyle(context.state.phase == "warning" ? .red : .secondary)
             }
             Spacer()
-            // v1.30：右侧始终显示提示卡数字；无有效距离时留空（不再显示 scope 图标）
-            if context.state.distanceM > 0 {
-                Text("\(context.state.distanceM) 米")
-                    .font(.title3.bold().monospacedDigit())
-                    .foregroundStyle(context.state.phase == "warning" ? .red : .green)
-            }
+            // v1.32：右侧一直显示提示卡距离数字，颜色随巡航绿/预警红变化
+            Text(context.state.distanceM > 0 ? "\(context.state.distanceM) 米" : "0 米")
+                .font(.title3.bold().monospacedDigit())
+                .foregroundStyle(context.state.phase == "warning" ? .red : .green)
         }
         .padding(16)
         .background(Color(.secondarySystemBackground),
