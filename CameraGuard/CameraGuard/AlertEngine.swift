@@ -551,7 +551,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 用已缓存位置重新评估最近点位，更新首页并视情况播报。
     /// 新增 / 删除 / 导入点位后调用即可立即刷新，无需等下一次定位。
-    private func evaluateNearest() {
+    /// v1.31：点位操作（新增/启用/修改/恢复/导入）传 forceAnnounce=true，
+    /// 若新点位已在提醒范围内则绕开语音节流立即播报提醒。
+    private func evaluateNearest(forceAnnounce: Bool = false) {
         guard let loc = location else { return }
         // v1.29 休眠态：不预警不播报，仅刷新最近距离供灵动岛显示
         if hibernating {
@@ -596,7 +598,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             announced.remove(best.id)
             return
         }
-        guard bestD <= effectiveWarn, !announced.contains(best.id), canSpeakNow() else { return }
+        guard bestD <= effectiveWarn, !announced.contains(best.id), canSpeakNow(force: forceAnnounce) else { return }
 
         announced.insert(best.id)
         activeWarningId = best.id
@@ -757,8 +759,15 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 节流（优化 B 改进版：点位冷却 + 时间冷却双保险）
 
-    private func canSpeakNow() -> Bool {
+    /// 语音播报节流：前台 8 秒、后台 30 秒最小间隔，防止连续点位刷屏。
+    /// v1.31：点位新增/启用/修改/导入等用户主动操作时 force=true 绕过节流立即播报
+    /// （仍会刷新 lastSpeak，避免随后普通定位在 8 秒内被连报干扰）。
+    private func canSpeakNow(force: Bool = false) -> Bool {
         let now = Date()
+        if force {
+            lastSpeak = now
+            return true
+        }
         let minGap: TimeInterval =
             UIApplication.shared.applicationState == .background ? 30 : 8
         guard now.timeIntervalSince(lastSpeak) > minGap else { return false }
@@ -949,7 +958,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         userPois.append(poi)
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     /// v1.21 点位去重键：类型+6 位坐标（与 Poi.id 前缀口径一致）
@@ -980,7 +989,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let idx = userPois.firstIndex(where: { $0.id == id }) else { return }
         userPois[idx].enabled.toggle()
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     /// 修改自定义点位：只允许改名称/半径/启用状态，坐标与类型固定不变（v1.8）
@@ -993,7 +1002,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         p.longitude = base.longitude
         userPois[idx] = p
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     // MARK: - 内置点位编辑/删除（v1.8）
@@ -1012,7 +1021,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     func restoreBuiltinPoi(id: String) {
         guard deletedBuiltinIds.remove(id) != nil else { return }
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     /// v1.20 一键恢复全部内置点位：清空删除台账与改名/半径/开关补丁，回到出厂默认
@@ -1021,7 +1030,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         builtinPatches.removeAll()
         announced.removeAll()
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     /// 开关内置点位（通过补丁覆盖 enabled）
@@ -1034,7 +1043,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         p.enabled.toggle()
         builtinPatches[poi.id] = p
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     /// 修改内置点位：只允许改名称/半径/启用状态，坐标与类型固定不变
@@ -1050,7 +1059,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         builtinPatches[poi.id] = p
         builtinPatches.removeValue(forKey: Self.stableBuiltinId(for: poi))
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
     }
 
     /// 导出全部点位（Bundle + 用户自定义）为 JSON Data（优化 E）
@@ -1100,7 +1109,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             added += 1
         }
         saveSettings(rebuildIndex: true)
-        evaluateNearest()
+        evaluateNearest(forceAnnounce: true)
         return (added, skipped)
     }
 
