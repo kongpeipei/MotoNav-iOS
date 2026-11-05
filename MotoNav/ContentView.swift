@@ -1321,9 +1321,11 @@ struct ContentView: View {
         // v1.86 巡航模式下隐藏底部搜索卡（巡航视野干净，退出巡航恢复）
         ZStack {
             if !model.navigating && !model.cruiseMode {
+                // v2.36 F1 到达/退出后行程卡显示期间：隐藏规划卡与类别条，
+                // 避免"行程卡+起终点卡+方案卡"三卡叠屏、到达后误触"开始导航"
                 if tapPlace != nil || tipCard != nil {
                     AnyView(poiCardStack)
-                } else if !model.routeChoices.isEmpty {
+                } else if !model.routeChoices.isEmpty && model.tripSummary == nil {
                     // v2.21 路线规划卡拆成上下两张（高德式）：
                     //   上卡 = 出发点/途经点/终点 + 服务小卡 + 沿途设施结果
                     //   下卡 = 方案卡 + 骑行风险 + 开始导航
@@ -1345,13 +1347,13 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() }) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
-                } else {
+                } else if model.tripSummary == nil {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
                     // v1.99 移除地图上浮动的"历史搜索"横条：搜索框聚焦时面板内已有历史列表，
                     // 地图上再挂一条既挡视线又重复
                 }
-                // 搜索主卡：地点卡或路线规划卡出现时隐藏；仅上下移动
-                if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty {
+                // 搜索主卡：地点卡/路线规划卡/行程卡出现时隐藏；仅上下移动
+                if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty && model.tripSummary == nil {
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true) { AnyView(bottomMainCard) }
                 }
@@ -2877,9 +2879,11 @@ struct ContentView: View {
             }
             Spacer()
             // v2.34 E6 巡航中想搜索/改目的地：点放大镜直接进搜索（退出巡航并聚焦搜索框）
+            // v2.36 F3 改用 exitCruise：搜索是临时让位，不应抑制巡航自动进入
+            //（否则搜完不导航，本次会话巡航再也回不来）；只有 × 才是明确"不要巡航"
             Button {
                 haptic()
-                model.dismissCruiseManually()
+                model.exitCruise()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                     searchFocused = true
                     searchExpanded = false

@@ -153,6 +153,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     var voiceMuted: Bool { UserDefaults.standard.object(forKey: "voiceMuted") as? Bool ?? false }
     /// v2.34 体验审查 E7：最近一次播报时间（供导航底卡"播报中"喇叭指示，2.5s 内高亮）
     @Published private(set) var lastSpeakAt = Date.distantPast
+    /// v2.36 F2 灵动岛更新节流：Live Activity 更新是 XPC 开销，5 秒一次足够锁屏读数
+    private var lastActivityUpdate: TimeInterval = 0
+    /// v2.36 F5 超速播报节流（30 秒内不重复；回到限速内后重置）
+    private var lastOverspeedSpeak: TimeInterval = 0
     private var lastSpeakPriority = 0
     private var lastSpeakText = ""
     /// 导航巡航 Live Activity（灵动岛/锁屏：头盔 + 已出发/去往目的地，导航中生效）
@@ -1462,6 +1466,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.99 足迹轨迹 + 最高速（仅导航中记录，避免无意义点位）
             if navigating {
                 trackPoints.append(coord)
+                // v2.36 F6 轨迹源数组封顶：足迹存档已抽稀，但源数组不封顶会随导航时长
+                // 无限累积（2 小时 ≈ 数万点）；超 8000 点隔点抽稀一次（内存有界）
+                if trackPoints.count > 8000 {
+                    trackPoints = stride(from: 0, to: trackPoints.count, by: 2).map { trackPoints[$0] }
+                }
                 if loc.speed > 0 { maxSpeedKph = max(maxSpeedKph, loc.speed * 3.6) }
                 checkRiderRisks(at: coord)
                 // v2.28 导航进度更新放在这里（事件驱动），而不是 body 求值期 ——
@@ -1469,6 +1478,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 updateNavProgress(at: coord)
                 // v2.29 按速度自动切换视野档位（低速看清路口 / 高速看远）
                 updateAutoNavScale()
+                // v2.36 F5 超速语音播报：E8 视觉变红的语音版（高优先级可打断普通播报）
+                if speedLimitKph > 0, currentSpeed * 3.6 > Double(speedLimitKph) {
+                    if Date().timeIntervalSince(lastOverspeedSpeak) > 30 {
+                        lastOverspeedSpeak = Date()
+                        speak("您已超速，当前速度\(Int(currentSpeed * 3.6))", priority: 2)
+                    }
+                } else {
+                    lastOverspeedSpeak = 0
+                }
             }
             // v1.99 组队位置上报（未组队时是空操作）
             TeamRide.shared.update(lat: coord.latitude, lon: coord.longitude,
@@ -2695,6 +2713,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    /// v2.36 F2 导航中灵动岛/锁屏实时刷新：剩余距离驱动（节流见调用处）。
+    /// 锁屏卡展示"导航中 / 去往X / Nm"，不再是一成不变的 0m。
+    private func updateLiveActivity(remainM: Int) {
+        guard let act = liveActivity, navigating else { return }
+        let state = MotoNavAttributes.ContentState(
+            phase: "cruising", title: "导航中",
+            detail: destName.isEmpty ? "去往目的地" : "去往 \(destName)",
+            distanceM: remainM, icon: "")
+        Task {
+            try? await act.update(using: state)
+        }
+    }
+
     /// v2.32 冷启动清理残留：App 被上滑清除后系统仍会保留灵动岛显示，
     /// 下次打开 App 时把所有遗留活动立即结束（上滑清除无系统回调，只能冷启动兜底）。
     private func cleanupStaleLiveActivities() {
@@ -2751,15 +2782,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard offRouteCount >= 3, Date().timeIntervalSince(lastReroute) > 25 else { return }
         offRouteCount = 0
         lastReroute = Date()
-        speak("路线已重新规划，请按新路线行驶")
-        status = "路线已重新规划，请按新路线行驶"
         guard let start = currentLocation else { return }
         Task {
             // v1.98 偏航重规划也走高德（与规划同源），不再用 OSRM 吸附终点
             let dest = CLLocationCoordinate2D(latitude: destLat, longitude: destLon)
             let choices = await RouteFetcher.fetchAll(from: start, to: dest, amapKey: amapKey,
                                                       via: self.waypointCoords)
+            // v2.36 F4 重规划成功才播报；失败（无网/超时返回空）如实提示，不再"假成功"
             if let r = choices.first {
+                speak("路线已重新规划，请按新路线行驶")
+                status = "路线已重新规划，请按新路线行驶"
+                route = r.points
                 route = r.points
                 routeTurns = r.turns
                 routeDistanceM = r.distanceM
@@ -2771,6 +2804,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
                 trafficSpans = r.traffic
                 trafficLights = TrafficLightBuilder.lights(turns: r.turns)
+            } else {
+                status = "重新规划失败，请检查网络后重试"
             }
         }
     }
@@ -3327,6 +3362,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             } else {
                 navStatusCache = st
             }
+        }
+        // v2.36 F2 导航中灵动岛实时剩余距离：5 秒节流一次（Live Activity XPC 有开销，
+        // 且锁屏读数不需要秒级精度）
+        if let st = navStatusCache,
+           Date().timeIntervalSince(lastActivityUpdate) > 5 {
+            lastActivityUpdate = Date()
+            updateLiveActivity(remainM: st.remainM)
         }
         // 已走过的路变灰：折线最近点索引
         let idx = nearestRouteIndex(route, loc)
