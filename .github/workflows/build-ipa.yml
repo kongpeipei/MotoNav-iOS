@@ -68,6 +68,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: 选择 Xcode 16（工程 objectVersion 63 需 Xcode 16+）
+        run: |
+          for X in /Applications/Xcode_16*.app; do
+            if [ -d "$X" ]; then sudo xcode-select -s "$X"; break; fi
+          done
+          xcodebuild -version | head -1
+
       - name: 2) 本地静态校验（1 秒）
         run: |
           set -e
@@ -129,6 +136,13 @@ jobs:
           fetch-depth: 1
 
       # 准备阶段：密钥注入 + 工程修补 + 版本号 + 打包环境自检，一次 shell 完成
+      - name: 选择 Xcode 16（工程 objectVersion 63 需 Xcode 16+）
+        run: |
+          for X in /Applications/Xcode_16*.app; do
+            if [ -d "$X" ]; then sudo xcode-select -s "$X"; break; fi
+          done
+          xcodebuild -version | head -1
+
       - name: 2) 准备（密钥 / 工程修补 / 版本号 / 导出配置）
         env:
           IN_AMAP_KEY: ${{ secrets.AMAP_KEY }}
