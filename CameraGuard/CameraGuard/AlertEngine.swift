@@ -555,16 +555,20 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 若新点位已在提醒范围内则绕开语音节流立即播报提醒。
     private func evaluateNearest(forceAnnounce: Bool = false) {
         guard let loc = location else { return }
-        // v1.29 休眠态：不预警不播报，仅刷新最近距离供灵动岛显示
-        if hibernating {
+        let speed = loc.speed >= 0 ? loc.speed : 0
+        // v1.29 休眠态：不预警不播报，仅刷新最近距离供灵动岛显示。
+        // v1.34：用户主动新增/启用/修改/恢复/导入点位（forceAnnounce=true）时，
+        // 即使当前处于休眠（速度低于10码）也立即按用户设置的播报距离评估提醒。
+        if hibernating && !forceAnnounce {
             if let (best, bestD) = findNearest(relativeTo: loc) {
                 nearest = best
                 nearestDistance = bestD
             }
             return
         }
-        let speed = loc.speed >= 0 ? loc.speed : 0
-        let effectiveWarn = warnDistance * adaptiveFactor(forSpeed: speed)
+        // v1.34：主动点位操作按用户设置的基础播报距离评估（不加自适应系数），
+        // 保证"在播报距离内"即触发提醒，不受低速自适应缩小影响。
+        let effectiveWarn = forceAnnounce ? warnDistance : warnDistance * adaptiveFactor(forSpeed: speed)
 
         guard let (best, bestD) = findNearest(relativeTo: loc) else {
             nearest = nil
