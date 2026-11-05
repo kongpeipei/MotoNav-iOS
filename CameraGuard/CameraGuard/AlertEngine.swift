@@ -340,6 +340,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 生命周期
 
     func start() {
+        // v1.24：冷启动清理上次残留的灵动岛（App 被清除后系统仍保留显示，重开即清）
+        cleanupStaleLiveActivities()
+
         // 优化 F：启动时请求通知权限（兜底）
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             if settings.authorizationStatus == .notDetermined {
@@ -640,6 +643,47 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             detail: "已载入 \(pois.count) 个点位",
             distanceM: 0
         )
+    }
+
+    // MARK: - v1.24 灵动岛生命周期管理（后台超时自动结束 / 回前台恢复 / 启动清理）
+
+    /// 后台超时任务：进后台超过该时长未回前台则结束灵动岛
+    private var backgroundTimeoutTask: Task<Void, Never>?
+
+    /// 由 App 的 scenePhase 驱动：background → 计时结束后灵动岛；active → 恢复
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            guard isMonitoring, liveActivityEnabled, liveActivity != nil else { return }
+            backgroundTimeoutTask?.cancel()
+            backgroundTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 180 * 1_000_000_000) // 3 分钟
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self else { return }
+                    if self.isMonitoring {
+                        self.endLiveActivity()
+                    }
+                }
+            }
+        case .active:
+            backgroundTimeoutTask?.cancel()
+            backgroundTimeoutTask = nil
+            // 若监听中且开关开、活动已被自动结束，则恢复灵动岛
+            if isMonitoring, liveActivityEnabled, liveActivity == nil {
+                startLiveActivity()
+            }
+        default:
+            break
+        }
+    }
+
+    /// 冷启动清理残留：App 被上滑清除后系统仍会保留灵动岛显示，
+    /// 下次打开 App 时把所有遗留活动立即结束，避免"关不掉"的观感
+    private func cleanupStaleLiveActivities() {
+        for activity in Activity<CameraGuardActivityAttributes>.activities {
+            Task { await activity.end(dismissalPolicy: .immediate) }
+        }
     }
 
     // MARK: - 节流（优化 B 改进版：点位冷却 + 时间冷却双保险）

@@ -639,3 +639,23 @@ v1.17 已修）。但 v1.21/v1.22 加上渲染层去重后用户实测**仍感�
    - 2 个 .sheet（isPresented + item）合并为**单一 .sheet(item: PoiSheet)**（添加/编辑）。
 2. VoiceEngineView 语音包列表改用 deduplicatedVoicePacks（按 vcn 去重兜底）。
 3. AlertEngine 新增 deduplicatedVoicePacks。
+
+---
+
+# 第十八轮（v1.24 · 灵动岛生命周期管理）
+
+版本 1.23 → 1.24（构建号 24 → 25）。用户反馈：App 从后台清除后灵动岛依然显示。
+
+## 机制说明（向用户如实解释）
+
+灵动岛 Live Activity 是 iOS 系统级实时活动，由系统渲染；App 进程被上滑清除后
+灵动岛仍保留显示是系统设计（高德/百度等同），iOS 没有"App 被杀瞬间"的回调，
+任何 App 都无法在杀掉的瞬间结束它。
+
+## 实现（让行为完全可控）
+
+1. scenePhase 驱动：App 退后台满 3 分钟未回前台 → endLiveActivity() 自动结束；
+   回前台若监听中且开关开、活动已被自动结束 → 自动恢复灵动岛。
+2. 冷启动清理：start() 里遍历 Activity.activities 把残留活动全部 immediate end，
+   保证"重新打开 App 立即清理干净"。
+3. 设置区新增说明文案：长按灵动岛可即时移除；后台 3 分钟自动结束；重开自动清理。
