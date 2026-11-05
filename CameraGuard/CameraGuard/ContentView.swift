@@ -8,11 +8,11 @@ struct ContentView: View {
 
     private let distanceOptions: [Double] = [300, 500, 800, 1000]
 
-    /// v1.9：用 NavigationStack 路径管理页面跳转，悬浮球点击可一键回到主界面
+    /// v1.9：用 NavigationStack 路径管理页面跳转
     @State private var navPath = NavigationPath()
 
     /// v1.9 当前版本 IPA 的公开下载地址（GitHub Release 附件，随每次发布更新）
-    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.11/CameraGuard-unsigned.ipa"
+    private let ipaShareURL = "https://github.com/kongpeipei/MotoNav-iOS/releases/download/camera-guard-v1.12/CameraGuard-unsigned.ipa"
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -63,9 +63,8 @@ struct ContentView: View {
                 Text("锁屏或切到后台后仍要语音提醒违法拍照点，需要把定位权限改为「始终允许」。")
             }
         }
-        // v1.9：顶部弹窗 + 可拖动悬浮球覆盖层
+        // v1.9：顶部弹窗覆盖层（v1.12 起不再有悬浮球，避免全屏手势层拦截导航点击）
         .overlay(alignment: .top) { bannerOverlay }
-        .overlay { floatingBallOverlay }
     }
 
     /// v1.9 页面路由（用于 NavigationStack path）
@@ -102,11 +101,11 @@ struct ContentView: View {
         return vc
     }
 
-    // MARK: - v1.9 顶部弹窗（接近抓拍点：弹窗 → 自动收起 → 变红悬浮球显示米数）
+    // MARK: - v1.9 顶部弹窗（接近抓拍点弹窗提示，按设置时长自动收起；v1.12 起无悬浮球）
 
     private var bannerOverlay: some View {
         Group {
-            if engine.floatEnabled, let text = engine.bannerText {
+            if let text = engine.bannerText {
                 VStack(spacing: 3) {
                     Label("抓拍提醒", systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline.bold())
@@ -127,54 +126,6 @@ struct ContentView: View {
             }
         }
         .animation(.spring(duration: 0.35), value: engine.bannerText)
-    }
-
-    // MARK: - v1.9 可拖动悬浮球（绿色=巡航 / 红色=预警+球内米数）
-
-    private var floatingBallOverlay: some View {
-        GeometryReader { geo in
-            if engine.floatEnabled {
-                floatingBall
-                    .position(CGPoint(x: engine.ballPosition.x * geo.size.width,
-                                      y: engine.ballPosition.y * geo.size.height))
-                    .gesture(engine.floatDraggable ? ballDragGesture(size: geo.size) : nil)
-                    .onTapGesture {
-                        // 点击悬浮球：回到主界面（清空导航路径）
-                        if !navPath.isEmpty { navPath = NavigationPath() }
-                    }
-            }
-        }
-        .allowsHitTesting(true)
-    }
-
-    private var floatingBall: some View {
-        ZStack {
-            Circle()
-                .fill(engine.floatWarning ? Color.red : Color.green)
-                .shadow(color: (engine.floatWarning ? Color.red : Color.green).opacity(0.55),
-                        radius: 6, y: 3)
-            VStack(spacing: 0) {
-                Text(engine.floatWarning && engine.nearestDistance.isFinite
-                     ? "\(Int(engine.nearestDistance))" : "--")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white)
-                Text("米")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-        }
-        .frame(width: 58, height: 58)
-        .contentShape(Circle())
-    }
-
-    private func ballDragGesture(size: CGSize) -> some Gesture {
-        DragGesture()
-            .onChanged { v in
-                let x = min(max(v.location.x / size.width, 0.07), 0.93)
-                let y = min(max(v.location.y / size.height, 0.10), 0.90)
-                engine.ballPosition = CGPoint(x: x, y: y)
-            }
-            .onEnded { _ in engine.saveSettings() }
     }
 
     // MARK: - 状态栏
@@ -409,79 +360,42 @@ struct ContentView: View {
             Text("高级设置")
                 .font(.headline)
 
-            // v1.9 悬浮球设置（高级设置第一项）
+            // v1.9 提醒设置（v1.12 起移除悬浮球，保留弹窗展示时长与灵动岛）
             VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("弹窗展示时长")
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        Text(String(format: "%.1f 秒", engine.bannerDuration))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: $engine.bannerDuration, in: 1...10, step: 0.1)
+                        .tint(.green)
+                    Text("接近抓拍点时的顶部弹窗停留时长，到时自动收起")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .onChange(of: engine.bannerDuration) { _, _ in engine.saveSettings() }
+
                 Toggle(isOn: Binding(
-                    get: { engine.floatEnabled },
+                    get: { engine.liveActivityEnabled },
                     set: { on in
-                        engine.floatEnabled = on
-                        if !on {
-                            engine.dismissBanner()
+                        engine.liveActivityEnabled = on
+                        if on {
+                            engine.startLiveActivity()
+                        } else {
                             engine.endLiveActivity()
                         }
                         engine.saveSettings()
                     }
                 )) {
                     HStack(spacing: 6) {
-                        Image(systemName: "scope")
+                        Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                             .foregroundStyle(.green)
-                        Text("悬浮球")
-                            .font(.subheadline.weight(.medium))
-                        Spacer()
-                        Text(engine.floatEnabled ? "开启" : "关闭")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if engine.floatEnabled {
-                    Toggle(isOn: Binding(
-                        get: { engine.floatDraggable },
-                        set: { engine.floatDraggable = $0; engine.saveSettings() }
-                    )) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "hand.draw.fill")
-                                .foregroundStyle(.green)
-                            Text("允许拖动悬浮球")
-                                .font(.subheadline)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("弹窗展示时长")
-                                .font(.subheadline)
-                            Spacer()
-                            Text(String(format: "%.1f 秒", engine.bannerDuration))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(value: $engine.bannerDuration, in: 1...10, step: 0.1)
-                            .tint(.green)
-                        Text("接近抓拍点时的顶部弹窗停留时长，到时自动收起变回悬浮球")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .onChange(of: engine.bannerDuration) { _, _ in engine.saveSettings() }
-
-                    Toggle(isOn: Binding(
-                        get: { engine.liveActivityEnabled },
-                        set: { on in
-                            engine.liveActivityEnabled = on
-                            if on {
-                                engine.startLiveActivity()
-                            } else {
-                                engine.endLiveActivity()
-                            }
-                            engine.saveSettings()
-                        }
-                    )) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "iphone.gen3.radiowaves.left.and.right")
-                                .foregroundStyle(.green)
-                            Text("灵动岛实时活动（后台/锁屏）")
-                                .font(.subheadline)
-                        }
+                        Text("灵动岛实时活动（后台/锁屏）")
+                            .font(.subheadline)
                     }
                 }
             }

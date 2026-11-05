@@ -86,22 +86,16 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var deletedBuiltinIds: Set<String> = []
     @Published private(set) var builtinPatches: [String: Poi] = [:]
 
-    // MARK: - v1.9 悬浮球 / 弹窗 / 灵动岛
+    // MARK: - v1.9 弹窗 / 灵动岛（v1.12 起不再包含悬浮球）
 
-    /// 悬浮球总开关（高级设置第一项）
-    @Published var floatEnabled: Bool = true
-    /// 悬浮球是否允许拖动（位置归一化 0~1 持久化）
-    @Published var floatDraggable: Bool = true
     /// 接近抓拍点时的顶部弹窗停留时长（1~10 秒，默认 1.2）
     @Published var bannerDuration: Double = 1.2
     /// 后台/锁屏时是否使用灵动岛实时活动
     @Published var liveActivityEnabled: Bool = true
-    /// 悬浮球当前位置（归一化坐标，0~1）
-    @Published var ballPosition: CGPoint = CGPoint(x: 0.88, y: 0.80)
 
     /// 当前打包版本号（读取 CFBundleShortVersionString，供分享文案使用）
     static var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.10"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.12"
     }
 
     // MARK: - v1.10 CarPlay（音频类）
@@ -110,7 +104,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var carPlayConnected = false
     /// 顶部弹窗当前文案（nil 表示不显示）
     @Published var bannerText: String?
-    /// 是否处于抓拍预警状态（悬浮球红色 + 灵动岛警告态）
+    /// 是否处于抓拍预警状态（弹窗与灵动岛红色警告态）
     @Published private(set) var floatWarning: Bool = false
     /// 当前预警对应的点位 id（离开预警半径时清空）
     private var activeWarningId: String?
@@ -215,7 +209,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         loadVoicePacks()
         // v1.8 加载内置点位的删除/补丁台账（同样在 super.init() 之后）
         loadBuiltinLedger()
-        // v1.9 加载悬浮球/弹窗/灵动岛设置与悬浮球位置
+        // v1.9 加载弹窗/灵动岛设置
         loadFloatSettings()
         // v1.11 恢复云端点位库（在线更新结果持久化）
         loadRemotePois()
@@ -266,16 +260,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// v1.9：恢复悬浮球/弹窗/灵动岛设置与悬浮球位置（归一化坐标）
+    /// v1.9：恢复弹窗/灵动岛设置
     private func loadFloatSettings() {
         let defaults = UserDefaults.standard
-        if let v = defaults.object(forKey: "floatEnabled") as? Bool { floatEnabled = v }
-        if let v = defaults.object(forKey: "floatDraggable") as? Bool { floatDraggable = v }
         if let v = defaults.object(forKey: "bannerDuration") as? Double { bannerDuration = v }
         if let v = defaults.object(forKey: "liveActivityEnabled") as? Bool { liveActivityEnabled = v }
-        let x = defaults.object(forKey: "floatBallX") as? Double ?? 0.88
-        let y = defaults.object(forKey: "floatBallY") as? Double ?? 0.80
-        ballPosition = CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
     }
 
     // MARK: - v1.11 点位在线更新（云端点位库）
@@ -557,7 +546,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         nearest = best
         nearestDistance = bestD
 
-        // v1.9 悬浮球 / 灵动岛状态机：进入预警半径→红色+距离，离开预警半径→自动回绿
+        // v1.9 灵动岛状态机：进入预警半径→红色+距离，离开预警半径→自动回绿
         if bestD > effectiveWarn {
             if floatWarning || activeWarningId != nil {
                 floatWarning = false
@@ -604,7 +593,6 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 显示顶部弹窗：文案保留 bannerDuration 秒后自动隐藏
     func showBanner(text: String) {
-        guard floatEnabled else { return }
         bannerText = text
         bannerTask?.cancel()
         bannerTask = Task { @MainActor in
@@ -613,13 +601,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 手动收起当前弹窗（关闭悬浮球时调用）
+    /// 手动收起当前弹窗
     func dismissBanner() {
         bannerTask?.cancel()
         bannerText = nil
     }
 
-    // MARK: - v1.9 灵动岛 / Live Activity（后台、锁屏时同步悬浮球状态）
+    // MARK: - v1.9 灵动岛 / Live Activity（后台、锁屏时同步预警状态）
 
     /// 开始实时活动（进入监听时调用）
     func startLiveActivity() {
@@ -815,13 +803,9 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let data = try? JSONEncoder().encode(builtinPatches) {
             defaults.set(data, forKey: "builtinPatches")
         }
-        // v1.9 悬浮球/弹窗/灵动岛设置与悬浮球位置
-        defaults.set(floatEnabled, forKey: "floatEnabled")
-        defaults.set(floatDraggable, forKey: "floatDraggable")
+        // v1.9 弹窗/灵动岛设置
         defaults.set(bannerDuration, forKey: "bannerDuration")
         defaults.set(liveActivityEnabled, forKey: "liveActivityEnabled")
-        defaults.set(ballPosition.x, forKey: "floatBallX")
-        defaults.set(ballPosition.y, forKey: "floatBallY")
         if rebuildIndex { self.rebuildIndex() }
     }
 
