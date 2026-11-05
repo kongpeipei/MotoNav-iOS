@@ -120,8 +120,13 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 内置点位生效列表 = 内置 - 已删除，再叠加用户补丁（坐标与类型始终不变）
     var builtinPois: [Poi] {
-        bundledPois.filter { !deletedBuiltinIds.contains($0.id) }
+        basePois.filter { !deletedBuiltinIds.contains($0.id) }
             .map { builtinPatches[$0.id] ?? $0 }
+    }
+
+    /// v1.11 内置点位基础库：云端更新库（在线更新后持久化）优先，否则回退 Bundle 内置库
+    var basePois: [Poi] {
+        remotePois.isEmpty ? bundledPois : remotePois
     }
 
     /// 全部有效点位 = 内置（含补丁/删除）+ 用户自定义（均过滤 enabled=true）
@@ -150,6 +155,10 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let lm = CLLocationManager()
     private(set) var bundledPois: [Poi] = []
+    /// v1.11 云端点位库（在线更新结果，持久化到 UserDefaults；为空时回退 Bundle 内置库）
+    private(set) var remotePois: [Poi] = []
+    /// v1.11 在线更新状态文案（点位管理页展示）
+    @Published var remoteUpdateStatus: String = ""
     /// 已播报点位 id（published 供首页显示「已播报」状态，避免播报后仍显示「即将播报」）
     @Published private(set) var announced: Set<String> = []
     /// v1.4 功耗自适应：当前是否处于高精度模式（低速/静止时降精度省电）
@@ -190,16 +199,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let url = Bundle.main.url(forResource: "poi", withExtension: "json"),
            let data = try? Data(contentsOf: url),
            let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            bundledPois = raw.compactMap { dict -> Poi? in
-                guard let name = dict["name"] as? String,
-                      let typeRaw = dict["type"] as? String,
-                      let type = PoiType(rawValue: typeRaw),
-                      let lat = (dict["lat"] as? NSNumber)?.doubleValue,
-                      let lon = (dict["lon"] as? NSNumber)?.doubleValue else { return nil }
-                return Poi(name: name, type: type, latitude: lat, longitude: lon,
-                           radiusM: (dict["radiusM"] as? NSNumber)?.doubleValue ?? 500,
-                           enabled: (dict["enabled"] as? Bool) ?? true)
-            }
+            bundledPois = Self.parsePois(raw)
         }
 
         // 加载用户自定义点位
@@ -217,6 +217,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         loadBuiltinLedger()
         // v1.9 加载悬浮球/弹窗/灵动岛设置与悬浮球位置
         loadFloatSettings()
+        // v1.11 恢复云端点位库（在线更新结果持久化）
+        loadRemotePois()
 
         lm.delegate = self
         // v1.4：初始按「行驶中」配置；低速/静止后自动切成低精度低频，减少骑行者电池消耗
@@ -274,6 +276,82 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let x = defaults.object(forKey: "floatBallX") as? Double ?? 0.88
         let y = defaults.object(forKey: "floatBallY") as? Double ?? 0.80
         ballPosition = CGPoint(x: min(max(x, 0), 1), y: min(max(y, 0), 1))
+    }
+
+    // MARK: - v1.11 点位在线更新（云端点位库）
+
+    /// 云端点位库地址：仓库 main 分支的 poi.json（随仓库更新即全网同步，零服务器成本）
+    static let remotePointsURL = "https://raw.githubusercontent.com/kongpeipei/MotoNav-iOS/main/CameraGuard/CameraGuard/poi.json"
+
+    /// 逐条解析点位数组（坏条目跳过），Bundle 内置库与云端更新共用同一解析
+    private static func parsePois(_ raw: [[String: Any]]) -> [Poi] {
+        raw.compactMap { dict -> Poi? in
+            guard let name = dict["name"] as? String,
+                  let typeRaw = dict["type"] as? String,
+                  let type = PoiType(rawValue: typeRaw),
+                  let lat = (dict["lat"] as? NSNumber)?.doubleValue,
+                  let lon = (dict["lon"] as? NSNumber)?.doubleValue else { return nil }
+            return Poi(name: name, type: type, latitude: lat, longitude: lon,
+                       radiusM: (dict["radiusM"] as? NSNumber)?.doubleValue ?? 500,
+                       enabled: (dict["enabled"] as? Bool) ?? true)
+        }
+    }
+
+    /// 恢复上次在线更新保存的云端点位库
+    private func loadRemotePois() {
+        if let data = UserDefaults.standard.data(forKey: "remotePois"),
+           let decoded = try? JSONDecoder().decode([Poi].self, from: data),
+           !decoded.isEmpty {
+            remotePois = decoded
+        }
+    }
+
+    /// 检查并应用云端最新点位库：下载 → 逐条校验 → 持久化 → 重建索引并立即生效
+    func checkRemotePointsUpdate() {
+        remoteUpdateStatus = "正在检查更新…"
+        guard let url = URL(string: Self.remotePointsURL) else {
+            remoteUpdateStatus = "更新地址无效"
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let task = URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    self.remoteUpdateStatus = "检查更新失败：\(error.localizedDescription)"
+                    return
+                }
+                guard let data,
+                      let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                      !raw.isEmpty else {
+                    self.remoteUpdateStatus = "点位数据为空或格式错误"
+                    return
+                }
+                let decoded = Self.parsePois(raw)
+                guard !decoded.isEmpty else {
+                    self.remoteUpdateStatus = "解析失败，请稍后再试"
+                    return
+                }
+                let added = decoded.count - self.remotePois.count
+                self.remotePois = decoded
+                if let d = try? JSONEncoder().encode(decoded) {
+                    UserDefaults.standard.set(d, forKey: "remotePois")
+                }
+                let dateText = Date().formatted(date: .numeric, time: .omitted)
+                var msg = "更新完成：共 \(decoded.count) 个点位（\(dateText)）"
+                if added > 0 { msg += "，新增 \(added) 个" }
+                self.remoteUpdateStatus = msg
+                self.invalidatePoiCache()
+                self.rebuildIndex()
+                // 同步刷新 CarPlay 卡片与灵动岛的点位数
+                CarPlaySupport.pointsCountSnapshot = self.pois.count
+                CarPlaySupport.updateNowPlaying()
+                self.updateLiveActivity()
+            }
+        }
+        task.resume()
     }
 
     // MARK: - 索引（优化 D：纬度分桶 + 邻桶扫描）
@@ -840,7 +918,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 开关内置点位（通过补丁覆盖 enabled）
     func toggleBuiltinPoi(id: String) {
-        guard let base = bundledPois.first(where: { $0.id == id }),
+        guard let base = basePois.first(where: { $0.id == id }),
               !deletedBuiltinIds.contains(id) else { return }
         var p = builtinPatches[id] ?? base
         p.enabled.toggle()
@@ -851,7 +929,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 修改内置点位：只允许改名称/半径/启用状态，坐标与类型固定不变
     func updateBuiltinPoi(_ poi: Poi) {
-        guard let base = bundledPois.first(where: { $0.id == poi.id }),
+        guard let base = basePois.first(where: { $0.id == poi.id }),
               !deletedBuiltinIds.contains(poi.id) else { return }
         var p = poi
         p.type = base.type
