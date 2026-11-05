@@ -2747,9 +2747,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 锁屏卡展示"导航中 / 去往X / Nm"，不再是一成不变的 0m。
     private func updateLiveActivity(remainM: Int) {
         guard let act = liveActivity, navigating else { return }
+        // v2.47 Q1 锁屏 detail 随状态升级（phase 保持 cruising，Widget 渲染分支稳定）：
+        // 偏航中 → 已偏航提示；剩余 <500m → 即将到达；否则 → 去往目的地
+        var detail: String
+        if offRouteCount > 0 {
+            detail = "已偏航，正在重新规划"
+        } else if remainM < 500 {
+            detail = destName.isEmpty ? "即将到达目的地" : "即将到达：\(destName)"
+        } else {
+            detail = destName.isEmpty ? "去往目的地" : "去往 \(destName)"
+        }
         let state = MotoNavAttributes.ContentState(
             phase: "cruising", title: "导航中",
-            detail: destName.isEmpty ? "去往目的地" : "去往 \(destName)",
+            detail: detail,
             distanceM: remainM, icon: "")
         Task {
             try? await act.update(using: state)

@@ -3277,7 +3277,10 @@ struct ContentView: View {
         // v2.37 G3 速度是骑行最核心读数，层级不应低于公里/分钟：
         // 普通 17→19，极简 21→22（极简档已整体放大）
         let speedFontSize: CGFloat = minimal ? 22 : 19
-        let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
+        // v2.47 Q2 剩余 <1km 显示米（高德式）：800 米比 0.8 公里直观
+        let remainMv = max(ns.remainM, 0)
+        let kmTxt = remainMv < 1000 ? "\(remainMv)" : String(format: "%.1f", Double(remainMv) / 1000.0)
+        let kmUnit = remainMv < 1000 ? "米" : "公里"
         let minTxt = "\(max(ns.remainS, 0) / 60)"
         let arriveTxt: String = {
             // v2.28：DateFormatter 创建成本很高（每次都要解析格式串、读系统设置），
@@ -3306,7 +3309,7 @@ struct ContentView: View {
                         .font(.system(size: 24, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(mainFg)
-                    Text("公里")
+                    Text(kmUnit)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(dimFg)
                 }
