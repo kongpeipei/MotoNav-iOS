@@ -188,7 +188,7 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         if !savedProvider.isEmpty {
             self.ttsProvider = TtsProvider(rawValue: savedProvider) ?? .system
         } else {
-            self.ttsProvider = builtin == nil ? .system : .xfyun
+            self.ttsProvider = builtin == nil ? .system : .iflytekPro
         }
         // 用户显式设置过的凭证优先；未设置时使用内置加密凭证（不明文落盘）
         let savedAppID = defaults.string(forKey: "xfAppID") ?? ""
