@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
-	<string>骑士地图</string>
+	<string>机车地图</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,7 +22,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.motonav.app.ios</string>
+			<string>com.motonav.app.moto</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>motonav</string>

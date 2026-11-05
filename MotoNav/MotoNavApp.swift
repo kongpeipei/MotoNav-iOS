@@ -40,7 +40,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ///
     /// 旧做法是放在 ContentView 的 ZStack 里，靠 `onAppear` 起一个 Task 在 1 秒后置 false。
     /// 那个 Task 需要主线程空闲才能跑；一旦视图树在重算，它永远排不上队，
-    /// 表现就是「黑底 + 骑士地图四个字，一直不进主界面」。
+    /// 表现就是「黑底 + 机车地图四个字，一直不进主界面」。
     /// 现在改成盖在 window 上的一个 UIView，用 UIView.animate 淡出：
     /// 动画由 CoreAnimation 驱动，不依赖 SwiftUI 的任何状态更新，2.25 秒后必定消失（v2.24）。
     private func installSplash(on win: UIWindow) {
@@ -53,7 +53,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // v2.24 标题字号 48 → 64（更醒目），仍用同一套楷体
         let titleSize: CGFloat = 64
         let label = UILabel()
-        label.text = "骑士地图"
+        label.text = "机车地图"
         label.textColor = .white
         // 楷体：不同系统版本 PostScript 名不一样，逐个兜底，最后用系统粗体
         label.font = UIFont(name: "STKaitiSC-Regular", size: titleSize)
@@ -103,12 +103,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
-    // v1.81.4 导航中切到后台：播报"骑士地图继续为您导航"，导航与语音提醒继续后台运行
+    // v1.81.4 导航中切到后台：播报"机车地图继续为您导航"，导航与语音提醒继续后台运行
     //（Info.plist UIBackgroundModes 含 location+audio）；用户从后台清除 App 后停止
     func applicationDidEnterBackground(_ application: UIApplication) {
         let m = AppModel.shared
         if m.navigating {
-            m.speak("骑士地图继续为您导航")
+            m.speak("机车地图继续为您导航")
         }
     }
 }

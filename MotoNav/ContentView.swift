@@ -1113,7 +1113,7 @@ struct ContentView: View {
                 }
             }
             HStack {
-                Label("骑士地图", systemImage: "map.fill")
+                Label("机车地图", systemImage: "map.fill")
                     .foregroundStyle(.primary)
                 Spacer()
                 Text("骑行导航")

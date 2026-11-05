@@ -42,7 +42,7 @@ enum PlaceShare {
         let baidu = "http://api.map.baidu.com/direction?destination=latlng:\(num(glat)),\(num(glon))"
             + "%7Cname:\(encName)&mode=driving&coord_type=gcj02&output=html&src=motonav"
 
-        var lines: [String] = ["【骑士地图】地点分享"]
+        var lines: [String] = ["【机车地图】地点分享"]
         var head = title
         if !type.isEmpty { head += "（\(type)）" }
         lines.append(head)

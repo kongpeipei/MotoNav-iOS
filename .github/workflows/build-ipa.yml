@@ -31,7 +31,7 @@ on:
           - activitykit-extension
           - activitykit
   push:
-    branches: [ main ]
+    branches: [ main, trae/agent-URPsnL ]
     paths-ignore:
       - '**/*.md'
       - 'Android_MotoNav/**'
