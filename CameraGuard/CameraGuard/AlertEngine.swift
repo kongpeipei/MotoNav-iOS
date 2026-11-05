@@ -6,6 +6,7 @@ import UserNotifications
 import CoreHaptics
 import ActivityKit
 import AudioToolbox
+import SwiftUI
 
 /// TTS 引擎选择（优化 #1：保留系统默认，给高级用户留讯飞接入点）
 enum TtsProvider: String, CaseIterable, Identifiable, Codable {
