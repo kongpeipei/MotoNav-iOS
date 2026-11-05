@@ -3447,7 +3447,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
-                let overSpeed = model.speedLimitKph > 0 && ns.speedKph > model.speedLimitKph
+                let overSpeed = model.speedLimitKph > 0 && ns.speedKph > Double(model.speedLimitKph)
                 Text("\(Int(ns.speedKph.rounded()))")
                     .font(.system(size: speedFontSize, weight: .bold))
                     .monospacedDigit()
