@@ -799,9 +799,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随外观设置
-        // v2.12：外观可手动切换（自动/浅色/深色），这里跟随 SwiftUI 的 colorScheme，
-        // 导航中仍然强制深色，保证路口和电子眼看得到
-        let wantDark = navigating || colorScheme == .dark
+        // v2.12：外观可手动切换（自动/浅色/深色），这里跟随 SwiftUI 的 colorScheme
+        // v2.37 G5 导航不再强制深色：白天浅色外观下导航用浅色地图，
+        // 与浅色底卡（systemBackground）统一，不再"白卡叠黑图"；深色外观仍深色
+        let wantDark = colorScheme == .dark
         if wantDark != context.coordinator.lastDarkState {
             context.coordinator.lastDarkState = wantDark
             map.overrideUserInterfaceStyle = wantDark ? .dark : .light

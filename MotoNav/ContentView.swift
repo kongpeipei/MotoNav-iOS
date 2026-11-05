@@ -128,6 +128,9 @@ struct ContentView: View {
     @State private var edgeDragStartX: CGFloat = 0
     /// v1.86 行程卡自动收起任务（出现 5 秒后回首页）
     @State private var tripAutoDismissTask: Task<Void, Never>?
+    /// v2.37 G1 状态反馈 toast：model.status 赋值后显示 2.5s（操作反馈不再不可见）
+    @State private var statusVisible = false
+    @State private var statusDismissTask: Task<Void, Never>?
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
@@ -305,18 +308,24 @@ struct ContentView: View {
                 UserDefaults.standard.set(true, forKey: "uiPosV190Applied")
             }
         }
-        // v1.86 行程卡出现 5 秒后自动收起回首页（高德式；用户已操作则取消）
+        // v2.37 G4 行程卡常驻：到达统计（距离/均速/时长）停车后要看清，
+        // 不再 5 秒自动收起；轻点卡外或左滑手动关闭（dismissTripAndReset）
         .onChange(of: model.tripSummary != nil) { _, showing in
             tripAutoDismissTask?.cancel()
-            if showing {
-                tripAutoDismissTask = Task {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    await MainActor.run {
-                        if model.tripSummary != nil {
-                            dismissTripAndReset()
-                        }
-                    }
-                }
+        }
+        // v2.37 G1 状态反馈 toast：任何 model.status 赋值（操作结果/异常提示）
+        // 顶部胶囊显示 2.5s 后自动消失；地图加载类提示由 mapLoadBanner 专用横幅承担
+        .onChange(of: model.status) { _, newStatus in
+            statusDismissTask?.cancel()
+            guard !newStatus.isEmpty,
+                  newStatus != "等待定位…",
+                  newStatus != "地图加载异常，自动重试…",
+                  newStatus != "正在重新加载地图…",
+                  newStatus != "路线已重新规划，请按新路线行驶" else { return }
+            statusVisible = true
+            statusDismissTask = Task {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                await MainActor.run { statusVisible = false }
             }
         }
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
@@ -2871,7 +2880,8 @@ struct ContentView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(speed)")
                         .font(.system(size: 34, weight: .heavy))
-                        .foregroundStyle(.black)
+                        // v2.37 G2 深色模式黑底黑字修复：跟随外观
+                        .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
                     Text("km/h")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -3023,6 +3033,24 @@ struct ContentView: View {
         } else if !model.navigating {
             // v2.16 沉浸态长按：整套 UI 继续隐藏，只把"长按出来的那张卡"亮出来
             AnyView(immersiveCardLayer)
+        }
+        // v2.37 G1 状态反馈 toast：顶部居中胶囊（安全区内），不拦截手势
+        if statusVisible {
+            VStack {
+                Text(model.status)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.78), in: Capsule())
+                    .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+                Spacer()
+            }
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .allowsHitTesting(false)
+            .zIndex(150)
+            .transition(.opacity)
         }
         // v1.85 行程卡显示期间：轻点卡片以外任意位置回首页（透明拦截层）
         if model.tripSummary != nil {
@@ -3251,7 +3279,9 @@ struct ContentView: View {
         // v2.29 骑行极简模式：字号放大（头盔视野窄，字要更大才看得清）
         let minimal = model.ridingMinimalUI
         let actionFontSize: CGFloat = minimal ? 18 : 14
-        let speedFontSize: CGFloat = minimal ? 21 : 17
+        // v2.37 G3 速度是骑行最核心读数，层级不应低于公里/分钟：
+        // 普通 17→19，极简 21→22（极简档已整体放大）
+        let speedFontSize: CGFloat = minimal ? 22 : 19
         let kmTxt = String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0)
         let minTxt = "\(max(ns.remainS, 0) / 60)"
         let arriveTxt: String = {
@@ -3372,7 +3402,7 @@ struct ContentView: View {
                     .foregroundStyle(overSpeed ? .red : dimFg)
             }
             .padding(.horizontal, 14)
-            .frame(height: 30)
+            .frame(height: 32)
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
             // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
