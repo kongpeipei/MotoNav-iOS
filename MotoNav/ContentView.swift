@@ -578,8 +578,8 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
             .padding(10)
-            .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.2), lineWidth: 1))
+            .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.2), lineWidth: 1))
             .padding(.horizontal)
             Spacer()
         }
@@ -647,8 +647,8 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(.white.opacity(0.35), lineWidth: 0.8))
                 .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
             }
@@ -703,8 +703,8 @@ struct ContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(height: 54)
-            .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
             .padding(.horizontal, 20)
         }
@@ -842,7 +842,7 @@ struct ContentView: View {
                         .font(.caption)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .textInputAutocapitalization(.never)
                 }
             }
@@ -1759,7 +1759,7 @@ struct ContentView: View {
                         .foregroundStyle(.blue)
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
+                        .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -1782,7 +1782,7 @@ struct ContentView: View {
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
-                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 11))
+                    .background(Color.blue, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -1874,8 +1874,8 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
         // v2.27 兜底：上卡高度不许超过屏幕的 45%。
@@ -1922,7 +1922,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
-            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
 
@@ -2018,8 +2018,8 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 12)
-        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
     }
@@ -2061,7 +2061,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     /// 提示条文案（抽出来避免 ViewBuilder 里堆逻辑）
@@ -2129,7 +2129,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(Color(red: 0.10, green: 0.42, blue: 0.92),
-                                in: RoundedRectangle(cornerRadius: 12))
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -2280,7 +2280,7 @@ struct ContentView: View {
                         .font(.body.bold())
                         .foregroundStyle(.blue)
                         .frame(width: 32, height: 32)
-                        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 Button {
@@ -2291,7 +2291,7 @@ struct ContentView: View {
                         .font(.body.bold())
                         .foregroundStyle(.primary)
                         .frame(width: 32, height: 32)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -2390,7 +2390,7 @@ struct ContentView: View {
                             .font(.subheadline.bold())
                             .foregroundStyle(.white)
                             .frame(width: 62, height: 38)
-                            .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+                            .background(Color.blue, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     Button {
@@ -2405,8 +2405,8 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(12)
-                .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
                 .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
                 .padding(.horizontal, 14)
             }
@@ -2532,12 +2532,12 @@ struct ContentView: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 2)
-                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                             .offset(y: 54)
                     }
                 }
                 .frame(width: 110, height: 110)
-                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .padding(.horizontal)
                 .padding(.bottom, 4)
             }
@@ -2633,7 +2633,7 @@ struct ContentView: View {
                                 }
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
-                                .background(Color.accentColor.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
+                                .background(Color.accentColor.opacity(0.9), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                         }
                     }
@@ -2658,7 +2658,7 @@ struct ContentView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10))
+                        .background(Color.green, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .padding(.horizontal)
                 }
                 .padding(.bottom, 4)
@@ -2793,8 +2793,8 @@ struct ContentView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(sel ? AnyShapeStyle(accent.opacity(0.07)) : AnyShapeStyle(Color(.secondarySystemBackground)),
-                    in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(
             sel ? accent : Color.clear,
             lineWidth: sel ? 2 : 0))
     }
@@ -2901,7 +2901,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.horizontal, 14)
     }
 
@@ -2936,7 +2936,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
         .padding(.horizontal, 14)
     }
@@ -2956,7 +2956,7 @@ struct ContentView: View {
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(speed)")
-                        .font(.system(size: 34, weight: .heavy))
+                        .font(.system(size: 34, weight: .heavy).fontDesign(.rounded))
                         // v2.37 G2 深色模式黑底黑字修复：跟随外观
                         .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
                     Text("km/h")
@@ -2999,7 +2999,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .shadow(color: .black.opacity(0.14), radius: 10, y: 3)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, alignment: .top)
@@ -3205,7 +3205,7 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 50)
                                 .background(Color(red: 0.85, green: 0.20, blue: 0.18),
-                                            in: RoundedRectangle(cornerRadius: 14))
+                                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         Button {
@@ -3217,12 +3217,12 @@ struct ContentView: View {
                                 .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 50)
-                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 14))
+                                .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
                     .padding(10)
-                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18))
+                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                     .padding(.horizontal, 12)
                 } else if model.navUserMoved {
@@ -3339,7 +3339,7 @@ struct ContentView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(mainFg)
                         .frame(width: 40, height: 34)
-                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 // v2.39 I2 导航中切换备选路线（高德式）：方案列表 sheet，applyRouteChoice 应用
@@ -3352,7 +3352,7 @@ struct ContentView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(mainFg)
                             .frame(width: 40, height: 34)
-                            .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                            .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
@@ -3370,7 +3370,7 @@ struct ContentView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(mainFg)
                         .frame(width: 40, height: 34)
-                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 12)
@@ -3452,8 +3452,8 @@ struct ContentView: View {
                 .background(Color.black.opacity(0.02))
             }
         }
-        .background(cardBg, in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(
+        .background(cardBg, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(
             isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.07), lineWidth: 1))
         .shadow(color: .black.opacity(0.28), radius: 12, y: 4)
         .padding(.horizontal, 12)
@@ -3481,7 +3481,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 3)
-                .background(lampBg, in: RoundedRectangle(cornerRadius: 5))
+                .background(lampBg, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                 Text(st.red ? "红灯" : "绿灯")
                     .font(.caption.bold())
                     .foregroundStyle(st.red ? Color.red : Color(red: 0.13, green: 0.62, blue: 0.30))
@@ -3519,7 +3519,7 @@ struct ContentView: View {
                     .background(l.recommended
                                 ? Color(red: 0.13, green: 0.62, blue: 0.30)
                                 : Color.black.opacity(0.06),
-                                in: RoundedRectangle(cornerRadius: 6))
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             Spacer()
             Text(navTurnText(t))
@@ -3541,8 +3541,8 @@ struct ContentView: View {
                     .foregroundStyle(.black)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
-                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(RoundedRectangle(cornerRadius: 14)
+                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Color.green.opacity(overviewPinned ? 0.9 : 0.0), lineWidth: 1.5))
             }
             .buttonStyle(.plain)
@@ -3555,7 +3555,7 @@ struct ContentView: View {
                     .foregroundStyle(.black)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 12)
-                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14))
+                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
         }
@@ -3640,8 +3640,8 @@ struct ContentView: View {
             .padding(.top, 2)
         }
         .padding(14)
-        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
         .padding(.horizontal, 14)
     }
@@ -3701,8 +3701,8 @@ struct ContentView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.35), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     Button {
@@ -3719,8 +3719,8 @@ struct ContentView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(minimalMap ? Color.blue : Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                        .background(minimalMap ? Color.blue : Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.35), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     // v2.28 视野档位切换（高德/百度导航标配）
@@ -3741,8 +3741,8 @@ struct ContentView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                 }
@@ -3985,8 +3985,8 @@ struct ContentView: View {
                         .font(.subheadline.bold())
                         .foregroundStyle(.blue)
                         .frame(width: 76, height: 40)
-                        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.blue, lineWidth: 1.5))
+                        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.blue, lineWidth: 1.5))
                 }
                 .buttonStyle(.plain)
                 // 蓝色"路线"：开始规划路线
@@ -4002,14 +4002,14 @@ struct ContentView: View {
                         .font(.subheadline.bold())
                         .foregroundStyle(.white)
                         .frame(width: 76, height: 40)
-                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(12)
-        .background(Color(.systemBackground).opacity(0.95), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .background(Color(.systemBackground).opacity(0.95), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
     }
@@ -4048,8 +4048,8 @@ struct ContentView: View {
         .padding(.horizontal, 10)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 22))
-        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
     }
@@ -4262,8 +4262,8 @@ struct ContentView: View {
                 .lineLimit(1)
         }
         .frame(width: 64, height: 48)
-        .background(.bar, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.25), lineWidth: 1))
+        .background(.bar, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 1))
         .contentShape(Rectangle())
         .onTapGesture { action() }
     }
@@ -4332,7 +4332,7 @@ struct ContentView: View {
         .frame(maxWidth: .infinity)
         .frame(height: 52)
         // v1.63：跟随系统深浅色（浅色白底/深色深底，夜间骑行不刺眼）
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26))
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
         .padding(.horizontal)
         .padding(.vertical, 6)
@@ -4349,8 +4349,8 @@ struct ContentView: View {
         }
         .frame(maxHeight: 200)
         .background(.bar)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.quaternary))
         .padding(.horizontal)
     }
 
@@ -4471,8 +4471,8 @@ struct ContentView: View {
         // v1.81：点"搜索"展开时铺满中间（搜索框与底部按钮拉开），输入时小高度
         .frame(maxHeight: searchExpanded ? 400 : 190)
         .background(.bar)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.quaternary))
         .padding(.horizontal)
     }
 

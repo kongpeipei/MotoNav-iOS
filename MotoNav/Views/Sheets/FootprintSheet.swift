@@ -27,14 +27,11 @@ struct FootprintSheet: View {
         NavigationStack {
             List {
                 if store.items.isEmpty {
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("还没有足迹").font(.headline)
-                            Text("每次结束导航会自动存档：里程、时长、均速、最高速和轨迹。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 6)
+                    // v2.41 K4 苹果化空态：ContentUnavailableView（iOS 17 原生空态风格）
+                    ContentUnavailableView {
+                        Label("还没有足迹", systemImage: "figure.run")
+                    } description: {
+                        Text("每次结束导航会自动存档：里程、时长、均速、最高速和轨迹。")
                     }
                 } else {
                     Section {

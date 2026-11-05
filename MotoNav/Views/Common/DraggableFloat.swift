@@ -126,7 +126,7 @@ struct DraggableFloat<Content: View>: View {
                     }
                     .frame(maxWidth: 92)
                     .background(Color.red)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .opacity(dragOffset < -8 ? 1 : 0)
                     .animation(.easeOut(duration: 0.15), value: dragOffset < -8)
                 }
