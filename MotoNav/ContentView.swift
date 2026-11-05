@@ -1440,7 +1440,12 @@ struct ContentView: View {
                 // 搜索主卡：地点卡/路线规划卡/行程卡出现时隐藏；仅上下移动
                 if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty && model.tripSummary == nil {
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
-                                   lockX: true, bottomAnchor: true) { AnyView(bottomMainCard) }
+                                   lockX: true, bottomAnchor: true) {
+                        // v2.42 L4 搜索聚焦时键盘弹出，整卡上移避免遮挡联想/建议列表
+                        AnyView(bottomMainCard)
+                            .offset(y: searchFocused ? -300 : 0)
+                            .animation(.snappy(duration: 0.25), value: searchFocused)
+                    }
                 }
             } else {
                 // v1.65：转向/速度/距离时间已合并到顶部 navTopBar，底部仅留路口放大
@@ -3356,23 +3361,6 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                // v2.39 I1 导航中搜索/换目的地（高德式）：退出导航保留路线卡 → 搜索框聚焦
-                Button {
-                    haptic()
-                    model.toggleNavigation()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        searchFocused = true
-                        searchExpanded = false
-                        uiHidden = false
-                    }
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(mainFg)
-                        .frame(width: 40, height: 34)
-                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                }
-                .buttonStyle(.plain)
                 .padding(.trailing, 12)
                 .padding(.leading, 10)
             }
@@ -3418,6 +3406,24 @@ struct ContentView: View {
                             .foregroundStyle(model.voiceMuted ? .gray
                                              : (speaking ? Color(red: 0.16, green: 0.38, blue: 1.0) : dimFg))
                     }
+                }
+                .buttonStyle(.plain)
+                // v2.42 L1 导航中搜索入口移到第二层（原第一层 5 段在 iPhone SE 375pt 宽溢出，
+                // 放大镜被挤出屏外；第二层转弯文字可压缩，放得下）
+                Button {
+                    haptic()
+                    model.toggleNavigation()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        searchFocused = true
+                        searchExpanded = false
+                        uiHidden = false
+                    }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(mainFg)
+                        .frame(width: 34, height: 30)
+                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
