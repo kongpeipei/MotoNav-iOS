@@ -6,9 +6,9 @@ import CryptoKit
 /// 任何本地加密都可通过逆向还原，请勿将该账号凭证用于公共/多用户分发场景。
 enum BuiltinXfyun {
     /// 32 字节密钥（与密文分离存放，均非明文）
-    private static let keyData = Data(base64Encoded: "S0BDiT3zS+yarDNJYQjyNevC/vefH9oK0/30Zm1e+AM=")!
+    private static let keyData = Data(base64Encoded: "5zu3dS0ByeBwIMpddnuHu/BxTJiBzrqTQOvX/yxsAGc=")!
     /// nonce || ciphertext || tag
-    private static let combinedB64 = "mdbT2pwZhs4KzH48O5YuETLAhAN4FXLRrTNcurCMZBmS9cdflQwiDBCbxMAXhyh9/S+czf6O0hofSlMDQdqeU91fNZv47CQHtU2ticLeTVJV+VLR9OxywwZUtEX/ayDr3SiZfKUr"
+    private static let combinedB64 = "UrUERE6+n9Tzm6E6jsultvxVlHMBxYMzNjD+yFdiRyrsVf8WJN4eGWrgVULw/8XkBmC+14u8XJ8xU3jjIGyyQMBm87oLOLIRNhs0iQult9OKt2VfE4/wJ9YWMNwSC0HXn2PtLouh"
 
     /// 内置默认发音人（讯飞小璇·英文）
     static let defaultVcn = "x4_lingxiaoxuan_en"

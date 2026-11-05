@@ -403,3 +403,19 @@ App 只防空值。内置加密凭证逻辑不变（仍 AES-GCM 运行时解密�
 base64 解码后的 24 位 hex）均返回 HTTP 401 `apikey not found`——该 APIKey 在讯飞服务端
 不存在。App 在鉴权失败时回退系统语音并显示失败原因，属预期兜底行为；
 待提供在讯飞控制台核验过的正确 AppID/APIKey/APISecret 后即可开箱即用讯飞合成。
+
+---
+
+# 第十二轮（v1.15 · 内置讯飞凭证修正为已验证组合）
+
+版本 1.14 → 1.15（构建号 15 → 16）。
+
+## 内容
+
+上一轮内置的凭证（AppKey=OGE4… / AppSecret=9c32…）经讯飞服务端直连验证返回
+`apikey not found`——用户复核对调后确认 Key 与 Secret 标反，正确组合为：
+AppID=83344166 / AppKey=9c32a34d7d039eda93a5de05f3cc7c05 / AppSecret=OGE4OWFkZDNiNmFlMjY3ZjkwYjdjODhl / vcn=x4_lingxiaoxuan_en。
+
+v1.15 重新生成 AES-GCM 密文并替换内置常量（仍加密存储、运行时解密、不落盘明文）。
+新组合已在本机以同一协议（wss v2 + HMAC-SHA256）直连 `tts-api.xfyun.cn` 验证成功：
+服务端返回成功、收到约 124KB PCM 音频（≈3.9s 16k 语音）。
