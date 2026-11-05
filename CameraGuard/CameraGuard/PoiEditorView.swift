@@ -4,101 +4,102 @@ import CoreLocation
 import UniformTypeIdentifiers
 
 /// #3 点位编辑页面：查看 / 添加（支持交叉口 geocoder）/ 删除（二次确认）
+/// v1.23：去掉内层 NavigationStack，sheet/alert 各合并为单一 item 挂载——
+/// iOS 26 上多个 .alert/.sheet 叠加同一视图链会导致渲染异常（黄色感叹号占位页）
 struct PoiEditorView: View {
     @EnvironmentObject var engine: AlertEngine
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showAddForm = false
-    @State private var poiToDelete: Poi?
-    @State private var builtinToDelete: Poi?
-    @State private var poiToEdit: Poi?
-    @State private var showRestoreBuiltinConfirm = false
+    /// 单一 sheet 状态：添加 / 编辑（避免多个 .sheet 叠加）
+    @State private var activeSheet: PoiSheet?
+    /// 单一 alert 状态：删除自定义 / 删除内置 / 恢复内置（避免多个 .alert 叠加）
+    @State private var activeConfirm: PoiConfirm?
     /// 持有导入协调器：UIDocumentPicker 的 delegate 不会被系统强引用，临时对象会被提前释放导致回调丢失
     @State private var importer: ImportCoordinator?
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Button {
-                        showAddForm = true
-                    } label: {
-                        Label("添加新点位", systemImage: "plus.circle.fill")
-                            .foregroundStyle(.blue)
-                    }
-                    Button {
-                        performImport()
-                    } label: {
-                        Label("从 JSON 文件导入", systemImage: "square.and.arrow.down")
-                    }
-                    Button {
-                        performExport()
-                    } label: {
-                        Label("导出全部点位为 JSON", systemImage: "square.and.arrow.up")
-                    }
-                    // v1.20 一键恢复：清空删除/改名/半径/开关台账，回到出厂默认
-                    Button {
-                        showRestoreBuiltinConfirm = true
-                    } label: {
-                        Label("恢复全部内置点位", systemImage: "arrow.uturn.backward.circle")
-                            .foregroundStyle(.orange)
-                    }
-                } header: {
-                    Text("操作")
+        List {
+            Section {
+                Button {
+                    activeSheet = .add
+                } label: {
+                    Label("添加新点位", systemImage: "plus.circle.fill")
+                        .foregroundStyle(.blue)
                 }
+                Button {
+                    performImport()
+                } label: {
+                    Label("从 JSON 文件导入", systemImage: "square.and.arrow.down")
+                }
+                Button {
+                    performExport()
+                } label: {
+                    Label("导出全部点位为 JSON", systemImage: "square.and.arrow.up")
+                }
+                // v1.20 一键恢复：清空删除/改名/半径/开关台账，回到出厂默认
+                Button {
+                    activeConfirm = .restoreBuiltin
+                } label: {
+                    Label("恢复全部内置点位", systemImage: "arrow.uturn.backward.circle")
+                        .foregroundStyle(.orange)
+                }
+            } header: {
+                Text("操作")
+            }
 
-                // v1.8：自定义点位置顶，方便修改/查看
-                Section {
-                    if engine.userPois.isEmpty {
-                        Text("还没有自定义点位，点击上方「添加新点位」开始")
-                            .foregroundStyle(.tertiary)
-                            .font(.footnote)
-                    } else {
-                        // v1.21 渲染层去重：历史重复 id 折叠为一条，防 ForEach 断言崩溃
-                        ForEach(engine.deduplicated(engine.userPois)) { p in
-                            PoiRow(poi: p, editable: true) { action in
-                                handleAction(action, for: p, builtin: false)
-                            }
+            // v1.8：自定义点位置顶，方便修改/查看
+            Section {
+                if engine.userPois.isEmpty {
+                    Text("还没有自定义点位，点击上方「添加新点位」开始")
+                        .foregroundStyle(.tertiary)
+                        .font(.footnote)
+                } else {
+                    // v1.21 渲染层去重：历史重复 id 折叠为一条，防 ForEach 断言崩溃
+                    ForEach(engine.deduplicated(engine.userPois)) { p in
+                        PoiRow(poi: p, editable: true) { action in
+                            handleAction(action, for: p, builtin: false)
                         }
                     }
-                } header: {
-                    Text("自定义点位（\(engine.deduplicated(engine.userPois).count) 个）")
-                } footer: {
-                    Text("自定义点位持久化在本地，卸载 App 会清除")
                 }
+            } header: {
+                Text("自定义点位（\(engine.deduplicated(engine.userPois).count) 个）")
+            } footer: {
+                Text("自定义点位持久化在本地，卸载 App 会清除")
+            }
 
-                // v1.8：内置点位可修改（名称/半径/开关）或删除，坐标与类型固定
-                Section {
-                    if engine.builtinPois.isEmpty {
-                        Text("无内置点位（已全部删除）")
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        // v1.21 渲染层去重：补丁改名等场景可能产生撞 id，折叠为一条防崩溃
-                        ForEach(engine.deduplicated(engine.builtinPois)) { p in
-                            PoiRow(poi: p, editable: true) { action in
-                                handleAction(action, for: p, builtin: true)
-                            }
+            // v1.8：内置点位可修改（名称/半径/开关）或删除，坐标与类型固定
+            Section {
+                if engine.builtinPois.isEmpty {
+                    Text("无内置点位（已全部删除）")
+                        .foregroundStyle(.tertiary)
+                } else {
+                    // v1.21 渲染层去重：补丁改名等场景可能产生撞 id，折叠为一条防崩溃
+                    ForEach(engine.deduplicated(engine.builtinPois)) { p in
+                        PoiRow(poi: p, editable: true) { action in
+                            handleAction(action, for: p, builtin: true)
                         }
                     }
-                } header: {
-                    Text("内置点位（显示 \(engine.deduplicated(engine.builtinPois).count) / 共 \(engine.bundledPois.count) 个）")
-                } footer: {
-                    Text("内置点位可改名称、半径、开关，也可删除；坐标与类型固定。App 升级后可恢复默认。")
                 }
+            } header: {
+                Text("内置点位（显示 \(engine.deduplicated(engine.builtinPois).count) / 共 \(engine.bundledPois.count) 个）")
+            } footer: {
+                Text("内置点位可改名称、半径、开关，也可删除；坐标与类型固定。可在「操作」一键恢复。")
             }
-            .navigationTitle("点位管理")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
-                }
+        }
+        .navigationTitle("点位管理")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("完成") { dismiss() }
             }
-            .sheet(isPresented: $showAddForm) {
+        }
+        .sheet(item: $activeSheet) { kind in
+            switch kind {
+            case .add:
                 AddPoiView { newPoi in
                     engine.addUserPoi(newPoi)
                 }
-            }
-            .sheet(item: $poiToEdit) { p in
+            case .edit(let p):
                 EditPoiSheet(poi: p) { updated in
                     if engine.bundledPois.contains(where: { $0.id == p.id }) {
                         engine.updateBuiltinPoi(updated)
@@ -107,7 +108,10 @@ struct PoiEditorView: View {
                     }
                 }
             }
-            .alert(item: $poiToDelete) { p in
+        }
+        .alert(item: $activeConfirm) { kind in
+            switch kind {
+            case .deleteCustom(let p):
                 Alert(
                     title: Text("删除自定义点位"),
                     message: Text("确定要删除「\(p.name)」吗？此操作无法撤销。"),
@@ -116,8 +120,7 @@ struct PoiEditorView: View {
                     },
                     secondaryButton: .cancel(Text("取消"))
                 )
-            }
-            .alert(item: $builtinToDelete) { p in
+            case .deleteBuiltin(let p):
                 Alert(
                     title: Text("删除内置点位"),
                     message: Text("确定要删除内置点位「\(p.name)」吗？可在「操作 → 恢复全部内置点位」找回。"),
@@ -126,12 +129,15 @@ struct PoiEditorView: View {
                     },
                     secondaryButton: .cancel(Text("取消"))
                 )
-            }
-            .alert("恢复全部内置点位", isPresented: $showRestoreBuiltinConfirm) {
-                Button("恢复", role: .destructive) { engine.restoreAllBuiltinPois() }
-                Button("取消", role: .cancel) { }
-            } message: {
-                Text("将清空所有对内置点位的删除、改名、半径与开关修改，恢复到出厂默认。")
+            case .restoreBuiltin:
+                Alert(
+                    title: Text("恢复全部内置点位"),
+                    message: Text("将清空所有对内置点位的删除、改名、半径与开关修改，恢复到出厂默认。"),
+                    primaryButton: .destructive(Text("恢复")) {
+                        engine.restoreAllBuiltinPois()
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
             }
         }
     }
@@ -141,7 +147,7 @@ struct PoiEditorView: View {
     private func handleAction(_ action: PoiRowAction, for poi: Poi, builtin: Bool) {
         switch action {
         case .delete:
-            if builtin { builtinToDelete = poi } else { poiToDelete = poi }
+            activeConfirm = builtin ? .deleteBuiltin(poi) : .deleteCustom(poi)
         case .toggle:
             if builtin {
                 engine.toggleBuiltinPoi(poi)
@@ -149,7 +155,7 @@ struct PoiEditorView: View {
                 engine.toggleUserPoi(id: poi.id)
             }
         case .edit:
-            poiToEdit = poi
+            activeSheet = .edit(poi)
         }
     }
 
@@ -173,6 +179,32 @@ struct PoiEditorView: View {
 // MARK: - 行组件
 
 enum PoiRowAction { case delete, toggle, edit }
+
+/// v1.23 单一 sheet 载体：添加 / 编辑（Poi 为 Identifiable，id 由 enum 内部自足）
+enum PoiSheet: Identifiable {
+    case add
+    case edit(Poi)
+    var id: String {
+        switch self {
+        case .add: return "add"
+        case .edit(let p): return "edit-\(p.id)"
+        }
+    }
+}
+
+/// v1.23 单一 alert 载体：删除自定义 / 删除内置 / 恢复内置
+enum PoiConfirm: Identifiable {
+    case deleteCustom(Poi)
+    case deleteBuiltin(Poi)
+    case restoreBuiltin
+    var id: String {
+        switch self {
+        case .deleteCustom(let p): return "delc-\(p.id)"
+        case .deleteBuiltin(let p): return "delb-\(p.id)"
+        case .restoreBuiltin: return "restore"
+        }
+    }
+}
 
 struct PoiRow: View {
     let poi: Poi

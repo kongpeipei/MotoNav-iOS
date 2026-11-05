@@ -28,11 +28,12 @@ struct VoiceEngineView: View {
             if engine.ttsProvider == .iflytekPro {
                 Section {
                     if engine.voicePacks.isEmpty {
-                        Text("还没有语音包：在下方「高级」里填写发音人 vcn，会自动生成一个语音包")
+                        Text("还没有语音包：在下方输入发音人 vcn，会自动生成一个语音包")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(engine.voicePacks) { pack in
+                        // v1.23 渲染层去重兜底（按 vcn），防历史重复包导致 ForEach 断言
+                        ForEach(engine.deduplicatedVoicePacks) { pack in
                             voicePackRow(pack)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button(role: .destructive) {

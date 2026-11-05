@@ -615,3 +615,27 @@ v1.17 只修复了内置/云端解析（parsePois 按 id 去重），用户自�
   追加红色小三角（15×13pt，TriangleShape + 白色粗体"!"），带无障碍标签「两公里内有抓拍点」；
   超过 2km 自动消失。进入预警半径（≤ effectiveWarn）时距离文字仍按原逻辑变红。
 - TriangleShape 为新增 Shape（顶点在上），放在 ContentView 文件尾部。
+
+---
+
+# 第十七轮补丁3（v1.23 · 点位管理感叹号结构性根治）
+
+版本 1.22 → 1.23（构建号 23 → 24）。用户确认语音引擎正常（语音包可用），感叹号仅点位管理。
+
+## 关键判断
+
+v1.16 报「点位管理感叹号」时诊断为 ForEach 重复 id（当时 Poi.id 无名称段，确有此问题，
+v1.17 已修）。但 v1.21/v1.22 加上渲染层去重后用户实测**仍感叹号** → 说明 ForEach id 不是
+（唯一）根因。真实根因高度指向 **iOS 26 上同一视图链叠加多个 .alert（3 个）+ 多个 .sheet（2 个）
++ 内层 NavigationStack 导致的 SwiftUI 渲染异常**（黄色感叹号占位页）。该结构自 v1.8 起一直存在，
+用户从 v1.17 起从未实机验证过点位管理页，本次才暴露。
+
+## 改动
+
+1. PoiEditorView 结构性重构：
+   - 去掉内层 NavigationStack，destination 直接 List + navigationTitle（dismiss 由外层提供）；
+   - 3 个 .alert（2×item + 1×isPresented）合并为**单一 .alert(item: PoiConfirm)**，
+     三种确认（删自定义/删内置/恢复内置）用枚举区分；
+   - 2 个 .sheet（isPresented + item）合并为**单一 .sheet(item: PoiSheet)**（添加/编辑）。
+2. VoiceEngineView 语音包列表改用 deduplicatedVoicePacks（按 vcn 去重兜底）。
+3. AlertEngine 新增 deduplicatedVoicePacks。

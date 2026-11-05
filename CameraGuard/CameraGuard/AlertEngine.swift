@@ -849,6 +849,12 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         return arr.filter { seen.insert($0.id).inserted }
     }
 
+    /// v1.23 语音包渲染层去重（按 vcn），防历史重复包导致语音引擎页 ForEach 崩溃
+    var deduplicatedVoicePacks: [VoicePack] {
+        var seen = Set<String>()
+        return voicePacks.filter { seen.insert($0.vcn).inserted }
+    }
+
     func deleteUserPoi(id: String) {
         userPois.removeAll { $0.id == id }
         announced.remove(id)
