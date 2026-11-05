@@ -2953,8 +2953,14 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let d = distanceM(coord, start)
             guard d > 40 && d < 600 else { continue }
             trafficAheadSpoken = true
+            // v2.45 O2 拥堵段通行时间估算（高德式）：段长 ÷ 假设车速
+            // （严重拥堵 12 / 拥堵 22 / 缓行 32 km/h），供骑手预估延误
+            var spanLen = 0.0
+            for i in 0..<max(0, span.points.count - 1) { spanLen += distanceM(span.points[i], span.points[i + 1]) }
+            let kmh: Double = span.level >= 3 ? 12 : (span.level == 2 ? 22 : 32)
+            let passMin = max(1, Int(spanLen / 1000.0 / kmh * 60))
             let dist = GuidanceEventBuilder.formatDistance(Int(d))
-            let text = span.level >= 2 ? "前方\(dist)拥堵路段，预计缓慢通行"
+            let text = span.level >= 2 ? "前方\(dist)拥堵路段，预计通行约\(passMin)分钟"
                                        : "前方\(dist)缓行路段，注意路况"
             speak(text, priority: 1)
             status = "⚠️ \(text)"

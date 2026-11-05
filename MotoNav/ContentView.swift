@@ -3366,6 +3366,13 @@ struct ContentView: View {
             }
             .frame(height: 46)
 
+            // v2.45 O1 全程路况概览条（高德式）：一眼看全程哪里拥堵
+            // 绿底 + 黄/红覆盖拥堵段；trafficSpans 为高德路线真实路况
+            if !model.trafficSpans.isEmpty, ns.remainM > 0 {
+                trafficOverviewBar(spans: model.trafficSpans,
+                                   totalM: Double(max(model.routeDistanceM, 1)))
+            }
+
             Divider().padding(.horizontal, 12)
 
             // ── 第二层：下一动作 + 当前车速 ──
@@ -3469,6 +3476,44 @@ struct ContentView: View {
     ///
     /// v2.29：文字颜色原先硬编码为黑色，深色模式下又是"黑底黑字"。
     /// 改为跟随底卡配色（浅色模式黑字、深色模式白字）。
+    /// v2.45 O1 全程路况概览条：按里程比例把缓行黄/拥堵红画在绿底上
+    private func trafficOverviewBar(spans: [TrafficSpan], totalM: Double) -> some View {
+        // 预计算每段起止里程（沿路线方向累计），避免在视图闭包里可变累计
+        let ranges: [(start: Double, end: Double, level: Int)] = {
+            var acc = 0.0
+            var out: [(Double, Double, Int)] = []
+            for sp in spans {
+                var d = 0.0
+                for i in 0..<max(0, sp.points.count - 1) {
+                    d += distanceM(sp.points[i], sp.points[i + 1])
+                }
+                out.append((acc, acc + d, sp.level))
+                acc += d
+            }
+            return out
+        }()
+        return GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.green.opacity(0.22)).frame(height: 6)
+                ForEach(ranges, id: \.start) { r in
+                    if r.level >= 1 {
+                        let w = max(4, geo.size.width * (r.end - r.start) / totalM)
+                        Capsule()
+                            .fill(Color([UIColor(red: 0.94, green: 0.36, blue: 0.20, alpha: 1),
+                                         UIColor(red: 0.98, green: 0.76, blue: 0.18, alpha: 1),
+                                         UIColor(red: 0.94, green: 0.36, blue: 0.20, alpha: 1),
+                                         UIColor(red: 0.62, green: 0.10, blue: 0.10, alpha: 1)][max(0, min(3, r.level))]))
+                            .frame(width: w, height: 6)
+                            .offset(x: geo.size.width * r.start / totalM)
+                    }
+                }
+            }
+        }
+        .frame(height: 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
     private func lightCountdownRow(_ nl: (light: TrafficLight, dist: Int)) -> some View {
         // v2.44 N1 红绿灯状态/秒数原是固定周期推算（非实时信号灯数据），
         // 显示"红灯 23 秒"会给骑手错误预期（实际灯色与周期完全不同）。
