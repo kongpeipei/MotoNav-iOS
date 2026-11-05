@@ -97,6 +97,9 @@ struct PoiEditorView: View {
             }
             .navigationTitle("点位管理")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                RingLog.shared.log("页面", "点位管理打开：内置生效 \(engine.builtinPois.count) / 基础 \(engine.basePois.count)，自定义 \(engine.userPois.count)，语音包 \(engine.voicePacks.count)")
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
@@ -147,7 +150,7 @@ struct PoiEditorView: View {
             if builtin { builtinToDelete = poi } else { poiToDelete = poi }
         case .toggle:
             if builtin {
-                engine.toggleBuiltinPoi(id: poi.id)
+                engine.toggleBuiltinPoi(poi)
             } else {
                 engine.toggleUserPoi(id: poi.id)
             }

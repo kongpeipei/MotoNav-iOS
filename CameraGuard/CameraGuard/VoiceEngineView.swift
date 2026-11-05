@@ -71,6 +71,9 @@ struct VoiceEngineView: View {
         }
         .navigationTitle("语音引擎")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            RingLog.shared.log("页面", "语音引擎打开：引擎 \(engine.ttsProvider.rawValue)，语音包 \(engine.voicePacks.count) 个，当前 vcn=\(engine.xfVcn)")
+        }
         .onChange(of: engine.ttsProvider) { _, _ in engine.saveSettings() }
         // 文本类凭证输入防抖保存，停止输入 0.6 秒后再落盘
         .onChange(of: engine.xfAppID) { _, _ in scheduleDebouncedSave() }
