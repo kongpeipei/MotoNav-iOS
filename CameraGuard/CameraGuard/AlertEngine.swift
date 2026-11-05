@@ -827,13 +827,26 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     // MARK: - 用户 POI 管理（#3 点位编辑）
 
     func addUserPoi(_ poi: Poi) {
-        // 去重（同 type+lat+lon 视为同一）
-        guard !userPois.contains(where: { $0.latitude == poi.latitude && $0.longitude == poi.longitude && $0.type == poi.type }) else {
+        // v1.21 去重按 6 位归一化坐标（与 Poi.id 的格式化口径一致）：
+        // 旧版用原始 double 比较，坐标微差（如 31.833001 vs 31.833000）放行后
+        // 会在 id 归一化时撞车，导致点位管理页 ForEach 重复 id 崩溃（iOS 26 黄色感叹号占位页）
+        guard !userPois.contains(where: { Self.normalizedKey($0) == Self.normalizedKey(poi) }) else {
             return
         }
         userPois.append(poi)
         saveSettings(rebuildIndex: true)
         evaluateNearest()
+    }
+
+    /// v1.21 点位去重键：类型+6 位坐标（与 Poi.id 前缀口径一致）
+    private static func normalizedKey(_ p: Poi) -> String {
+        String(format: "%@-%.6f,%.6f", p.type.rawValue, p.latitude, p.longitude)
+    }
+
+    /// v1.21 渲染层去重：历史数据导致的重复展示 id 折叠为一条，防止 ForEach 重复 id 崩溃
+    func deduplicated(_ arr: [Poi]) -> [Poi] {
+        var seen = Set<String>()
+        return arr.filter { seen.insert($0.id).inserted }
     }
 
     func deleteUserPoi(id: String) {
@@ -958,7 +971,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
             let poi = Poi(name: name, type: type, latitude: lat, longitude: lon,
                           radiusM: (dict["radiusM"] as? NSNumber)?.doubleValue ?? 500,
                           enabled: (dict["enabled"] as? Bool) ?? true)
-            if userPois.contains(where: { $0.latitude == poi.latitude && $0.longitude == poi.longitude && $0.type == poi.type }) {
+            // v1.21 与添加点位同口径：按 6 位归一化坐标去重，防微差坐标导入后 id 撞车
+            if userPois.contains(where: { Self.normalizedKey($0) == Self.normalizedKey(poi) }) {
                 skipped += 1
                 continue
             }

@@ -54,14 +54,15 @@ struct PoiEditorView: View {
                             .foregroundStyle(.tertiary)
                             .font(.footnote)
                     } else {
-                        ForEach(engine.userPois) { p in
+                        // v1.21 渲染层去重：历史重复 id 折叠为一条，防 ForEach 断言崩溃
+                        ForEach(engine.deduplicated(engine.userPois)) { p in
                             PoiRow(poi: p, editable: true) { action in
                                 handleAction(action, for: p, builtin: false)
                             }
                         }
                     }
                 } header: {
-                    Text("自定义点位（\(engine.userPois.count) 个）")
+                    Text("自定义点位（\(engine.deduplicated(engine.userPois).count) 个）")
                 } footer: {
                     Text("自定义点位持久化在本地，卸载 App 会清除")
                 }
@@ -72,14 +73,15 @@ struct PoiEditorView: View {
                         Text("无内置点位（已全部删除）")
                             .foregroundStyle(.tertiary)
                     } else {
-                        ForEach(engine.builtinPois) { p in
+                        // v1.21 渲染层去重：补丁改名等场景可能产生撞 id，折叠为一条防崩溃
+                        ForEach(engine.deduplicated(engine.builtinPois)) { p in
                             PoiRow(poi: p, editable: true) { action in
                                 handleAction(action, for: p, builtin: true)
                             }
                         }
                     }
                 } header: {
-                    Text("内置点位（显示 \(engine.builtinPois.count) / 共 \(engine.bundledPois.count) 个）")
+                    Text("内置点位（显示 \(engine.deduplicated(engine.builtinPois).count) / 共 \(engine.bundledPois.count) 个）")
                 } footer: {
                     Text("内置点位可改名称、半径、开关，也可删除；坐标与类型固定。App 升级后可恢复默认。")
                 }
