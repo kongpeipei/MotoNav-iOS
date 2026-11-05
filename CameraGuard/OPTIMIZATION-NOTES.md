@@ -419,3 +419,33 @@ AppID=83344166 / AppKey=9c32a34d7d039eda93a5de05f3cc7c05 / AppSecret=OGE4OWFkZDN
 v1.15 重新生成 AES-GCM 密文并替换内置常量（仍加密存储、运行时解密、不落盘明文）。
 新组合已在本机以同一协议（wss v2 + HMAC-SHA256）直连 `tts-api.xfyun.cn` 验证成功：
 服务端返回成功、收到约 124KB PCM 音频（≈3.9s 16k 语音）。
+
+---
+
+# 第十三轮（v1.16 · 震动链路防崩溃加固，排查崩溃循环黄三角）
+
+版本 1.15 → 1.16（构建号 16 → 17）。
+
+## 用户报告现象
+
+- 点位管理/语音引擎"点进去"显示白底黄色三角感叹号页
+- 默认语音仍回退系统语音
+
+## 崩溃日志分析（CameraGuard-2026-11-04-133459.ips）
+
+- 崩溃线程：点「测试语音播报+震动」→ AlertEngine.testSpeak() → vibrate() →
+  UIFeedbackGenerator(Statistics) 统计链在 stringWithFormat/CFString 扩容处
+  **SIGSEGV 栈保护页击穿**；recursionInfoArray 显示栈上 AlertEngine.vibrate()
+  递归省略计数 **31338 层**——无限递归栈溢出。
+- bundleInfo 显示 CFBundleShortVersionString=1.0 / CFBundleVersion=1：
+  **该崩溃包不是最新构建**（重签工具改写版本号或安装的是旧包）。
+  App 崩溃后 iOS 26 崩溃循环检测 → 打开 App 即显示黄色三角警告页（系统页，非 App 内容），
+  与截图吻合；"回退系统语音"亦为旧包行为（旧内置凭证 401 属 v1.14 之前状态）。
+
+## v1.16 加固
+
+- HapticsPlayer.play 全部请求改走**串行队列**（防重入/防高频叠加打爆调用栈）。
+- 引擎不可用/播放失败的回退提示从 `UINotificationFeedbackGenerator` 改为
+  `AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)`，避开 UIFeedbackGenerator
+  统计链崩溃路径；新增 AudioToolbox import。
+- 内置讯飞凭证（v1.15 已验证组合）不变。

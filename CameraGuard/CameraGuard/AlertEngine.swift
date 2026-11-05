@@ -5,6 +5,7 @@ import UIKit
 import UserNotifications
 import CoreHaptics
 import ActivityKit
+import AudioToolbox
 
 /// TTS 引擎选择（优化 #1：保留系统默认，给高级用户留讯飞接入点）
 enum TtsProvider: String, CaseIterable, Identifiable, Codable {
@@ -1020,10 +1021,13 @@ enum PoiImportError: LocalizedError {
 }
 
 /// v1.6 可配置震动：CoreHaptics 连续触感支持自定义强度与时长（0~60 秒）；
-/// 设备不支持或引擎启动失败时回退系统警告触感，保证提醒不会完全丢失。
+/// 设备不支持或引擎启动失败时回退系统震动，保证提醒不会完全丢失。
+/// v1.16：震动请求全部经串行队列执行（防重入/防高频叠加打爆调用栈），
+/// 回退提示改走 AudioServices 系统震动，避开 UIFeedbackGenerator 统计链在部分 iOS 26.x 上的崩溃。
 final class HapticsPlayer {
     private var engine: CHHapticEngine?
     private var player: CHHapticAdvancedPatternPlayer?
+    private let queue = DispatchQueue(label: "haptics.serial")
 
     init() {
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
@@ -1042,25 +1046,28 @@ final class HapticsPlayer {
         guard duration > 0 else { return }          // 0 秒 = 关闭震动
         let d = min(max(duration, 0.1), 60)
         let i = min(max(intensity, 0), 1)
-        guard let engine else {
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-            return
-        }
-        let params = [
-            CHHapticEventParameter(parameterID: .hapticIntensity, value: Float(i)),
-            CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.6)
-        ]
-        let event = CHHapticEvent(eventType: .hapticContinuous, parameters: params,
-                                  relativeTime: 0, duration: d)
-        do {
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            try? player?.stop(atTime: 0)
-            try engine.start()
-            let newPlayer = try engine.makeAdvancedPlayer(with: pattern)
-            try newPlayer.start(atTime: 0)
-            player = newPlayer
-        } catch {
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard let engine = self.engine else {
+                AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+                return
+            }
+            let params = [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: Float(i)),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.6)
+            ]
+            let event = CHHapticEvent(eventType: .hapticContinuous, parameters: params,
+                                      relativeTime: 0, duration: d)
+            do {
+                let pattern = try CHHapticPattern(events: [event], parameters: [])
+                try? self.player?.stop(atTime: 0)
+                try engine.start()
+                let newPlayer = try engine.makeAdvancedPlayer(with: pattern)
+                try newPlayer.start(atTime: 0)
+                self.player = newPlayer
+            } catch {
+                AudioServicesPlaySystemSound(SystemSoundID(kSystemSoundID_Vibrate))
+            }
         }
     }
 }
