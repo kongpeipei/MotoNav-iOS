@@ -10,13 +10,10 @@ struct PoiEditorView: View {
 
     @State private var showAddForm = false
     @State private var poiToDelete: Poi?
+    @State private var builtinToDelete: Poi?
+    @State private var poiToEdit: Poi?
     /// 持有导入协调器：UIDocumentPicker 的 delegate 不会被系统强引用，临时对象会被提前释放导致回调丢失
     @State private var importer: ImportCoordinator?
-
-    /// 已启用内置点位（body 内多处复用，只计算一次）
-    private var enabledBundled: [Poi] {
-        engine.bundledPois.filter { $0.enabled }
-    }
 
     var body: some View {
         NavigationStack {
@@ -42,20 +39,7 @@ struct PoiEditorView: View {
                     Text("操作")
                 }
 
-                Section {
-                    ForEach(enabledBundled) { p in
-                        PoiRow(poi: p)
-                    }
-                    if enabledBundled.isEmpty {
-                        Text("无内置点位")
-                            .foregroundStyle(.tertiary)
-                    }
-                } header: {
-                    Text("内置点位（共 \(enabledBundled.count) 个）")
-                } footer: {
-                    Text("内置点位不可修改，由 App 提供")
-                }
-
+                // v1.8：自定义点位置顶，方便修改/查看
                 Section {
                     if engine.userPois.isEmpty {
                         Text("还没有自定义点位，点击上方「添加新点位」开始")
@@ -64,7 +48,7 @@ struct PoiEditorView: View {
                     } else {
                         ForEach(engine.userPois) { p in
                             PoiRow(poi: p, editable: true) { action in
-                                handleUserPoiAction(action, for: p)
+                                handleAction(action, for: p, builtin: false)
                             }
                         }
                     }
@@ -72,6 +56,24 @@ struct PoiEditorView: View {
                     Text("自定义点位（\(engine.userPois.count) 个）")
                 } footer: {
                     Text("自定义点位持久化在本地，卸载 App 会清除")
+                }
+
+                // v1.8：内置点位可修改（名称/半径/开关）或删除，坐标与类型固定
+                Section {
+                    if engine.builtinPois.isEmpty {
+                        Text("无内置点位（已全部删除）")
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ForEach(engine.builtinPois) { p in
+                            PoiRow(poi: p, editable: true) { action in
+                                handleAction(action, for: p, builtin: true)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("内置点位（显示 \(engine.builtinPois.count) / 共 \(engine.bundledPois.count) 个）")
+                } footer: {
+                    Text("内置点位可改名称、半径、开关，也可删除；坐标与类型固定。App 升级后可恢复默认。")
                 }
             }
             .navigationTitle("点位管理")
@@ -86,12 +88,31 @@ struct PoiEditorView: View {
                     engine.addUserPoi(newPoi)
                 }
             }
+            .sheet(item: $poiToEdit) { p in
+                EditPoiSheet(poi: p) { updated in
+                    if engine.bundledPois.contains(where: { $0.id == p.id }) {
+                        engine.updateBuiltinPoi(updated)
+                    } else {
+                        engine.updateUserPoi(updated)
+                    }
+                }
+            }
             .alert(item: $poiToDelete) { p in
                 Alert(
-                    title: Text("删除点位"),
+                    title: Text("删除自定义点位"),
                     message: Text("确定要删除「\(p.name)」吗？此操作无法撤销。"),
                     primaryButton: .destructive(Text("删除")) {
                         engine.deleteUserPoi(id: p.id)
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            }
+            .alert(item: $builtinToDelete) { p in
+                Alert(
+                    title: Text("删除内置点位"),
+                    message: Text("确定要删除内置点位「\(p.name)」吗？App 升级后可恢复默认。"),
+                    primaryButton: .destructive(Text("删除")) {
+                        engine.deleteBuiltinPoi(id: p.id)
                     },
                     secondaryButton: .cancel(Text("取消"))
                 )
@@ -101,12 +122,18 @@ struct PoiEditorView: View {
 
     // MARK: - 动作处理
 
-    private func handleUserPoiAction(_ action: PoiRowAction, for poi: Poi) {
+    private func handleAction(_ action: PoiRowAction, for poi: Poi, builtin: Bool) {
         switch action {
         case .delete:
-            poiToDelete = poi
+            if builtin { builtinToDelete = poi } else { poiToDelete = poi }
         case .toggle:
-            engine.toggleUserPoi(id: poi.id)
+            if builtin {
+                engine.toggleBuiltinPoi(id: poi.id)
+            } else {
+                engine.toggleUserPoi(id: poi.id)
+            }
+        case .edit:
+            poiToEdit = poi
         }
     }
 
@@ -129,7 +156,7 @@ struct PoiEditorView: View {
 
 // MARK: - 行组件
 
-enum PoiRowAction { case delete, toggle }
+enum PoiRowAction { case delete, toggle, edit }
 
 struct PoiRow: View {
     let poi: Poi
@@ -167,6 +194,13 @@ struct PoiRow: View {
             }
             Spacer()
             if editable {
+                Button {
+                    onAction?(.edit)
+                } label: {
+                    Image(systemName: "pencil")
+                        .foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
                 Toggle("", isOn: Binding(
                     get: { poi.enabled },
                     set: { _ in onAction?(.toggle) }
@@ -180,6 +214,79 @@ struct PoiRow: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+// MARK: - 编辑弹窗（v1.8：内置/自定义通用，坐标与类型固定）
+
+struct EditPoiSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let poi: Poi
+    let onSave: (Poi) -> Void
+
+    @State private var name: String
+    @State private var radiusM: Double
+    @State private var enabled: Bool
+
+    init(poi: Poi, onSave: @escaping (Poi) -> Void) {
+        self.poi = poi
+        self.onSave = onSave
+        _name = State(initialValue: poi.name)
+        _radiusM = State(initialValue: poi.radiusM)
+        _enabled = State(initialValue: poi.enabled)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("基本信息") {
+                    TextField("点位名称", text: $name, prompt: Text("例：蒙城路与北一环路交叉口"))
+                    HStack {
+                        Text("类型")
+                        Spacer()
+                        Label(poi.type.label, systemImage: poi.type.icon)
+                            .foregroundStyle(.secondary)
+                    }
+                    Stepper(value: $radiusM, in: 100...2000, step: 50) {
+                        Text("预警半径：\(Int(radiusM)) 米")
+                    }
+                    Toggle("启用提醒", isOn: $enabled)
+                }
+
+                Section("位置（不可修改）") {
+                    Text(String(format: "%.6f, %.6f", poi.latitude, poi.longitude))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Button {
+                        save()
+                    } label: {
+                        Text("保存修改")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .navigationTitle("编辑点位")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func save() {
+        var p = poi
+        p.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        p.radiusM = radiusM
+        p.enabled = enabled
+        onSave(p)
+        dismiss()
     }
 }
 

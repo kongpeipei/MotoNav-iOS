@@ -81,14 +81,23 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var userPois: [Poi] = []
     /// 自定义讯飞语音包（v1.5：空列表为初始状态，填写 vcn 后自动添加）
     @Published var voicePacks: [VoicePack] = []
+    /// v1.8 内置点位编辑台账：已删除的内置点位 id 与补丁（名称/半径/启用状态覆盖）
+    @Published private(set) var deletedBuiltinIds: Set<String> = []
+    @Published private(set) var builtinPatches: [String: Poi] = [:]
 
-    /// 全部有效点位 = Bundle 内置 + 用户自定义（均过滤 enabled=true）
+    /// 内置点位生效列表 = 内置 - 已删除，再叠加用户补丁（坐标与类型始终不变）
+    var builtinPois: [Poi] {
+        bundledPois.filter { !deletedBuiltinIds.contains($0.id) }
+            .map { builtinPatches[$0.id] ?? $0 }
+    }
+
+    /// 全部有效点位 = 内置（含补丁/删除）+ 用户自定义（均过滤 enabled=true）
     /// 结果缓存：定位回调、UI 计数、分桶索引都会读取，避免每次重新 filter 两个数组。
     private var cachedPois: [Poi] = []
     private var poiCacheValid = false
     var pois: [Poi] {
         if poiCacheValid { return cachedPois }
-        let bundled = bundledPois.filter { $0.enabled }
+        let bundled = builtinPois.filter { $0.enabled }
         let custom  = userPois.filter { $0.enabled }
         cachedPois = bundled + custom
         poiCacheValid = true
@@ -171,6 +180,8 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         // v1.5 加载自定义语音包（须在 super.init() 之后读写 @Published 属性）；
         // 老用户已有 xfVcn 但没有包时，自动补一个（只补一次）
         loadVoicePacks()
+        // v1.8 加载内置点位的删除/补丁台账（同样在 super.init() 之后）
+        loadBuiltinLedger()
 
         lm.delegate = self
         // v1.4：初始按「行驶中」配置；低速/静止后自动切成低精度低频，减少骑行者电池消耗
@@ -196,6 +207,18 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         let initialVcn = (defaults.string(forKey: "xfVcn") ?? "xiaoyan").trimmingCharacters(in: .whitespacesAndNewlines)
         if !initialVcn.isEmpty, !voicePacks.contains(where: { $0.vcn == initialVcn }) {
             voicePacks = [VoicePack(vcn: initialVcn, name: initialVcn)]
+        }
+    }
+
+    /// v1.8：恢复内置点位删除/补丁台账
+    private func loadBuiltinLedger() {
+        let defaults = UserDefaults.standard
+        if let arr = defaults.stringArray(forKey: "deletedBuiltinIds") {
+            deletedBuiltinIds = Set(arr)
+        }
+        if let data = defaults.data(forKey: "builtinPatches"),
+           let decoded = try? JSONDecoder().decode([String: Poi].self, from: data) {
+            builtinPatches = decoded
         }
     }
 
@@ -476,6 +499,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         saveSettings()
     }
 
+    /// v1.8 滑杆整秒提示：短促轻震反馈（不改变已设置的时长/强度）
+    func hapticTick() {
+        haptics.play(duration: 0.12, intensity: 0.35)
+    }
+
     /// 后台本地通知（仅 App 不在前台时发，前台已有界面与语音，不重复打扰）
     private func postBackgroundNotification(distance: Int, type: PoiType, name: String) {
         guard UIApplication.shared.applicationState == .background else { return }
@@ -509,6 +537,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         if let data = try? JSONEncoder().encode(voicePacks) {
             defaults.set(data, forKey: "voicePacks")
+        }
+        // v1.8 内置点位编辑台账
+        defaults.set(Array(deletedBuiltinIds), forKey: "deletedBuiltinIds")
+        if let data = try? JSONEncoder().encode(builtinPatches) {
+            defaults.set(data, forKey: "builtinPatches")
         }
         if rebuildIndex { self.rebuildIndex() }
     }
@@ -568,6 +601,62 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
     func toggleUserPoi(id: String) {
         guard let idx = userPois.firstIndex(where: { $0.id == id }) else { return }
         userPois[idx].enabled.toggle()
+        saveSettings(rebuildIndex: true)
+        evaluateNearest()
+    }
+
+    /// 修改自定义点位：只允许改名称/半径/启用状态，坐标与类型固定不变（v1.8）
+    func updateUserPoi(_ poi: Poi) {
+        guard let idx = userPois.firstIndex(where: { $0.id == poi.id }) else { return }
+        var p = poi
+        let base = userPois[idx]
+        p.type = base.type
+        p.latitude = base.latitude
+        p.longitude = base.longitude
+        userPois[idx] = p
+        saveSettings(rebuildIndex: true)
+        evaluateNearest()
+    }
+
+    // MARK: - 内置点位编辑/删除（v1.8）
+
+    /// 删除内置点位：写入删除台账并持久化（App 升级、重装后恢复默认可再次出现）
+    func deleteBuiltinPoi(id: String) {
+        guard !deletedBuiltinIds.contains(id) else { return }
+        deletedBuiltinIds.insert(id)
+        builtinPatches.removeValue(forKey: id)
+        announced.remove(id)
+        saveSettings(rebuildIndex: true)
+        evaluateNearest()
+    }
+
+    /// 恢复被删除的内置点位（撤销删除）
+    func restoreBuiltinPoi(id: String) {
+        guard deletedBuiltinIds.remove(id) != nil else { return }
+        saveSettings(rebuildIndex: true)
+        evaluateNearest()
+    }
+
+    /// 开关内置点位（通过补丁覆盖 enabled）
+    func toggleBuiltinPoi(id: String) {
+        guard let base = bundledPois.first(where: { $0.id == id }),
+              !deletedBuiltinIds.contains(id) else { return }
+        var p = builtinPatches[id] ?? base
+        p.enabled.toggle()
+        builtinPatches[id] = p
+        saveSettings(rebuildIndex: true)
+        evaluateNearest()
+    }
+
+    /// 修改内置点位：只允许改名称/半径/启用状态，坐标与类型固定不变
+    func updateBuiltinPoi(_ poi: Poi) {
+        guard let base = bundledPois.first(where: { $0.id == poi.id }),
+              !deletedBuiltinIds.contains(poi.id) else { return }
+        var p = poi
+        p.type = base.type
+        p.latitude = base.latitude
+        p.longitude = base.longitude
+        builtinPatches[poi.id] = p
         saveSettings(rebuildIndex: true)
         evaluateNearest()
     }

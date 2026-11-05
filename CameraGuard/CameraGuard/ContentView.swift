@@ -310,7 +310,7 @@ struct ContentView: View {
 
             Divider()
 
-            // v1.6/v1.7 震动设置：开关 + 持续时长（0 秒为关闭，最长 60 秒）+ 强度（0~100%）
+            // v1.6/v1.7/v1.8 震动设置：开关 + 持续时长（0 ~ 10 秒，0 为关闭，滑到整秒有震动提示）+ 强度
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(isOn: Binding(
                     get: { engine.hapticDuration > 0 },
@@ -323,22 +323,29 @@ struct ContentView: View {
                             .font(.subheadline.weight(.medium))
                         Spacer()
                         Text(engine.hapticDuration == 0 ? "已关闭"
-                             : String(format: "%.1f 秒", engine.hapticDuration))
+                             : String(format: "%.0f 秒", engine.hapticDuration))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(engine.hapticDuration == 0 ? .tertiary : .secondary)
                     }
                 }
 
-                if engine.hapticDuration > 0 {
-                    Slider(value: Binding(
-                        get: { max(engine.hapticDuration, 0.5) },
-                        set: { engine.updateHapticDuration($0) }
-                    ), in: 0.5...60, step: 0.5)
-                        .tint(.orange)
-                    Text("持续时间：0.5 ~ 60 秒（关掉上方开关即 0 秒关闭）")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                // v1.8：时长范围 0 ~ 10 秒、步进 1 秒；滑到整秒时给一次短促震动反馈
+                Slider(value: Binding(
+                    get: { engine.hapticDuration },
+                    set: { v in
+                        let whole = v.rounded(.down)
+                        if whole != engine.hapticDuration {
+                            engine.updateHapticDuration(whole)
+                            if whole > 0 { engine.hapticTick() }
+                        }
+                    }
+                ), in: 0...10, step: 1)
+                    .tint(.orange)
+                Text("持续时间：0 ~ 10 秒（0 秒为关闭，滑到整秒会有一次震动提示）")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
 
+                if engine.hapticDuration > 0 {
                     HStack(spacing: 10) {
                         Text("强度")
                             .font(.caption)
