@@ -2703,7 +2703,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 现在改成：先发状态 → 下一轮 runloop 再启动 Live Activity，
             // 且用 Task 包裹（不在主线程同步等），并加超时兜底。
             scheduleLiveActivityStart(destName: destName)
-            speak("开始导航到\(destName)，请按路线行驶")
+            // v2.44 N3 开始导航加全程概览（高德式）：全程X公里，预计X分钟
+            let km = String(format: "%.1f", Double(max(routeDistanceM, 0)) / 1000.0)
+            let min = max(routeDurationS, 0) / 60
+            speak("开始导航到\(destName)，全程\(km)公里，预计\(min)分钟，请按路线行驶")
             status = "导航中 → \(destName) · 户外可调亮屏幕看路口"
         }
     }

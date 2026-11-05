@@ -3470,44 +3470,24 @@ struct ContentView: View {
     /// v2.29：文字颜色原先硬编码为黑色，深色模式下又是"黑底黑字"。
     /// 改为跟随底卡配色（浅色模式黑字、深色模式白字）。
     private func lightCountdownRow(_ nl: (light: TrafficLight, dist: Int)) -> some View {
+        // v2.44 N1 红绿灯状态/秒数原是固定周期推算（非实时信号灯数据），
+        // 显示"红灯 23 秒"会给骑手错误预期（实际灯色与周期完全不同）。
+        // 改为只显示高德路线数据中的真实信息：路口有信号灯 + 距离。
         let isDark = colorScheme == .dark
-        let numFg = isDark ? Color.white.opacity(0.92) : Color.black.opacity(0.78)
         let subFg = isDark ? Color.white.opacity(0.6) : Color.black.opacity(0.45)
         let lampBg = isDark ? Color.black.opacity(0.55) : Color.black.opacity(0.85)
-        return TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let st = nl.light.state(at: ctx.date)
-            HStack(spacing: 8) {
-                VStack(spacing: 3) {
-                    Circle()
-                        .fill(st.red ? Color.red : Color.red.opacity(0.18))
-                        .frame(width: 9, height: 9)
-                    Circle()
-                        .fill(st.red ? Color.green.opacity(0.18) : Color.green)
-                        .frame(width: 9, height: 9)
-                }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 3)
-                .background(lampBg, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                Text(st.red ? "红灯" : "绿灯")
-                    .font(.caption.bold())
-                    .foregroundStyle(st.red ? Color.red : Color(red: 0.13, green: 0.62, blue: 0.30))
-                HStack(alignment: .firstTextBaseline, spacing: 1) {
-                    Text("\(st.remain)")
-                        .font(.system(size: 18, weight: .heavy))
-                        .monospacedDigit()
-                        .foregroundStyle(numFg)
-                    Text("秒")
-                        .font(.caption2)
-                        .foregroundStyle(subFg)
-                }
-                Spacer()
-                Text(nl.dist > 8 ? "前方 \(nl.dist) 米 · 预计" : "已到路口")
-                    .font(.caption2)
-                    .foregroundStyle(subFg)
-            }
-            .padding(.horizontal, 14)
-            .background((st.red ? Color.red : Color.green).opacity(isDark ? 0.16 : 0.07))
+        return HStack(spacing: 6) {
+            Image(systemName: "light.beacon.max.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(red: 0.13, green: 0.62, blue: 0.30))
+            Text(nl.dist > 8 ? "前方 \(nl.dist) 米 · 红绿灯" : "已到路口 · 注意信号灯")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(subFg)
+                .lineLimit(1)
+            Spacer()
         }
+        .padding(.horizontal, 14)
+        .background(lampBg, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     /// v2.01 车道级引导行：推荐车道绿色高亮，其余灰显

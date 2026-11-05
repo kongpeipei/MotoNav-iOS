@@ -14,30 +14,11 @@ struct TrafficLight: Identifiable {
     let coordinate: CLLocationCoordinate2D
     /// 距路线起点的里程（米）
     let fromStartM: Int
-    /// 相位偏移（0~cycle 秒），由坐标决定 → 同一路口每次一致
-    private let offset: Double
-
-    /// 一个完整周期（秒）
-    static let cycle: Double = 62
-    /// 红灯时长（秒）
-    static let redLen: Double = 34
 
     init(id: Int, coordinate: CLLocationCoordinate2D, fromStartM: Int) {
         self.id = id
         self.coordinate = coordinate
         self.fromStartM = fromStartM
-        let seed = abs(coordinate.latitude * 1000.0 + coordinate.longitude * 1000.0)
-        self.offset = (seed * 7.3).truncatingRemainder(dividingBy: Self.cycle)
-    }
-
-    /// 当前相位：是否红灯 + 剩余秒数
-    func state(at date: Date = Date()) -> (red: Bool, remain: Int) {
-        let t = date.timeIntervalSince1970 + offset
-        let p = t.truncatingRemainder(dividingBy: Self.cycle)
-        if p < Self.redLen {
-            return (true, max(1, Int((Self.redLen - p).rounded(.up))))
-        }
-        return (false, max(1, Int((Self.cycle - p).rounded(.up))))
     }
 }
 
