@@ -83,11 +83,13 @@ struct DiagnosticsSheet: View {
                 }
 
                 // ── 测试工具 ────────────────────────────────────
-                Section("测试") {
+                Section {
                     Toggle("模拟导航", isOn: Binding(
                         get: { model.simulating },
                         set: { _ in model.toggleSimulation() }
                     ))
+                } header: {
+                    Text("测试")
                 } footer: {
                     Text("模拟移动定位演示导航效果；只用于测试，不影响真实定位。")
                 }

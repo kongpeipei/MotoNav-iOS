@@ -235,58 +235,13 @@ struct ContentView: View {
     }
 
     var body: some View {
-        // v2.47 修复：body 链过长（4×onChange+手势+5×modifier+sheet）导致 Xcode 16.1 编译器
-        // type-check 超时 —— AnyView 显式类型化整条链，跳过深层链式推断
-        AnyView(
-            bodyCore
-        // v2.25 我的位置移动时，黑线起点跟着更新（线始终连着当前定位点）
-        // 顺带兜底：搜索时如果定位还没出来（nil），定位一有值就补上黑线起点
-        .onChange(of: model.currentLocation?.latitude ?? 0) { _, _ in
-            if searchHitCoord != nil {
-                searchLinkFrom = model.currentLocation
-            }
-        }
-        // v2.23 全局边缘滑动返回：手指从屏幕左/右边缘往中间滑 → 返回上一级
-        // 放在最外层 ZStack 上（覆盖地图），用 simultaneousGesture 避免抢地图自身手势；
-        // 地图区域内的横向拖动（平移）依然可用 —— 只有起手点在边缘 40pt 内才触发。
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 20)
-                .onChanged { v in
-                    if edgeDragStartX == 0 { edgeDragStartX = v.startLocation.x }
-                }
-                .onEnded { v in
-                    let startX = edgeDragStartX
-                    edgeDragStartX = 0
-                    let screenW = UIScreen.main.bounds.width
-                    if handleEdgeSwipe(startX: startX, translation: v.translation.width, screenW: screenW) {
-                        haptic()
-                    }
-                }
-        )
-        // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
-        .onChange(of: model.navigating) { _, nv in
-            if nv {
-                showExitConfirm = false
-                tapPlace = nil          // v1.95 进入导航时收起地点卡，避免和导航卡叠在一起
-                slotTarget = nil        // v1.97 开始导航即退出常用地点设置态
-            } else {
-                endRouteOverview()
-            }
-        }
-        // v1.97 开始规划路线（点卡片"路线"）时也退出常用地点设置态
-        .onChange(of: model.routeChoices.isEmpty) { _, empty in
-            if !empty {
-                slotTarget = nil
-                // v2.16 沉浸态下点了"导航"：路线卡不在沉浸层里渲染，
-                // 必须先把整套 UI 恢复，否则点完像没反应
-                if uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
-            }
-        }
-        // v2.16 同理：沉浸态下点了"搜周边"，类别结果条要能看到
-        .onChange(of: model.categoryResults.isEmpty) { _, empty in
-            if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
-        }
-        // v2.25 弹窗组（拆分以解决类型检查超时）
+        rootWithMods
+    }
+
+    /// v2.47 拆分：body 链过长（onChange+手势+sheet+modifier 混合）导致 Xcode 16.1
+    /// type-check 超时 —— 拆成 rootWithMods（sheet/modifier 组）与 rootCore（onChange 组）两段
+    private var rootWithMods: some View {
+        rootCore
         .modifier(SheetGroup1Modifier(showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showTeamRide: $showTeamRide, footprints: footprints, team: team, selectedTab: $selectedTab))
         // v2.39 I2 导航中切换路线 sheet：导航底卡"换路"按钮弹出
         .sheet(isPresented: $showRouteSwap) {
@@ -392,7 +347,58 @@ struct ContentView: View {
         // v2.12 外观三段式：自动跟随系统 / 强制浅色 / 强制深色
         // 放在根视图上，sheet、设置页、地图底图（MapView 读同一个 colorScheme）一起生效
         .preferredColorScheme((AppearanceMode(rawValue: appearanceMode) ?? .auto).colorScheme)
+    }
+
+    /// v2.47 拆分：bodyCore + onChange/手势组（短链，编译器可快速推断）
+    private var rootCore: some View {
+            bodyCore
+        // v2.25 我的位置移动时，黑线起点跟着更新（线始终连着当前定位点）
+        // 顺带兜底：搜索时如果定位还没出来（nil），定位一有值就补上黑线起点
+        .onChange(of: model.currentLocation?.latitude ?? 0) { _, _ in
+            if searchHitCoord != nil {
+                searchLinkFrom = model.currentLocation
+            }
+        }
+        // v2.23 全局边缘滑动返回：手指从屏幕左/右边缘往中间滑 → 返回上一级
+        // 放在最外层 ZStack 上（覆盖地图），用 simultaneousGesture 避免抢地图自身手势；
+        // 地图区域内的横向拖动（平移）依然可用 —— 只有起手点在边缘 40pt 内才触发。
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onChanged { v in
+                    if edgeDragStartX == 0 { edgeDragStartX = v.startLocation.x }
+                }
+                .onEnded { v in
+                    let startX = edgeDragStartX
+                    edgeDragStartX = 0
+                    let screenW = UIScreen.main.bounds.width
+                    if handleEdgeSwipe(startX: startX, translation: v.translation.width, screenW: screenW) {
+                        haptic()
+                    }
+                }
         )
+        // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
+        .onChange(of: model.navigating) { _, nv in
+            if nv {
+                showExitConfirm = false
+                tapPlace = nil          // v1.95 进入导航时收起地点卡，避免和导航卡叠在一起
+                slotTarget = nil        // v1.97 开始导航即退出常用地点设置态
+            } else {
+                endRouteOverview()
+            }
+        }
+        // v1.97 开始规划路线（点卡片"路线"）时也退出常用地点设置态
+        .onChange(of: model.routeChoices.isEmpty) { _, empty in
+            if !empty {
+                slotTarget = nil
+                // v2.16 沉浸态下点了"导航"：路线卡不在沉浸层里渲染，
+                // 必须先把整套 UI 恢复，否则点完像没反应
+                if uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
+            }
+        }
+        // v2.16 同理：沉浸态下点了"搜周边"，类别结果条要能看到
+        .onChange(of: model.categoryResults.isEmpty) { _, empty in
+            if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
+        }
     }
 
 
@@ -3492,7 +3498,7 @@ struct ContentView: View {
             for sp in spans {
                 var d = 0.0
                 for i in 0..<max(0, sp.points.count - 1) {
-                    d += distanceM(sp.points[i], sp.points[i + 1])
+                    d += model.distanceM(sp.points[i], sp.points[i + 1])
                 }
                 out.append((acc, acc + d, sp.level))
                 acc += d
