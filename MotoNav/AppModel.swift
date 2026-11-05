@@ -157,6 +157,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastActivityUpdate: TimeInterval = 0
     /// v2.36 F5 超速播报节流（30 秒内不重复；回到限速内后重置）
     private var lastOverspeedSpeak: TimeInterval = 0
+    /// v2.38 H1 实际行驶距离累计（m，导航中每次发布移动 >5m 累加）：
+    /// 行程卡/足迹显示真实里程，而非高德规划距离（偏航绕路时规划值偏小）
+    private var actualTripM = 0.0
     private var lastSpeakPriority = 0
     private var lastSpeakText = ""
     /// 导航巡航 Live Activity（灵动岛/锁屏：头盔 + 已出发/去往目的地，导航中生效）
@@ -1466,6 +1469,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v1.99 足迹轨迹 + 最高速（仅导航中记录，避免无意义点位）
             if navigating {
                 trackPoints.append(coord)
+                // v2.38 H1 实际行驶距离：每次"发布移动 >5m"累加一段。
+                // 复用发布降频的 moved 语义（currentLocation 更新条件就是 moved>5），
+                // 静止 GPS 抖动（1~3m）天然被过滤，总量误差 <5m/发布段
+                if moved > 5 { actualTripM += moved }
                 // v2.36 F6 轨迹源数组封顶：足迹存档已抽稀，但源数组不封顶会随导航时长
                 // 无限累积（2 小时 ≈ 数万点）；超 8000 点隔点抽稀一次（内存有界）
                 if trackPoints.count > 8000 {
@@ -1479,7 +1486,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 // v2.29 按速度自动切换视野档位（低速看清路口 / 高速看远）
                 updateAutoNavScale()
                 // v2.36 F5 超速语音播报：E8 视觉变红的语音版（高优先级可打断普通播报）
-                if speedLimitKph > 0, currentSpeed * 3.6 > Double(speedLimitKph) {
+                // v2.38 H3 语音加 4km/h 缓冲：GPS 瞬时速度误差 ±2km/h，
+                // 限速 60 时 61 就报会频繁误报；视觉红线保持瞬时（见 navBottomCard E8）
+                if speedLimitKph > 0, currentSpeed * 3.6 > Double(speedLimitKph) + 4 {
                     if Date().timeIntervalSince(lastOverspeedSpeak) > 30 {
                         lastOverspeedSpeak = Date()
                         speak("您已超速，当前速度\(Int(currentSpeed * 3.6))", priority: 2)
@@ -2421,6 +2430,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         routeTurns = []
         routeDistanceM = 0
         routeDurationS = 0
+        actualTripM = 0
         routeChoices = []
         trafficLights = []
         fitTick += 1
@@ -2740,10 +2750,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func finishTrip() {
         guard let start = navStart else { return }
         let dur = Int(Date().timeIntervalSince(start))
-        let avg = dur > 0 ? (Double(routeDistanceM) / 1000.0) / (Double(dur) / 3600.0) : 0
+        // v2.38 H1 行程卡用实际行驶距离（无实际记录时回退规划距离）：
+        // 偏航/绕路时真实里程不会被高德规划值压低
+        let shownM = actualTripM > 0 ? Int(actualTripM) : routeDistanceM
+        let avg = dur > 0 ? (Double(shownM) / 1000.0) / (Double(dur) / 3600.0) : 0
         tripSummary = TripSummary(
             destName: destName,
-            distanceM: routeDistanceM,
+            distanceM: shownM,
             durationS: dur,
             avgSpeedKmh: avg)
         // v1.99 足迹存档：轨迹抽稀后写入本地（里程过短不记）
@@ -2751,7 +2764,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         FootprintStore.shared.add(Footprint(
             destName: destName,
             startedAt: start,
-            distanceM: routeDistanceM,
+            distanceM: shownM,
             durationS: dur,
             avgSpeed: avg,
             maxSpeed: maxSpeedKph,

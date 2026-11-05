@@ -2866,7 +2866,8 @@ struct ContentView: View {
     }
 
     private var cruiseCard: some View {
-        let speed = Int(model.currentSpeed * 3.6)
+        // v2.38 H2 速度读数四舍五入（Int 截断会少显示 1 km/h：82.9→82）
+        let speed = Int((model.currentSpeed * 3.6).rounded())
         return HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
@@ -2930,94 +2931,7 @@ struct ContentView: View {
         .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.18)
     }
 
-    private var navTopBar: some View {
-        VStack {
-            if model.navigating, let ns = model.navStatusCache, ns.remainM > 0 {
-                VStack(spacing: 8) {
-                    // 第一行：剩余距离 / 剩余时间 / 速度
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(String(format: "%.1f", Double(max(ns.remainM, 0)) / 1000.0))
-                                .font(.system(size: 34, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("剩余公里")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(durationTxt(max(ns.remainS, 0)))
-                                .font(.system(size: 24, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("剩余时间")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        // v1.82 顶部当前道路名（高德式，随导航推进更新）
-                        VStack(spacing: 2) {
-                            Text(model.currentRoadName.isEmpty ? "导航中" : model.currentRoadName)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Text("当前道路")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
-                        .frame(maxWidth: .infinity)
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 0) {
-                            Text("\(Int(ns.speedKph))")
-                                .font(.system(size: 34, weight: .heavy))
-                                .foregroundStyle(.white)
-                            Text("km/h")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                    }
-                    // v1.81.4 车道卡（<500米时显示，高德同款）：左侧上方动作文字+车道图标(需走车道绿色高亮)，右侧距离+道路名称
-                    if let t = ns.nextTurn, ns.distToTurnM < 500, ns.distToTurnM > 0 {
-                        HStack(alignment: .top, spacing: 14) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(navTurnText(t))
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.white.opacity(0.72))
-                                HStack(spacing: 5) {
-                                    let lanes = t.lanes.isEmpty ? navLaneFallback(t.modifier) : t.lanes
-                                    ForEach(Array(lanes.enumerated()), id: \.offset) { idx, lane in
-                                        Image(systemName: navLaneIcon(lane))
-                                            .font(.subheadline.bold())
-                                            .foregroundStyle(idx == 0 ? Color.green : .white.opacity(0.42))
-                                    }
-                                }
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 0) {
-                                Text("\(navDist(ns.distToTurnM))")
-                                    .font(.system(size: 24, weight: .heavy))
-                                    .foregroundStyle(.white)
-                                if !t.roadName.isEmpty {
-                                    Text(t.roadName)
-                                        .font(.caption)
-                                        .foregroundStyle(.white.opacity(0.92))
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-                .padding(.horizontal)
-                .padding(.top, 52)
-            }
-            Spacer()
-        }
-    }
 
-    /// v2.25 底部浮层组（候选途经点卡 / 底部overlay / 沉浸卡层 / 行程卡 / 地图错误条）
-    @ViewBuilder
     private var bottomLayerGroup: some View {
         // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
         if !model.navigating && model.waypointCandidate != nil {
@@ -3393,7 +3307,7 @@ struct ContentView: View {
                 }
                 // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
                 let overSpeed = model.speedLimitKph > 0 && ns.speedKph > model.speedLimitKph
-                Text("\(Int(ns.speedKph))")
+                Text("\(Int(ns.speedKph.rounded()))")
                     .font(.system(size: speedFontSize, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(overSpeed ? .red : mainFg)
