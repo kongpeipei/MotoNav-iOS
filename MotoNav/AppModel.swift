@@ -47,6 +47,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = AppModel()
 
     @Published var currentLocation: CLLocationCoordinate2D?
+    /// v2.34 上次应用定位采样档位时的前后台状态（变化时刷新 distanceFilter）
+    private var lastLocationFilterAppState: UIApplication.State = .active
     /// 定位精度（米），越小信号越好
     @Published var locationAccuracy: CLLocationAccuracy = 0
     @Published var monitoring = false
@@ -536,6 +538,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             lm.distanceFilter = 2
             return
         }
+        // v2.34 后台降频省电：非导航切后台后采样降到 50m（导航仍保持 2m 高频，转向提醒不延迟）
+        if UIApplication.shared.applicationState == .background {
+            lm.distanceFilter = 50
+            return
+        }
         if powerSaving {
             lm.distanceFilter = 50
             return
@@ -872,6 +879,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     func removeQuickPoi(id: String) {
         quickPois.removeAll { $0.id == id }
+        saveQuickPois()
+    }
+
+    /// v2.34 快捷卡片重命名（对比高德：长按卡片可改名/删除）
+    func renameQuickPoi(id: String, newName: String) {
+        let n = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty, let i = quickPois.firstIndex(where: { $0.id == id }) else { return }
+        var qp = quickPois[i]
+        qp.name = n
+        quickPois[i] = qp
         saveQuickPois()
     }
 
@@ -1411,6 +1428,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ) {
         guard let loc = locations.last else { return }
         let coord = loc.coordinate
+        // v2.34 前后台切换时刷新定位采样频率（后台 50m / 前台按运动状态分级）
+        if UIApplication.shared.applicationState != lastLocationFilterAppState {
+            lastLocationFilterAppState = UIApplication.shared.applicationState
+            Task { @MainActor in self.updateLocationFilter() }
+        }
         Task { @MainActor in
             // v2.14 发布降频：位置/精度/速度是「界面重建」的触发器。
             // 静止时 GPS 会以 1Hz 左右抖动（每次几米），而 ContentView.body 是一整棵树，
@@ -1793,6 +1815,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if now.timeIntervalSince(lastSpeakAt) < 2.5 && priority <= lastSpeakPriority {
             if now.timeIntervalSince(lastSpeakAt) < 1.2 || lastSpeakText == text { return }
         }
+        // v2.34 播报防扎堆：1.5 秒内同类"距离+方向"提示（文本含"米"）直接合并，
+        // 路口密集区（连续 300m/200m/100m 转向）只报第一条，不再一条接一条堆叠
+        if now.timeIntervalSince(lastSpeakAt) < 1.5, priority <= lastSpeakPriority,
+           text.contains("米"), lastSpeakText.contains("米") { return }
         // v1.81.4 后台语音播报：playback 会话（Info.plist 已含 audio 后台模式），导航切后台语音继续
         //
         // v2.29：只在会话尚未激活时才设置 —— 重复 setActive 是无意义的同步开销。
@@ -1917,7 +1943,29 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if matched.isEmpty {
             matched = ["🔍 在线搜索「\(q)」"]
         }
+        // v2.34 导航态沿途 POI 优先（对比高德：导航中联想先把顺路的排前，避免搜出反方向目的地）
+        if navigating, route.count >= 2 {
+            let pos = matched.enumerated().compactMap { idx, n -> (Int, Double)? in
+                guard let pl = placeLabels.first(where: { $0.name == n }) else { return nil }
+                return (idx, distanceToRouteM(CLLocationCoordinate2D(latitude: pl.lat, longitude: pl.lon)))
+            }
+            if !pos.isEmpty {
+                let orderedIdx = pos.sorted { $0.1 < $1.1 }.map { $0.0 }
+                matched = orderedIdx.map { matched[$0] } + matched.enumerated()
+                    .filter { !orderedIdx.contains($0.offset) }.map { $0.element }
+            }
+        }
         return Array(matched.prefix(10))
+    }
+
+    /// v2.34 点到当前路线折线的最近距离（沿途排序用；坐标系差异的数百米误差不影响排序方向）
+    private func distanceToRouteM(_ c: CLLocationCoordinate2D) -> Double {
+        guard route.count >= 2 else { return .greatestFiniteMagnitude }
+        var best = Double.greatestFiniteMagnitude
+        for i in 0..<(route.count - 1) {
+            best = min(best, distToSegment(c, route[i], route[i + 1]))
+        }
+        return best
     }
 
     /// 保存/清除高德 Key（didSet 自动持久化）
@@ -2442,6 +2490,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let from = start
         let rawEnd = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         Task {
+            defer { self.swapInFlight = false }  // v2.34 交换规划结束（成功/失败/降级）都解锁
             // v1.98 不再用 OSRM 做起点吸附/步行连接：OSM 路网与高德底图不同源，
             // 吸附点常落到高德认不出的路上，表现为"路线起点悬空、整条线压不到路"。
             // 高德规划接口本身会把起终点吸附到可通行道路，直接传原始坐标最稳。
@@ -2542,7 +2591,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             pitchDeg = 0          // v2.01 退出导航回 2D 平视
             navigateFollowTick += 1
             navUserMoved = false
-            routeChoices = [] // v1.85 结束导航隐藏路线推荐卡，只保留行程卡（轻点卡片外任意处回首页）
+            // v2.34 退出导航保留路线推荐卡（高德式：回到路线预览页，起终点/换路线仍可操作）；
+            // 轻点卡片外任意处或左滑仍可关闭回首页（closeRoutePlan）
             selectedRouteIdx = 0
             navStatusCache = nil // v2.28 清缓存，避免下次进入导航时先显示上一条路线的余量
             finishTrip()
@@ -2956,7 +3006,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// · **途经点按新方向重排**：原来在"起点→终点"路径上的点仍在，
     ///   但顺序反转（返程时"去接人"的顺序应该倒过来）
     /// · 互换后如果规划失败，自动退回"用当前定位作为终点"再试一次
+    private var swapInFlight = false
     func swapOriginDest() {
+        // v2.34 防重复点击：交换+重规划是异步网络过程，连点会并发多次 replan 造成路线闪烁
+        guard !swapInFlight else { status = "正在交换并重新规划…"; return }
+        swapInFlight = true
         guard destLat != 0 || destLon != 0 else {
             status = "还没有终点，先选一个目的地"
             return

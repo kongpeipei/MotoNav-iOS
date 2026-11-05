@@ -629,8 +629,25 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         // 地图自适应旋转：地图始终与手机朝向一致（箭头固定朝屏幕上方=手机朝向，避免双重旋转）
         // 用户手动拖动/旋转地图后暂停跟随（高德式：点定位按钮恢复）
+        // v2.34 航向平滑插值：GPS course 在静止/低速时会在 ±几十度内抖动，
+        // 直接赋值会导致地图每帧瞬跳旋转。改为每帧最多转 45°；掉头（>120°）直接跟随避免迟滞。
         if !context.coordinator.userMoved {
-            map.camera.heading = CLLocationDirection(heading)
+            let target = CLLocationDirection(heading)
+            var cur = context.coordinator.lastAppliedHeading ?? target
+            var d = target - cur
+            while d > 180 { d -= 360 }
+            while d < -180 { d += 360 }
+            let step = 45.0
+            if abs(d) > 120 {
+                cur = target
+            } else if abs(d) > step {
+                cur += (d > 0 ? step : -step)
+            } else {
+                cur = target
+            }
+            cur = (cur.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+            context.coordinator.lastAppliedHeading = cur
+            map.camera.heading = cur
         }
         // v2.32 MapKit 3D 俯视加固：部分机型在 followWithHeading 下会把 pitch 重置回 0
         // （MapKit known issue：3D 相机由系统接管）。导航态每 ≥3 秒检测一次，
@@ -963,6 +980,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastOverviewTick = 0
         /// 导航中最后跟随位置（开远自动拉回）
         var navLastFollow: CLLocationCoordinate2D?
+        /// v2.34 自车航向平滑：上一次实际应用的 camera.heading，避免 GPS course 抖动导致地图瞬跳旋转
+        var lastAppliedHeading: CLLocationDirection?
         /// 程序主动设置区域（避免被标记为用户移动）
         /// v2.29 程序化移动标志：**计数器**（原来是 Bool）
         ///
@@ -1358,9 +1377,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                     r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
                     r.lineWidth = 5
                 } else if self.alternatePolylines.contains(where: { $0 === poly }) {
-                    // v2.01 备选路线：灰色实线（高德同款）——点了哪条，哪条变绿，其余保持灰
-                    r.strokeColor = UIColor(white: 0.62, alpha: 1.0)
-                    r.lineWidth = 6
+                    // v2.34 备选路线：深蓝虚线（对比度增强）——原灰 0.62 在浅色底图上发灰发浅，
+                    // 与推荐路线的绿双层难区分；改深蓝+虚线后"主/备"一眼可辨（点哪条哪条变绿不变）。
+                    r.strokeColor = UIColor(red: 0.16, green: 0.42, blue: 0.88, alpha: 0.95)
+                    r.lineWidth = 5
+                    r.lineDashPattern = [6, 4]
                 } else {
                     r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
                     r.lineWidth = 4

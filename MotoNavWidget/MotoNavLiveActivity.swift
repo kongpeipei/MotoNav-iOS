@@ -228,11 +228,15 @@ private struct LiveActivityCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(context.state.title)
                     .font(.headline)
+                    // v2.34 锁屏防溢出：长目的地名单行截断 + 自动缩小字号（小屏/大字体不挤破布局）
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     .foregroundStyle(warning ? .red : .primary)
                 Text(context.state.detail)
                     .font(.caption)
                     .foregroundStyle(warning ? .red : .secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
             Spacer()
             Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "0m")
@@ -273,10 +277,15 @@ struct MotoNavLiveActivity: Widget {
                     VStack(spacing: 2) {
                         Text(context.state.title)
                             .font(.headline)
+                            // v2.34 灵动岛展开态同款防溢出
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .foregroundStyle(warning ? .red : .primary)
                         Text(context.state.detail)
                             .font(.footnote)
                             .foregroundStyle(warning ? .red : .secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
                 }
             } compactLeading: {

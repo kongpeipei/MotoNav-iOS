@@ -28,6 +28,9 @@ struct ContentView: View {
     @State private var showDiagnostics = false
     /// v2.33 选项说明卡片（问号点击弹出；说明小字不再直接铺在页面上）
     @State private var explainTitle = ""
+    /// v2.34 快捷卡片重命名（长按菜单触发，TextField 弹窗）
+    @State private var renamingQuickPoiId: String?
+    @State private var renamingQuickPoiName = ""
     @State private var explainBody = ""
     @State private var showExplain = false
     /// v2.27 版本号连点计数（连点 7 次进入诊断页）
@@ -662,6 +665,22 @@ struct ContentView: View {
             }
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("重命名常用地点", isPresented: Binding(
+                get: { renamingQuickPoiId != nil },
+                set: { if !$0 { renamingQuickPoiId = nil } }
+            )) {
+                TextField("名称", text: $renamingQuickPoiName)
+                Button("保存") {
+                    if let id = renamingQuickPoiId {
+                        model.renameQuickPoi(id: id, newName: renamingQuickPoiName)
+                        model.status = "已重命名"
+                    }
+                    renamingQuickPoiId = nil
+                }
+                Button("取消", role: .cancel) { renamingQuickPoiId = nil }
+            } message: {
+                Text("输入新的名称")
+            }
             .alert(explainTitle, isPresented: $showExplain) {
                 Button("知道了", role: .cancel) {}
             } message: {
@@ -874,6 +893,26 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // v2.34 对比高德：误拖乱浮层后一键复位全部悬浮控件（罗盘/缩放/卡片回到默认位）
+            Button {
+                haptic()
+                for k in ["routeplantop", "routeplanbottom", "categorybar", "bottommain",
+                          "turnahead", "tapplace", "tipcard", "tripsummary",
+                          "zoom", "exitnav2", "overviewbar", "navside"] {
+                    UserDefaults.standard.removeObject(forKey: "\(k).x")
+                    UserDefaults.standard.removeObject(forKey: "\(k).y")
+                }
+                NotificationCenter.default.post(name: .floatResetAll, object: nil)
+                model.status = "悬浮控件位置已重置"
+            } label: {
+                HStack {
+                    Label("重置悬浮控件位置", systemImage: "arrow.counterclockwise")
+                    Spacer()
+                    Text("一键复位")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -1045,6 +1084,23 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             editSlotButton(.custom(qp.id))
+        }
+        // v2.34 对比高德：长按常用地点 → 重命名 / 删除（删除也可左滑）
+        .contextMenu {
+            Button {
+                haptic()
+                renamingQuickPoiId = qp.id
+                renamingQuickPoiName = displayName(qp.name)
+            } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                haptic()
+                model.removeQuickPoi(id: qp.id)
+                model.status = "已删除常用地点「\(displayName(qp.name))」"
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
         }
     }
 
@@ -2326,11 +2382,14 @@ struct ContentView: View {
 
     /// v1.65：原底部转向大卡 navInfoCard 已合并进顶部 navTopBar（道路指示/速度/距离时间三合一）
 
-    /// 高德式路口放大示意图：接近下一转向（<200米）时显示交叉路口 + 转弯箭头 + 路名
+    /// 高德式路口放大示意图：接近下一转向时显示交叉路口 + 转弯箭头 + 路名
+    /// v2.34 触发距离按车速动态调整：基准 200m + 当前车速(m/s)×3 秒行驶距离（上限 350m），
+    /// 高速提前亮、低速贴近才亮，避免高速路口一闪而过或低速时卡片过早占屏。
     private var turnAheadCard: some View {
         Group {
             if let ns = model.navStatusCache,
-               let t = ns.nextTurn, ns.distToTurnM < 200 {
+               let t = ns.nextTurn,
+               ns.distToTurnM < min(350, 200 + Int(model.currentSpeed * 3.0)) {
                 ZStack {
                     // 当前道路（垂直）
                     Rectangle().fill(.white.opacity(0.92))

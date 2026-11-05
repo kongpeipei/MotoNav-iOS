@@ -18,6 +18,11 @@
 import SwiftUI
 import UIKit
 
+/// v2.34 重置全部悬浮控件位置的通知（设置页"重置悬浮控件位置"按钮发出）
+extension Notification.Name {
+    static let floatResetAll = Notification.Name("floatResetAll")
+}
+
 struct DraggableFloat<Content: View>: View {
     let key: String
     var lockX: Bool = false
@@ -43,6 +48,8 @@ struct DraggableFloat<Content: View>: View {
     @State private var defaultTopY: CGFloat = 0.1
     /// v2.23 卡片内容实测尺寸：用于把卡片完整钳制在屏幕内（防止底部按钮被裁掉）
     @State private var contentSize: CGSize = .zero
+    /// v2.34 默认位置快照（复位通知时恢复用）
+    @State private var defaultPos0: CGPoint = .zero
 
     init(key: String, defaultPos: CGPoint, lockX: Bool = false, topLocked: Bool = false,
          bottomAnchor: Bool = false,
@@ -78,6 +85,7 @@ struct DraggableFloat<Content: View>: View {
         _pos = State(initialValue: CGPoint(x: px, y: py))
         _defaultTopY = State(initialValue: defaultPos.y)
         _initialX = State(initialValue: px)
+        _defaultPos0 = State(initialValue: defaultPos)
     }
 
     /// v2.23 计算卡片中心的最终 y 坐标
@@ -194,6 +202,15 @@ struct DraggableFloat<Content: View>: View {
                         }
                     }
             )
+            // v2.34 收到"重置悬浮控件位置"通知：重新读 UserDefaults（已被按钮清空）并回默认位
+            .onReceive(NotificationCenter.default.publisher(for: .floatResetAll)) { _ in
+                let rx = UserDefaults.standard.object(forKey: "\(key).x") as? Double
+                let ry = UserDefaults.standard.object(forKey: "\(key).y") as? Double
+                pos = CGPoint(
+                    x: min(0.96, max(0.04, rx ?? defaultPos0.x)),
+                    y: topLocked ? defaultPos0.y
+                       : min(0.93, max(0.10, ry ?? defaultPos0.y)))
+            }
         }
     }
 }
