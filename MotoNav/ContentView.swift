@@ -277,7 +277,7 @@ struct ContentView: View {
             }
         }
         .modifier(SheetGroup2Modifier(showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput))
-        .modifier(SheetGroup3Modifier(showQuickNameAlert: $showQuickNameAlert, quickName: $quickName, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode))
+        .modifier(SheetGroup3Modifier(model: model, pendingQuickCoord: $pendingQuickCoord, quickPickMode: $quickPickMode, showQuickNameAlert: $showQuickNameAlert, quickName: $quickName))
         .modifier(SheetGroup4Modifier(showDiagnostics: $showDiagnostics))
         // v1.61 恢复：语音包设置（"我的"→语音播报，讯飞音色选择）
         // v1.99 足迹 / 离线地图 / 组队
@@ -2971,7 +2971,7 @@ struct ContentView: View {
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(speed)")
-                        .font(.system(size: 34, weight: .heavy).fontDesign(.rounded))
+                        .font(.system(size: 34, weight: .heavy, design: .rounded))
                         // v2.37 G2 深色模式黑底黑字修复：跟随外观
                         .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
                     Text("km/h")
@@ -3374,9 +3374,9 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.trailing, 12)
-                .padding(.leading, 10)
             }
+            .padding(.trailing, 12)
+            .padding(.leading, 10)
             .frame(height: 46)
 
             // v2.45 O1 全程路况概览条（高德式）：一眼看全程哪里拥堵
