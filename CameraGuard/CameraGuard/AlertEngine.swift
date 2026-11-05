@@ -99,6 +99,11 @@ final class AlertEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.12"
     }
 
+    /// 当前构建号（读取 CFBundleVersion，供运行日志导出 .ips 使用）
+    static var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+    }
+
     // MARK: - v1.10 CarPlay（音频类）
 
     /// 是否已连接 CarPlay 车机（音频路由检测）

@@ -503,3 +503,10 @@ v1.17 后"还是不行"（具体现象待日志佐证）。诉求：右上角分
 Poi.id 追加名称段后，改过名的点 id 随之变化：toggleBuiltinPoi/updateBuiltinPoi 此前按新 id
 匹配基库会找不到 → 改名后开关/编辑静默失效。v1.18 改为按稳定 id（类型+坐标6位）匹配基库，
 兼容改名；同时清除旧键补丁防串。
+
+# 第十五轮补充（v1.18 · 运行日志分享支持 .txt / .ips 文件）
+
+- LogExporter.swift：导出 .txt（纯文本）或 .ips（模拟崩溃日志 JSON 结构：app_version/build_version/
+  bundleID/os_version/device_model/异常项/事件日志，首行注释头），文件名贴近崩溃日志命名规则。
+- LogViewer 分享按钮改为确认弹窗：日志文件(.txt) / 崩溃日志(.ips) 二选一，经系统分享面板发出。
+- AlertEngine 补充 appBuild 静态属性（CFBundleVersion）。

@@ -10,6 +10,8 @@ struct LogViewer: View {
     @State private var logText = ""
     @State private var checkResult: [String] = []
     @State private var lastCheck = "尚未运行自检"
+    @State private var showShareSheet = false
+    @State private var shareURL: URL?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,11 +53,19 @@ struct LogViewer: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .disabled(logText.isEmpty)
-                Button { shareLog() } label: {
+                Button { showShareSheet = true } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
                 .disabled(logText.isEmpty)
             }
+        }
+        // v1.18：分享为文件（.txt / .ips 两种格式）
+        .confirmationDialog("导出日志文件", isPresented: $showShareSheet, titleVisibility: .visible) {
+            Button("日志文件（.txt）") { shareAsFile(format: .txt) }
+            Button("崩溃日志（.ips）") { shareAsFile(format: .ips) }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("选择导出格式后通过系统分享发送（微信/QQ/文件均可）")
         }
         .onAppear {
             refresh()
@@ -134,9 +144,16 @@ struct LogViewer: View {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
 
-    private func shareLog() {
-        let text = logText
-        let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+    /// 导出指定格式并分享文件
+    private func shareAsFile(format: LogExportFormat) {
+        let url: URL?
+        switch format {
+        case .txt: url = LogExporter.writeTxt()
+        case .ips: url = LogExporter.writeIPS()
+        }
+        guard let url else { return }
+        RingLog.shared.log("日志", "导出 \(format.rawValue) 文件并分享")
+        let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         if let pop = av.popoverPresentationController {
             pop.sourceView = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
@@ -145,6 +162,11 @@ struct LogViewer: View {
             pop.sourceRect = CGRect(x: UIScreen.main.bounds.width - 60, y: 44, width: 1, height: 1)
         }
         topViewController()?.present(av, animated: true)
+    }
+
+    enum LogExportFormat: String {
+        case txt = ".txt"
+        case ips = ".ips"
     }
 
     private func topViewController() -> UIViewController? {
