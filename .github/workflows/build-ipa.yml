@@ -60,7 +60,7 @@ jobs:
   #   不用在几百行 xcodebuild 输出里翻找。
   # =============================================================================
   typecheck:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 12
     steps:
       - name: 1) Checkout
@@ -119,7 +119,7 @@ jobs:
 
   build:
     # macos-15 = Xcode 16.x 镜像（工程 objectVersion 77 / 文件系统同步组，需要 Xcode 16+）
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 25
 
     steps:
