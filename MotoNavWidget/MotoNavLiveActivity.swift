@@ -239,7 +239,7 @@ private struct LiveActivityCard: View {
                     .minimumScaleFactor(0.7)
             }
             Spacer()
-            Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "0m")
+            Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "巡航中")
                 .font(.headline.monospacedDigit())
                 .foregroundStyle(warning ? .red : .green)
         }
@@ -269,7 +269,7 @@ struct MotoNavLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     // 右侧一直显示距离数字，颜色随巡航绿/预警红变化
-                    Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "0m")
+                    Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "巡航中")
                         .font(.headline.monospacedDigit())
                         .foregroundStyle(warning ? .red : .green)
                 }
@@ -299,7 +299,7 @@ struct MotoNavLiveActivity: Widget {
                 }
             } compactTrailing: {
                 // 右侧一直显示距离数字，颜色随巡航绿/预警红变化
-                Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "0m")
+                Text(context.state.distanceM > 0 ? "\(context.state.distanceM)m" : "巡航中")
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(warning ? .red : .green)
             } minimal: {

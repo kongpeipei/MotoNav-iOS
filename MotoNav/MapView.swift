@@ -770,7 +770,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     map.camera = cam
                 }
             }
-        } else if cruise, cruiseTick != context.coordinator.lastCruiseTick {
+        } else if !context.coordinator.userMoved, cruise, cruiseTick != context.coordinator.lastCruiseTick {
             context.coordinator.lastCruiseTick = cruiseTick
             if let loc = userLocation {
                 let last = context.coordinator.cruiseLastLoc
@@ -786,6 +786,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
+        // v2.34 E2 巡航跟随尊重用户平移：手动拖动/旋转地图后暂停拉回中心（同导航），
+        // 点右下角定位按钮恢复跟随（locateTick 通用机制）。
         // v2.01 俯仰角由 AppModel.pitchDeg 驱动（导航开始 45°，退出 0°，右侧 3D 按钮切换）
         if pitchDeg != context.coordinator.lastPitchDeg {
             context.coordinator.lastPitchDeg = pitchDeg

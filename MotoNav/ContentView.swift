@@ -31,6 +31,8 @@ struct ContentView: View {
     /// v2.34 快捷卡片重命名（长按菜单触发，TextField 弹窗）
     @State private var renamingQuickPoiId: String?
     @State private var renamingQuickPoiName = ""
+    /// v2.34 E9 首次使用引导横幅（见一次后关闭，不再打扰）
+    @State private var showIntro = !UserDefaults.standard.bool(forKey: "hasSeenIntro")"
     @State private var explainBody = ""
     @State private var showExplain = false
     /// v2.27 版本号连点计数（连点 7 次进入诊断页）
@@ -172,7 +174,8 @@ struct ContentView: View {
                 }
                 // v1.92 省电调暗：仅非导航态盖轻黑罩（OLED 上省电），
                 // 导航中不再遮挡——骑行户外阳光 + 头盔镜片下，地图变暗会看不清路口与电子眼
-                if model.powerSaving && !model.navigating {
+                // v2.34 E1：巡航同样是骑行看路场景，一并豁免调暗（与天气动画同款口径）
+                if model.powerSaving && !model.navigating && !model.cruiseMode {
                     Color.black.opacity(0.25)
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
@@ -188,6 +191,18 @@ struct ContentView: View {
                         AnyView(slotEditBanner)
                             .frame(maxHeight: .infinity, alignment: .top)
                             .padding(.top, 6)
+                    }
+                    // v2.34 E3 定位权限被拒：顶部横幅引导去系统设置
+                    if model.locationDenied {
+                        AnyView(locationDeniedBanner)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.top, slotTarget != nil ? 62 : 8)
+                    }
+                    // v2.34 E9 首次使用引导（仅地图页、非导航、非沉浸时显示）
+                    if showIntro && !model.navigating && !uiHidden && !model.cruiseMode {
+                        AnyView(introBanner)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.top, (model.locationDenied ? 64 : 6))
                     }
                 } else if !model.navigating {
                     // 沉浸模式：仅保留右下角当前定位按钮
@@ -826,6 +841,28 @@ struct ContentView: View {
                     Label("按速度自动切换视野", systemImage: "speedometer")
                 }
                 explainButton("按速度自动切换视野", "慢速看清下一个路口，上了快速路自动拉远看前方排队；手动调过视野后 20 秒内不会自动覆盖。")
+            }
+
+            // v2.34 E8 限速提醒阈值（无路网限速数据，统一阈值兜底；0=关闭）
+            HStack {
+                Menu {
+                    ForEach([0, 40, 60, 80, 100, 120], id: \.self) { v in
+                        Button(v == 0 ? "关闭" : "\(v) km/h") { model.speedLimitKph = v }
+                    }
+                } label: {
+                    HStack {
+                        Label("限速提醒", systemImage: "speedometer")
+                        Spacer()
+                        Text(model.speedLimitKph == 0 ? "关闭" : "\(model.speedLimitKph) km/h")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                explainButton("限速提醒", "超过设定速度时，导航底卡的速度数字变红提醒。没有路网限速数据，用统一阈值；设为关闭则不提示。")
             }
 
             // v2.29 骑行极简模式（竞品空白点）
@@ -2750,6 +2787,73 @@ struct ContentView: View {
     /// v1.65 顶部导航综合条（高德式合并布局，自上而下不重叠）：
     /// 第一行：剩余距离 + 剩余时间 + 实时速度；第二行：下一转向指示（图标+距离+路名+车道）
     /// v1.84 巡航模式顶部卡片（白底，高德同款）：实时速度，右上角×关闭巡航
+    /// v2.34 E3 定位权限被拒横幅（点"去设置"跳系统设置）
+    private var locationDeniedBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "location.slash.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.red)
+            Text("需要定位权限才能导航")
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+            Spacer(minLength: 4)
+            Button {
+                haptic()
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Text("去设置")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Color.red.opacity(0.9), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 14)
+    }
+
+    /// v2.34 E9 首次使用轻量引导（见一次即关）
+    private var introBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "helmet")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("首次使用提示")
+                    .font(.caption.bold())
+                    .foregroundStyle(.primary)
+                Text("① 上滑搜索目的地  ② 点地图地点直接规划  ③ 骑行 300 米自动巡航")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Button {
+                haptic()
+                UserDefaults.standard.set(true, forKey: "hasSeenIntro")
+                showIntro = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(Color(.systemGray6), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+        .padding(.horizontal, 14)
+    }
+
     private var cruiseCard: some View {
         let speed = Int(model.currentSpeed * 3.6)
         return HStack(spacing: 16) {
@@ -2772,9 +2876,27 @@ struct ContentView: View {
                 }
             }
             Spacer()
+            // v2.34 E6 巡航中想搜索/改目的地：点放大镜直接进搜索（退出巡航并聚焦搜索框）
             Button {
                 haptic()
-                withAnimation(.easeOut(duration: 0.2)) { model.exitCruise() }
+                model.dismissCruiseManually()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    searchFocused = true
+                    searchExpanded = false
+                    uiHidden = false
+                }
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.blue)
+                    .frame(width: 28, height: 28)
+                    .background(Color.blue.opacity(0.1), in: Circle())
+            }
+            .buttonStyle(.plain)
+            // v2.34 E5 手动退出巡航：本次使用内不再自动进入
+            Button {
+                haptic()
+                withAnimation(.easeOut(duration: 0.2)) { model.dismissCruiseManually() }
             } label: {
                 Image(systemName: "xmark")
                     .font(.subheadline.bold())
@@ -3227,13 +3349,23 @@ struct ContentView: View {
                     EmptyView()
                 }
                 Spacer(minLength: 4)
+                // v2.34 E7 播报中指示：最近 2.5s 内有播报 → 喇叭亮（风噪大时也能确认播报发生）
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    if Date().timeIntervalSince(model.lastSpeakAt) < 2.5 {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    }
+                }
+                // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
+                let overSpeed = model.speedLimitKph > 0 && ns.speedKph > model.speedLimitKph
                 Text("\(Int(ns.speedKph))")
                     .font(.system(size: speedFontSize, weight: .bold))
                     .monospacedDigit()
-                    .foregroundStyle(mainFg)
+                    .foregroundStyle(overSpeed ? .red : mainFg)
                 Text("km/h")
                     .font(.system(size: 10))
-                    .foregroundStyle(dimFg)
+                    .foregroundStyle(overSpeed ? .red : dimFg)
             }
             .padding(.horizontal, 14)
             .frame(height: 30)

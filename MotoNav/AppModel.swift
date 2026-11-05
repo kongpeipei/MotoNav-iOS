@@ -91,6 +91,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     var powerSaveEnabled: Bool { UserDefaults.standard.object(forKey: "powerSaveEnabled") as? Bool ?? true }
     /// 当前选中的路线方案下标（高德式：默认选中推荐，卡片点击切换）
     @Published var selectedRouteIdx = 0
+    /// v2.34 体验审查 E8：限速提醒阈值（km/h，0=关闭，默认 60），设置页可改。
+    /// 超过阈值时导航底卡速度数字变红（无路网限速数据源，用统一阈值兜底）
+    var speedLimitKph: Int {
+        get { UserDefaults.standard.object(forKey: "speedLimitKph") as? Int ?? 60 }
+        set { UserDefaults.standard.set(newValue, forKey: "speedLimitKph") }
+    }
     /// 手机朝向（度，0=北，顺时针）
     ///
     /// v2.13：只在导航中更新。导航时地图要跟着手机转向，这时发布一次是值得的；
@@ -145,7 +151,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var xfTask: URLSessionWebSocketTask?
     /// 语音播报总开关
     var voiceMuted: Bool { UserDefaults.standard.object(forKey: "voiceMuted") as? Bool ?? false }
-    private var lastSpeakAt = Date.distantPast
+    /// v2.34 体验审查 E7：最近一次播报时间（供导航底卡"播报中"喇叭指示，2.5s 内高亮）
+    @Published private(set) var lastSpeakAt = Date.distantPast
     private var lastSpeakPriority = 0
     private var lastSpeakText = ""
     /// 导航巡航 Live Activity（灵动岛/锁屏：头盔 + 已出发/去往目的地，导航中生效）
@@ -1390,9 +1397,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         case .notDetermined:
             lm.requestWhenInUseAuthorization()
         case .authorizedWhenInUse, .authorizedAlways:
+            locationDenied = false
             startMonitoring()
         default:
-            status = "需要定位权限才能使用"
+            locationDenied = true
+            status = "需要定位权限才能使用，点上方横幅可去设置开启"
         }
     }
 
@@ -1484,7 +1493,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if cruiseMode { exitCruise() }
             return
         }
-        if let base = cruiseBase {
+        if cruiseAutoBlocked {
+            cruiseBase = nil
+        } else if let base = cruiseBase {
             if !cruiseMode && distanceM(coord, base) >= 300 {
                 cruiseMode = true
                 cruiseTick += 1
@@ -1503,6 +1514,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         cruiseMode = false
         cruiseBase = nil
         cruiseTick += 1
+    }
+
+    /// v2.34 体验审查 E5：手动退出巡航 → 本次会话内不再自动进入（避免反复打扰）。
+    /// 与 exitCruise 的区别：exitCruise 供程序内部调用（如规划路线时让位），不抑制；
+    /// 用户点巡航卡 × 走这里，App 重启前不再自动进巡航。
+    private var cruiseAutoBlocked = false
+    func dismissCruiseManually() {
+        exitCruise()
+        cruiseAutoBlocked = true
+        status = "已退出巡航 · 本次使用内不再自动进入"
     }
 
     nonisolated func locationManager(
@@ -1532,10 +1553,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         Task { @MainActor in
             if status == .authorizedWhenInUse || status == .authorizedAlways {
+                locationDenied = false
                 startMonitoring()
+            } else if status == .denied || status == .restricted {
+                locationDenied = true
+                status = "需要定位权限才能导航，点上方横幅可去设置开启"
             }
         }
     }
+
+    /// v2.34 体验审查 E3：定位权限被拒（顶部横幅引导去系统设置）
+    @Published var locationDenied = false
 
     // MARK: - v2.27 诊断信息（优化建议 #24/#25）
 
@@ -2639,7 +2667,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 且用 Task 包裹（不在主线程同步等），并加超时兜底。
             scheduleLiveActivityStart(destName: destName)
             speak("开始导航到\(destName)，请按路线行驶")
-            status = "导航中 → \(destName)"
+            status = "导航中 → \(destName) · 户外可调亮屏幕看路口"
         }
     }
 
