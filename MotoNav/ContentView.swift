@@ -24,8 +24,6 @@ struct ContentView: View {
     @StateObject private var team = TeamRide.shared
     /// v1.99 足迹（我的-足迹）
     @StateObject private var footprints = FootprintStore.shared
-    /// v1.99 离线地图包
-    @StateObject private var offline = OfflineMapManager.shared
     /// v2.04 官方电警点位库（合肥交警公示）
     @StateObject private var camStore = PoliceCameraStore.shared
     /// v2.26 手动同步点位信息服务
@@ -168,7 +166,6 @@ struct ContentView: View {
     @State private var showVoiceSettings = false
     /// v1.99 足迹 / 离线地图 / 组队 面板
     @State private var showFootprints = false
-    @State private var showOfflineMaps = false
     @State private var showTeamRide = false
     /// v1.99 搜索结果排序（0 距离 / 1 名称）
     @State private var tipSort = 0
@@ -318,7 +315,7 @@ struct ContentView: View {
             if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
         }
         // v2.25 弹窗组 1 已抽到 SheetGroup1Modifier（拆分以解决类型检查超时）
-        .modifier(SheetGroup1Modifier(poiDetail: $poiDetail, cameraTapCard: $cameraTapCard, showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showOfflineMaps: $showOfflineMaps, showTeamRide: $showTeamRide, footprints: footprints, offline: offline, team: team, selectedTab: $selectedTab, camStore: camStore))
+        .modifier(SheetGroup1Modifier(poiDetail: $poiDetail, cameraTapCard: $cameraTapCard, showVoiceSettings: $showVoiceSettings, showFootprints: $showFootprints, showTeamRide: $showTeamRide, footprints: footprints, team: team, selectedTab: $selectedTab, camStore: camStore))
         // v2.25 弹窗组 2 已抽到 SheetGroup2Modifier（拆分以解决类型检查超时）
         .modifier(SheetGroup2Modifier(editPoi: $editPoi, showMarkNameAlert: $showMarkNameAlert, markName: $markName, showAmapKeyInput: $showAmapKeyInput, amapKeyInput: $amapKeyInput, showTypePicker: $showTypePicker, pendingMarkCoord: $pendingMarkCoord, onAddPoiAtPending: { addPoiAtPending(type: $0) }, onCameraKindTitle: { cameraKindTitle($0) }))
         // v2.25 弹窗组 3 已抽到 SheetGroup3Modifier（拆分以解决类型检查超时）
@@ -1037,18 +1034,6 @@ struct ContentView: View {
                     Label("足迹", systemImage: "figure.run.circle")
                     Spacer()
                     Text("\(footprints.items.count) 条 · \(distanceText(footprints.totalDistanceM))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Button {
-                haptic()
-                showOfflineMaps = true
-            } label: {
-                HStack {
-                    Label("离线地图", systemImage: "square.and.arrow.down")
-                    Spacer()
-                    Text(offline.packs.isEmpty ? "未下载" : offline.totalText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

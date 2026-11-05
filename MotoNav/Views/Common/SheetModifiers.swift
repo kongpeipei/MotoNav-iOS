@@ -25,11 +25,9 @@ struct SheetGroup1Modifier: ViewModifier {
     @Binding var cameraTapCard: PoliceCamera?
     @Binding var showVoiceSettings: Bool
     @Binding var showFootprints: Bool
-    @Binding var showOfflineMaps: Bool
     @Binding var showTeamRide: Bool
-    /// v2.25 足迹 / 离线地图 / 组队：ContentView 里的 @StateObject，Modifier 需持有引用
+    /// v2.25 足迹 / 组队：ContentView 里的 @StateObject，Modifier 需持有引用
     var footprints: FootprintStore
-    var offline: OfflineMapManager
     var team: TeamRide
     /// v2.25 足迹回放后要切回地图页
     @Binding var selectedTab: Int
@@ -58,9 +56,6 @@ struct SheetGroup1Modifier: ViewModifier {
                 model.footprintPreview = f.coordinateList
                 model.status = "足迹回放：\(f.destName) · \(f.distanceText)"
             }
-        }
-        .sheet(isPresented: $showOfflineMaps) {
-            OfflineMapSheet(manager: offline, model: model)
         }
         .sheet(isPresented: $showTeamRide) {
             TeamRideSheet(team: team)

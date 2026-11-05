@@ -1630,19 +1630,24 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     alertStage[p.id] = 1
                     status = "前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意"
                     speak("前方约\(Int(nd))米\(p.type.voicePrefix)，\(p.name)，请注意")
-                    updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
+                    updateLiveActivity(phase: "warning", title: p.name, detail: "\(p.type.label) · 距您\(Int(nd))米", distanceM: Int(nd), icon: p.type.rawValue)
                 } else if nd <= 300 && stage < 2 {
                     alertStage[p.id] = 2
                     status = "接近\(p.type.voicePrefix)点位：\(p.name)，请减速"
                     speak("接近\(p.type.voicePrefix)点位，\(p.name)，请减速")
-                    updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
+                    updateLiveActivity(phase: "warning", title: p.name, detail: "\(p.type.label) · 距您\(Int(nd))米", distanceM: Int(nd), icon: p.type.rawValue)
                 } else if nd <= p.radiusM && stage < 3 {
                     alertStage[p.id] = 3
                     triggerAlert(p, distance: nd)
-                    updateLiveActivity(poiName: p.name, poiType: p.type.label, distanceM: Int(nd))
+                    updateLiveActivity(phase: "warning", title: p.name, detail: "\(p.type.label) · 距您\(Int(nd))米", distanceM: Int(nd), icon: p.type.rawValue)
                 } else if nd > 500 {
                     alertStage[p.id] = 0
+                    // v2.31 巡航态：右侧距离数字始终显示（绿），随最近点位距离实时变化
+                    updateLiveActivity(phase: "cruising", title: p.name, detail: p.type.label, distanceM: Int(nd), icon: p.type.rawValue)
                 }
+            } else {
+                // 无路线点位：巡航态显示 0m
+                updateLiveActivity(phase: "cruising", title: "已出发", detail: "去往 \(destName)", distanceM: 0, icon: "")
             }
             return
         }
@@ -2712,6 +2717,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// 应用所选路线方案（地图严格绘制该方案折线；方案列表保留供切换/开始导航）
     func applyRouteChoice(_ c: RouteChoice, name: String? = nil) {
+        guard !c.points.isEmpty else { return } // v2.31 防呆：空方案不应用
         let n = name ?? destName
         route = c.points
         routeTurns = c.turns
@@ -2829,7 +2835,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func startLiveActivity(destName: String) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let attr = MotoNavAttributes(destName: destName)
-        let initial = MotoNavAttributes.ContentState(poiName: "已出发", poiType: "违拍提醒", distanceM: 0)
+        let initial = MotoNavAttributes.ContentState(phase: "cruising", title: "已出发", detail: "去往 \(destName)", distanceM: 0, icon: "")
         do {
             liveActivity = try Activity<MotoNavAttributes>.request(
                 attributes: attr, contentState: initial, pushType: nil)
@@ -2838,10 +2844,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// 接近违拍点 → 更新灵动岛内容（最近路线点位，三档渐进）
-    private func updateLiveActivity(poiName: String, poiType: String, distanceM: Int) {
+    /// v2.31 灵动岛状态更新时间（节流巡航更新，避免 ActivityKit 更新频率限制）
+    private var lastLiveCruiseAt: Date = .distantPast
+
+    /// 更新灵动岛内容：phase="warning" 预警红 / "cruising" 巡航绿
+    /// 巡航更新节流：10 秒内且距离变化 < 50 米跳过（ActivityKit 对 update 频率有系统限制）
+    private func updateLiveActivity(phase: String, title: String, detail: String, distanceM: Int, icon: String, force: Bool = false) {
         guard let act = liveActivity else { return }
-        let state = MotoNavAttributes.ContentState(poiName: poiName, poiType: poiType, distanceM: distanceM)
+        if phase != "warning", !force {
+            let now = Date()
+            guard now.timeIntervalSince(lastLiveCruiseAt) > 10 else { return }
+            lastLiveCruiseAt = now
+        }
+        let state = MotoNavAttributes.ContentState(phase: phase, title: title, detail: detail, distanceM: distanceM, icon: icon)
         Task {
             await act.update(using: state)
         }
