@@ -269,7 +269,11 @@ struct ContentView: View {
             // 搜索卡不再内嵌"导航/我的"，搜索框与 tab 彻底分离；
             // 搜索整屏态仍隐藏（高德搜索页同样没有底部 tab）；
             // 地点卡贴底后同样让位 —— 卡片和 tab 挤在同一块屏幕上谁也点不好。
-            if !model.navigating && !uiHidden && !searchActive && tapPlace == nil && tipCard == nil {
+            // v2.59 导航结束时（行程卡"本次行程"在屏上）隐藏底部 tab：
+            // 那一刻屏幕的焦点是行程结果，底下再挂一条导航/我的，既抢注意力
+            // 又和行程卡的下沿挤在一起。关掉行程卡后 tab 自动回来。
+            if !model.navigating && !uiHidden && !searchActive && tapPlace == nil
+                && tipCard == nil && model.tripSummary == nil {
                 AnyView(bottomTabBar)
             }
         }
