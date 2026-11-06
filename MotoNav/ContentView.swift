@@ -81,6 +81,10 @@ struct ContentView: View {
     @State private var onlineTips: [AppModel.AmapTip] = []
     /// v1.81 点"搜索"后展开列表模式：搜索框与导航/我的按钮拉开，中间铺满联想地点
     @State private var searchExpanded = false
+    /// v2.54 搜索态整屏：只要搜索框聚焦、或点了「搜索」展开，就进入整屏搜索页
+    /// （对齐高德：搜索时不显示地图，整屏都是搜索界面）。
+    /// 导航中不进入（导航时点搜索是"换目的地"，仍要看着地图）。
+    private var searchActive: Bool { (searchFocused || searchExpanded) && !model.navigating }
     /// v1.81 点击联想地点主体后：地图高亮该点并显示地点信息卡
     @State private var tipCard: AppModel.AmapTip?
     /// v1.95 轻点地图任意位置 → 地点介绍卡（逆地理编码结果）
@@ -231,6 +235,17 @@ struct ContentView: View {
                 }
                 // v2.25 抽出为子视图（见 mapTopOverlayGroup 的说明：降低 body 推断复杂度）
                 AnyView(navOverlayGroup)
+                // v2.54 搜索态整屏化：地图整块被不透明页面盖住（对齐高德"搜索时不显示地图"）。
+                //
+                // 关键取舍：**不卸载 MapView**。历史上 MapView 卸载重挂会重建 overlay
+                // （启动首帧 watchdog 黑屏就出在这条链上），相机/路线/标注也全部要重算；
+                // 盖一层不透明页面是风险最低的做法，退出搜索时地图原样恢复、不闪不跳。
+                // 位置：navOverlayGroup 之后 —— 顺带盖住定位按钮/路名胶囊等地图浮件，
+                // 但 bottomLayerGroup 在其上，搜索卡仍然显示。
+                if searchActive {
+                    Color(.systemBackground)
+                        .ignoresSafeArea()
+                }
                 // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/速度/道路/预计到达），
                 // 移除顶部重复的大数字条 navTopBar，避免信息分散（高德同款单卡片式导航状态）
                 // v1.84 巡航模式顶部卡片（白底：实时速度）
@@ -1541,7 +1556,16 @@ struct ContentView: View {
                     // 地图上再挂一条既挡视线又重复
                 }
                 // 搜索主卡：地点卡/路线规划卡/行程卡出现时隐藏；仅上下移动
-                if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty && model.tripSummary == nil {
+                if searchActive {
+                    // v2.54 搜索整屏：搜索框贴顶（安全区内），列表向下铺满整屏。
+                    // 这里不再用 DraggableFloat —— 整屏搜索页不该能拖动，
+                    // 也不该跟随键盘上下浮（键盘从底部弹出时列表自身滚动即可）。
+                    VStack(spacing: 0) {
+                        AnyView(bottomMainCard)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty && model.tripSummary == nil {
                     // v2.51 键盘避让交给 DraggableFloat 的 extraBottomInset：
                     // 旧版手写 .offset(y: -300) 不受钳制约束，键盘高时会把卡片整个顶出屏幕上半，
                     // 且与安全区钳制叠加（卡片顶部跑出屏幕）
@@ -3262,10 +3286,52 @@ struct ContentView: View {
         }
     }
 
+    /// v2.54 导航态方位环
+    ///
+    /// 用极淡的白色环（填充 7%、描边 20%）＋ 10pt 方位字，避免挡住路线与箭头 ——
+    /// 用户在头盔镜片下看的是路，这个环只是"北在哪"的一次性参照，不该抢视觉。
+    /// 圆环固定画在屏幕 0.65 高度（导航跟随态用户点所在位置）。
+    private var compassRing: some View {
+        let r: CGFloat = 74
+        let hdg = model.heading >= 0 ? model.heading : 0
+        return GeometryReader { geo in
+            let cx = geo.size.width * 0.5
+            let cy = geo.size.height * 0.65
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.07))
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.20), lineWidth: 1))
+                    .frame(width: r * 2, height: r * 2)
+                    .position(x: cx, y: cy)
+                ForEach(0..<4, id: \.self) { i in
+                    let rad = (Double(i) * 90 - hdg) * Double.pi / 180
+                    Text(["北", "东", "南", "西"][i])
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
+                        .position(x: cx + r * 0.84 * CGFloat(sin(rad)),
+                                  y: cy - r * 0.84 * CGFloat(cos(rad)))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
     /// v2.25 导航浮层组（顶部提示卡 / 退出按钮 / 全览条 / 左侧竖排）
     /// v2.33 已移除右侧竖直路程进度条（用户要求）
     @ViewBuilder
     private var navOverlayGroup: some View {
+        // v2.54 导航态方位环（对齐高德）：定位点周围一圈极淡的环 + 东南西北四方位字
+        // 作用：导航态地图跟着车头转，屏幕上方不等于正北，转弯/岔路时容易搞丢方向；
+        // 环上四个方位字随 heading 实时旋转，一眼能看出"北在哪"。
+        //
+        // 位置是固定的（导航跟随态用户点就稳定落在屏幕下方这一带），
+        // 所以不需要把用户坐标反投影成屏幕点、也就不需要 MapView 每帧回调 SwiftUI
+        //（那种回路在 v2.02 踩过：回调里改 @State 触发 updateUIView 循环卡死）。
+        // heading 直接用已有的 model.heading。
+        if model.navigating && !showRouteOverview && !uiHidden {
+            AnyView(compassRing)
+        }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
         if model.navigating && !showRouteOverview {
             AnyView(navTopHintBar)
@@ -4285,15 +4351,24 @@ struct ContentView: View {
                     AnyView(onlineTipsList)
                 }
             }
-            AnyView(tabButtonsRow)
+            // v2.54 搜索整屏态不显示底部"导航/我的"按钮（高德搜索页同样没有）
+            if !searchActive {
+                AnyView(tabButtonsRow)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-        .padding(.horizontal, 14)
+        // v2.54 搜索整屏态：卡片退成整面白色面板（不透明、无圆角、无投影），
+        // 普通态保持原来的毛玻璃浮卡
+        .background(searchActive ? AnyShapeStyle(Color(.systemBackground))
+                                : AnyShapeStyle(.ultraThinMaterial),
+                    in: RoundedRectangle(cornerRadius: searchActive ? 0 : 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: searchActive ? 0 : 22, style: .continuous)
+                    .strokeBorder(Color.black.opacity(searchActive ? 0 : 0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(searchActive ? 0 : 0.12), radius: searchActive ? 0 : 8,
+                y: searchActive ? 0 : 3)
+        .padding(.horizontal, searchActive ? 0 : 14)
     }
 
     /// v1.99 搜索框快捷词（回家 / 去公司）
@@ -4814,7 +4889,9 @@ struct ContentView: View {
             }
         }
         // v1.81：点"搜索"展开时铺满中间（搜索框与底部按钮拉开），输入时小高度
-        .frame(maxHeight: searchExpanded ? 400 : 190)
+        // v2.54 搜索态按屏高铺满（852pt 屏约 580、SE 667pt 约 454），仍有上限防溢出
+        .frame(maxHeight: searchActive ? UIScreen.main.bounds.height * 0.68
+                                       : (searchExpanded ? 400 : 190))
         .background(.bar)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.quaternary))
