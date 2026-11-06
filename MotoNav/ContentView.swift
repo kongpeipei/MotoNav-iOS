@@ -1663,9 +1663,9 @@ struct ContentView: View {
                     // 保证每次回首页都在底部，不会记住上次被拖到半空的位置。
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
-                                   resetOnAppear: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
+                                   resetOnAppear: true,
                                    // v2.64 去掉"不许压 tab 条"的底部避让：卡片要能拖到屏幕最下
                                    // v2.62 去掉"搜索卡躲避定位点"（用户明确要求）：
                                    // 旧版为了不让卡片盖住定位蓝点，把卡片最高位置限在
