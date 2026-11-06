@@ -438,6 +438,10 @@ struct ContentView: View {
             } else {
                 pendingSearchAfterExit = false
                 endRouteOverview()
+                // v2.56 导航一结束（到达 / 主动退出都一样）就收起搜索选点黑线。
+                // 这条黑线是"搜索点 → 我的位置"的直线提示，只在选点时有用；
+                // 结束导航后继续挂在图上，就是用户看到的"起点终点还连着一条线"。
+                clearSearchLink()
             }
         }
         // v1.97 开始规划路线（点卡片"路线"）时也退出常用地点设置态
@@ -4013,6 +4017,10 @@ struct ContentView: View {
         model.tripSummary = nil
         // v2.55 清掉行程卡实测框：否则下次行程开始前，−/3D 会按上一张卡的旧高度提前上移
         tripCardFrame = .zero
+        // v2.56 修"导航结束后起点终点还连着黑线"：
+        // 搜索选点时挂上的 searchLink（黑线 + 命中点彩点）只在两处清，都不覆盖
+        // "导航结束→行程卡→关闭"这条路，所以回到首页后黑线和彩点一直留在图上。
+        clearSearchLink()
         tipCard = nil
         tipRoad = nil
         tipAoiName = nil
