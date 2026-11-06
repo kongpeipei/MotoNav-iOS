@@ -1032,25 +1032,22 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func reportScale(_ map: MKMapView) {
             guard map.bounds.height > 0 else { return }
-            // v2.28 比例尺改用相机到中心点的地面距离（centerCoordinateDistance）
+            // v2.56 比例尺改成「屏幕上 58pt 两端点转坐标后算真实地面距离」。
             //
-            // 旧版用 map.region.span.latitudeDelta —— 那是「地图中心的地面跨度」，
-            // 只在正交俯视（pitch=0）时等于「屏幕上一格对应的地面距离」。
-            // 一旦 3D（导航态 pitch=45°），屏幕上下两端离相机的距离差很多，
-            // 同一段比例尺线代表的实际距离会随位置变化 → 显示的数字是错的。
+            // 旧版用 centerCoordinateDistance / (bounds.height/2) 推每 pt 米数。
+            // 那个公式只在 pitch=0 时成立；导航态 pitch=45° 时，相机到中心的是「斜距」，
+            // 直接除以屏幕半高会把比例尺算大好几倍 —— 实机上导航态真实前方约 300 米，
+            // 比例尺却标成「5 公里」，看着像视野远得离谱，实际画面并不远。
             //
-            // centerCoordinateDistance 是相机到地图中心的地面距离，
-            // 在中心点处 1pt 对应的地面距离 = 该距离 / (bounds.height/2)，
-            // 2D/3D 都对。
-            let cam = map.camera
-            let halfHeightPoints = Double(map.bounds.height) / 2.0
-            guard halfHeightPoints > 0 else { return }
-            let groundDistance = cam.centerCoordinateDistance > 0
-                ? cam.centerCoordinateDistance
-                : Double(map.region.span.latitudeDelta) * 111_000.0
-            let metersPerPoint = groundDistance / halfHeightPoints
-            guard metersPerPoint > 0, metersPerPoint.isFinite else { return }
-            let target = metersPerPoint * 58.0
+            // convert(_:toCoordinateFrom:) 是 MapKit 自己的投影，pitch / heading / 机型都无关，
+            // 拿到的就是这条 58pt 线在屏幕中央位置真正跨过的地面距离。
+            let midY = Double(map.bounds.midY)
+            let x0 = Double(map.bounds.minX) + 40
+            let p0 = map.convert(CGPoint(x: x0, y: midY), toCoordinateFrom: map)
+            let p1 = map.convert(CGPoint(x: x0 + 58, y: midY), toCoordinateFrom: map)
+            let target = CLLocation(latitude: p0.latitude, longitude: p0.longitude)
+                .distance(from: CLLocation(latitude: p1.latitude, longitude: p1.longitude))
+            guard target > 0, target.isFinite else { return }
             let nice: [Double] = [1, 2, 5, 10, 20, 50, 100, 200, 500,
                                   1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000]
             var pick = nice.last ?? 100_000

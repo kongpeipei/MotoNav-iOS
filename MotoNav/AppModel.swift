@@ -3670,9 +3670,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ///   16/22/30/42/58 → 前方可见约 330/460/620/870/1200 m
     /// 高德同车速市区视距约 600~800 m：22~34 km/h 落在 620 m（30 档），
     /// 34~48 km/h 落在 870 m（42 档），都在高德区间内；起步/等灯用 330 m 看得最清。
-    static let navScaleSteps = [16, 22, 30, 42, 58]
-    /// 相邻档位的升级边界（km/h）：16→22→30→42→58 分别在 14/22/34/48 以上
-    private static let navScaleUpBounds = [14, 22, 34, 48]
+    /// v2.56 档位整体上调约 25%，对齐高德导航态的真实视野：
+    /// 高德停车/市区约能看到前方 500~600 m、快速路约 1 km；
+    /// 旧档位（16 起）换算下来前方只有约 320 m，路线只露出一小段，
+    /// 后续走向看不清 —— 这也是截图里"路线缩成一条、周围大片空地"的由来。
+    ///   20 → 前方约 400 m（停车/起步）
+    ///   28 → 约 560 m（市区骑行）
+    ///   38 → 约 760 m
+    ///   50 → 约 1.0 km（快速路）
+    ///   66 → 约 1.3 km（高速巡航）
+    static let navScaleSteps = [20, 28, 38, 50, 66]
+    /// 相邻档位的升级边界（km/h），与新档位一一对应
+    private static let navScaleUpBounds = [18, 28, 42, 58]
     /// 切档滞回带宽（km/h）：GPS 速度在阈值附近抖动时不来回切档
     private static let navScaleHysteresis = 3.0
     /// 临近转向的临时近景半径（米）
@@ -3739,7 +3748,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 骑行中单手操作，所以只做一个循环按钮而不是分段控件：
     /// 按一次切到下一档，不用瞄准。
     func cycleNavScale() {
-        // v2.54 五档循环：16 → 22 → 30 → 42 → 58 → 16
+        // v2.56 五档循环：20 → 28 → 38 → 50 → 66 → 20
         let steps = AppModel.navScaleSteps
         let idx = steps.firstIndex(of: navScaleTarget) ?? 2
         let next = steps[(idx + 1) % steps.count]
