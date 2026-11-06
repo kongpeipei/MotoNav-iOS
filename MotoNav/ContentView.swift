@@ -265,8 +265,9 @@ struct ContentView: View {
             }
             // v2.56 底部选项卡改成常驻贴底（两个页面同一套样式）：
             // 搜索卡不再内嵌"导航/我的"，搜索框与 tab 彻底分离；
-            // 搜索整屏态仍隐藏（高德搜索页同样没有底部 tab）。
-            if !model.navigating && !uiHidden && !searchActive {
+            // 搜索整屏态仍隐藏（高德搜索页同样没有底部 tab）；
+            // 地点卡贴底后同样让位 —— 卡片和 tab 挤在同一块屏幕上谁也点不好。
+            if !model.navigating && !uiHidden && !searchActive && tapPlace == nil && tipCard == nil {
                 AnyView(bottomTabBar)
             }
         }
@@ -1625,11 +1626,17 @@ struct ContentView: View {
     @ViewBuilder private var poiCardStack: some View {
         if let tp = tapPlace {
             // v1.95 轻点地图地点卡：与搜索地点卡同位置、同样式，左滑或点×关闭
-            DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+            // v2.56 地点卡原来停在屏幕中部（0.66 屏高），横切在"我的位置→搜索点"的黑线中间，
+            // 把连线和当前位置箭头都压住了。改成贴底悬浮（对齐高德地点卡），
+            // 地图中上部完整露出，黑线一眼看全；左右可拖、上滑仍在。
+            DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
+                           bottomAnchor: true,
                            deleteLabel: "关闭",
                            onSwipeLeft: { closeTapPlace() }) { AnyView(tapPlaceCard(tp)) }
         } else if let t = tipCard {
-            DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.66), lockX: true,
+            // v2.56 同 tapplace：贴底，不再横在画面中间遮路线
+            DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
+                           bottomAnchor: true,
                            deleteLabel: "删除",
                            onSwipeLeft: { closeTipCard() }) { AnyView(tipInfoCard(t)) }
         }

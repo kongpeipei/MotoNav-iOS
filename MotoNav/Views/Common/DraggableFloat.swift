@@ -83,8 +83,12 @@ struct DraggableFloat<Content: View>: View {
         // v1.99 缩放/定位按钮默认位置改到"搜索框右上方"：一次性作废旧坐标，
         // 否则装过旧版的手机会继续用存储在 UserDefaults 里的右上角位置
         let posVersion = UserDefaults.standard.integer(forKey: "\(key).posV")
-        let stale = key == "zoom" && posVersion < 2
-        if stale { UserDefaults.standard.set(2, forKey: "\(key).posV") }
+        // v2.56 地点卡默认位置从"屏幕中部"改到"贴底"：旧坐标必须一并作废，
+        // 否则装过旧版的手机会继续按记忆里的 0.66 屏高渲染，遮挡问题原样复现
+        let stale = (key == "zoom" && posVersion < 2)
+            || (key == "tapplace" && posVersion < 1)
+            || (key == "tipcard" && posVersion < 1)
+        if stale { UserDefaults.standard.set(key == "zoom" ? 2 : 1, forKey: "\(key).posV") }
         let savedX = stale ? nil : x
         let savedY = stale ? nil : y
         // v1.97 兜底钳制：历史拖动位置可能落在屏幕外（如旧版缩放键 6%），这里拉回可视区
