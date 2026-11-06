@@ -845,7 +845,22 @@ struct MapViewRepresentable: UIViewRepresentable {
         //   ④ 掉头（>120°）直接跟，避免长时间指错方向
         //   ⑤ 只对导航态生效：巡航态用 .followWithHeading 由系统跟手机朝向，
         //      再手动每帧写 camera.heading 会与系统跟随打架（v2.34 的平滑在巡航上就不成立）
-        if !context.coordinator.userMoved && navigating {
+        // v2.90 对齐高德的 2D/3D 朝向规则：
+        //   3D（pitchDeg > 0）→ 车头向上，地图随行进方向/手机朝向旋转；
+        //   2D（pitchDeg == 0） → 正北向上，地图**固定不转**。
+        // 高德 2D 导航截图（n1/n4）里地图文字都是水平的、路线斜向，就是北向上。
+        // 旧版这里不分 2D/3D，2D 也照样每帧写 camera.heading ——
+        // 用户点"2D"之后地图还在跟着手机转，等于这个按钮只换了俯角没换朝向规则。
+        if navigating, !context.coordinator.userMoved, pitchDeg <= 0 {
+            // 2D：只在俯角刚切到 0 或朝向还不是正北时纠正一次，之后不动
+            if abs(map.camera.heading) > 0.5 {
+                context.coordinator.setRegionProgrammatically {
+                    map.camera.heading = 0
+                }
+            }
+            context.coordinator.lastAppliedHeading = 0
+            context.coordinator.lastHeadingTickAt = Date()
+        } else if !context.coordinator.userMoved && navigating {
             let target = CLLocationDirection(heading)
             let now = Date()
             let dt = max(0.016, min(0.5, now.timeIntervalSince(context.coordinator.lastHeadingTickAt)))
