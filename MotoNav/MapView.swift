@@ -63,6 +63,16 @@ struct MapViewRepresentable: UIViewRepresentable {
         return max(spanMeters * 0.592, 50)
     }
 
+    /// v2.60 底图 POI 白名单（make 与导航态翻转重建两处共用）。
+    ///
+    /// 旧版只留加油/医院/药店/学校/停车/公交六类，地图画面偏空；
+    /// 这里补上餐饮、购物、公园、酒店、银行，层次更接近高德。
+    /// 不放电影院、夜生活、景点这类会扎堆铺满的类别。
+    static let standardPOIFilter = MKPointOfInterestFilter(including: [
+        .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport,
+        .restaurant, .cafe, .bakery, .store, .park, .hotel, .bank, .atm
+    ])
+
     /// v2.49 导航态"车位置下移"比例：相机中心落在车前 35% 视距处。
     ///
     /// 0 = 车在屏幕正中（45° 俯角下前方只剩半屏，远处还会被透视压缩）；
@@ -229,11 +239,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         //（历史上 muted 是为了压淡底图里一条高德色带，那条带子现在会重新显眼，取舍已记在案）。
         let cfg = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .default)
         // ① 关掉苹果原生路况层（与 v2.53 同因，迁到 configuration 上，避免两套 API 打架）
-        cfg.showsTraffic = false
-        // ② POI 白名单：苹果默认铺全类别（餐馆/购物/景点都画），比高德"花"得多
-        cfg.pointOfInterestFilter = MKPointOfInterestFilter(including: [
-            .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport
-        ])
+        // ① 路况层打开：用户要求对齐高德观感，主干道按拥堵程度着色
+        cfg.showsTraffic = true
+        // ② POI 白名单（v2.60 扩充）：原来只留 6 类刚需，地图显得空；补上餐饮、购物、
+        // 公园、酒店、银行，层次更接近高德，同时仍不放电影院/夜生活这类扎堆的类别
+        cfg.pointOfInterestFilter = MapViewRepresentable.standardPOIFilter
         map.preferredConfiguration = cfg
         map.showsCompass = false // v2.28：按用户要求删除所有界面指南针（含系统自带的）
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
@@ -308,10 +318,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             let navCfg = MKStandardMapConfiguration(
                 elevationStyle: wantRealistic ? .realistic : .flat,
                 emphasisStyle: .default)
-            navCfg.showsTraffic = false
-            navCfg.pointOfInterestFilter = MKPointOfInterestFilter(including: [
-                .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport
-            ])
+            // v2.60 翻转重建时把路况与 POI 一起补上：旧版这里漏设，
+            // 导航态一进一出重建 configuration 后白名单和路况就被打回苹果默认
+            navCfg.showsTraffic = true
+            navCfg.pointOfInterestFilter = MapViewRepresentable.standardPOIFilter
             map.preferredConfiguration = navCfg
         }
         // v2.53 导航态锁旋转/倾斜手势：高德导航松手即回车头朝上，
