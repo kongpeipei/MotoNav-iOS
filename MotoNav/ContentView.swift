@@ -3364,7 +3364,7 @@ struct ContentView: View {
                         }
                         return 0
                     }()
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655),
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.26),
                                    avoidBottom: avoid) { AnyView(zoomOverlay) }
                 }
                 // v2.01 右上角比例尺（随缩放实时变化）
@@ -3477,6 +3477,13 @@ struct ContentView: View {
             let left = h * (1 - p)          // 剩余路程（绿，贴顶）
             let w: CGFloat = 6              // v2.56 5→6：量高德那条约 6.7pt
             ZStack(alignment: .top) {
+                // v2.58 白色底衬：这条竖线与主路线同为绿色、又恰好挨在右边缘，
+                // 两条绿线贴一起时用户分不清哪个是路线、哪个是进度。
+                // 垫一层不透明白底把进度条从底图上"抠"出来。
+                Capsule()
+                    .fill(Color.white.opacity(0.95))
+                    .frame(width: w + 3, height: h + 3)
+                    .offset(y: -1.5)
                 // 轨道（整条路程；已走部分就露出这层灰）
                 Capsule()
                     .fill(Color.white.opacity(0.22))
@@ -3526,19 +3533,24 @@ struct ContentView: View {
         // 所以不需要把用户坐标反投影成屏幕点、也就不需要 MapView 每帧回调 SwiftUI
         //（那种回路在 v2.02 踩过：回调里改 @State 触发 updateUIView 循环卡死）。
         // heading 直接用已有的 model.heading。
-        if model.navigating && !showRouteOverview && !uiHidden {
+        // v2.58 浏览态（navUserMoved）整套导航 HUD 收起：只留底部卡上的"继续导航"，
+        // 否则方位环/进度条/速度表会停在"车在 65% 屏高"的旧假设位置上，
+        // 与真实车位置脱节，看着像几个飘着的孤儿控件。
+        if model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
             AnyView(compassRing)
         }
         // v2.54 高德同款路程进度条（贴右边缘竖直）：显示条件与方位环一致
-        if model.navigating && !showRouteOverview && !uiHidden {
+        if model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
             AnyView(navProgressBar)
         }
         // v2.54 高德同款速度表（左上角圆形，与底部卡分离）
-        if model.navigating && !showRouteOverview && !uiHidden {
+        if model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
             AnyView(navSpeedGauge)
         }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
-        if model.navigating && !showRouteOverview {
+        // v2.58 浏览态同样收起：旧版只切了状态卡，结果"前方直行到达终点"和
+        // "继续导航"两个黑条同屏并存，逻辑上互相矛盾。
+        if model.navigating && !showRouteOverview && !model.navUserMoved {
             AnyView(navTopHintBar)
                 // v2.56 提示卡原来几乎横跨整个屏宽，右端正好压在右上角"5 公里"比例尺上，
                 // 两个黑色元素叠在一起看不清。这里留出 92pt 让比例尺独立在右侧。
@@ -3564,8 +3576,10 @@ struct ContentView: View {
             DraggableFloat(key: "overviewbar", defaultPos: CGPoint(x: 0.5, y: 0.70), lockX: true) { AnyView(routeOverviewBar) }
         }
         // v1.63 导航态左侧竖排：刷新 / 极简
+        // v2.58 默认位置 0.50 → 0.72：原来这排正好落在屏幕中部左侧，
+        // 加上右上角的 +/− 把前方路线的可视区从两边各切掉一条。下移让开中轴。
         if model.navigating && !showRouteOverview {
-            DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.50)) { AnyView(navSideOverlay) }
+            DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.72)) { AnyView(navSideOverlay) }
         }
     }
 

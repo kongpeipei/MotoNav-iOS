@@ -295,6 +295,21 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.selectedRouteIdx = selectedRouteIdx
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
         context.coordinator.navigating = navigating
+        // v2.58 导航态底图切 flat：realistic 会给每栋建筑画出有厚度的灰色块，
+        // 导航视角下满屏都是立体灰砖，看着像调试图；高德导航用的是平整浅灰。
+        // 只在状态翻转时重建 configuration（每次都建会打断地图渲染）。
+        let wantRealistic = !navigating
+        if context.coordinator.lastRealisticElevation != wantRealistic {
+            context.coordinator.lastRealisticElevation = wantRealistic
+            let navCfg = MKStandardMapConfiguration(
+                elevationStyle: wantRealistic ? .realistic : .flat,
+                emphasisStyle: .muted)
+            navCfg.showsTraffic = false
+            navCfg.pointOfInterestFilter = MKPointOfInterestFilter(including: [
+                .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport
+            ])
+            map.preferredConfiguration = navCfg
+        }
         // v2.53 导航态锁旋转/倾斜手势：高德导航松手即回车头朝上，
         // 本版直接禁掉手势 —— 双指一转会把 userMoved 置真，跟随永久停住、只能点定位救
         let gestureLocked = navigating
@@ -729,7 +744,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         // v2.21 途经点定位：地图移到该点并暂停朝向跟随
         if focusTick != context.coordinator.lastFocusTick {
             context.coordinator.lastFocusTick = focusTick
-            if focusTick > 0, let fc = focusCoord {
+            // v2.58 导航态忽略聚焦指令：这条路径会同时把 userMoved 置 true，
+            // 一旦在导航中执行，相机就停在浏览态 —— 车被顶到屏幕上方、
+            // 下方全是身后的路，顶部提示还会被换成"继续导航"。
+            if !navigating, focusTick > 0, let fc = focusCoord {
                 context.coordinator.userMoved = true
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .none
@@ -1102,6 +1120,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var searchLinkPolyline: MKPolyline?
         /// v2.25 搜索选点高亮标注
         var searchHitAnnotation: SearchHitAnnotation?
+        /// v2.58 记录上次设置的底图高度样式，避免每帧重建 configuration
+        var lastRealisticElevation: Bool?
         /// v2.25 高亮内容键（标注增删）
         var lastSearchHitKey = ""
         /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）
