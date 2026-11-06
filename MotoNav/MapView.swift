@@ -935,18 +935,26 @@ struct MapViewRepresentable: UIViewRepresentable {
         if navigating != context.coordinator.lastNavigatingState {
             context.coordinator.lastNavigatingState = navigating
             context.coordinator.userMoved = false
-            if navigating, let loc = userLocation {
-                let sh = map.bounds.height > 200 ? map.bounds.height : UIScreen.main.bounds.height
-                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: sh)
-                var cam = map.camera
-                // 首帧让车本身落在中心，等跟随接管后再按前移比例微调到中部偏下
-                cam.centerCoordinate = MapGeo.toGCJ(loc)
-                cam.centerCoordinateDistance = distance
-                cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-                context.coordinator.setRegionProgrammatically {
-                    map.userTrackingMode = .none
-                    map.setCamera(cam, animated: false)
-                }
+            // v2.77 关键修复：进入导航时定位往往还没回调（userLocation 是 nil），
+            // 旧版这里 if navigating, let loc = userLocation 直接把这次机会吞掉了 ——
+            // 边沿检测已经消费完、标志不会再翻转，相机就永久停在规划页那个"全程全览"
+            // 位置：视野几公里宽，车缩在屏幕底部 78% 处，前方一大片空白什么都没有。
+            // 用户反馈的"导航开始如图所示"就是这一帧。
+            // 改成只"记意图"，真正的对准推迟到定位第一次可用的那一帧。
+            context.coordinator.pendingNavSnap = navigating
+        }
+        if context.coordinator.pendingNavSnap, navigating, let loc = userLocation {
+            context.coordinator.pendingNavSnap = false
+            let sh = map.bounds.height > 200 ? map.bounds.height : UIScreen.main.bounds.height
+            let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: sh)
+            var cam = map.camera
+            // 首帧让车本身落在中心，等跟随接管后再按前移比例微调到中部偏下
+            cam.centerCoordinate = MapGeo.toGCJ(loc)
+            cam.centerCoordinateDistance = distance
+            cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+            context.coordinator.setRegionProgrammatically {
+                map.userTrackingMode = .none
+                map.setCamera(cam, animated: false)
             }
         }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
@@ -1220,6 +1228,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastRealisticElevation: Bool?
         /// v2.65 上一次的导航态：用于"进入导航首帧必须对准车"的边沿检测
         var lastNavigatingState = false
+        /// v2.77 "等定位就绪再对准车"的待办标志
+        var pendingNavSnap = false
         /// v2.25 高亮内容键（标注增删）
         var lastSearchHitKey = ""
         /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）
