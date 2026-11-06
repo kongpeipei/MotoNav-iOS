@@ -147,6 +147,8 @@ struct ContentView: View {
     @State private var planBottomCardFrame: CGRect = .zero
     /// v2.55 行程卡实测屏幕框：右侧 −/3D 的避让量改由它真实推导（原来写死 215 是按估算卡高拍的）
     @State private var tripCardFrame: CGRect = .zero
+    /// v2.58 搜索卡实测框：卡片能自由上下拖，右侧缩放组要按它实时避让
+    @State private var bottomMainCardFrame: CGRect = .zero
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
@@ -1618,6 +1620,7 @@ struct ContentView: View {
                     // 但不许拖到 tab 底下（原来 tab 在卡里，没有这个约束）
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
+                                   onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
                                    avoidBottom: 74) {
                         AnyView(bottomMainCard)
@@ -3389,6 +3392,12 @@ struct ContentView: View {
                             if planBottomCardFrame.minY > 0 { return max(0, h - planBottomCardFrame.minY) }
                             return 250
                         }
+                        // v2.58 普通态：搜索卡能自由上下拖，拖到屏幕中部时会整条横穿
+                        // 右侧的定位 / + / − / 3D（用户截图里中间两个按钮被压掉一半）。
+                        // 这里按搜索卡实测顶边做避让，卡片一上移，这一列就自动缩到它上方。
+                        if bottomMainCardFrame.minY > 0 {
+                            return max(0, h - bottomMainCardFrame.minY)
+                        }
                         return 0
                     }()
                     DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.26),
@@ -4642,7 +4651,7 @@ struct ContentView: View {
             // 搜索卡只留搜索框本身，既跟高德一致，也让卡片变矮、能被自由上下拖动。
             // 旧的 tabButtonsRow 定义保留在下方，但不再挂载。
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 20)   // v2.58 10→20：与底部 tab 条左右外沿对齐
         .padding(.top, 6)
         .padding(.bottom, 8)
         // v2.54 搜索整屏态：卡片退成整面白色面板（不透明、无圆角、无投影），
