@@ -3327,6 +3327,39 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
+    /// v2.54 高德同款速度表：导航态左上角独立圆形（白底、蓝字大数字、下方 km/h）
+    ///
+    /// 高德这个表并不在底部卡里 —— 底部卡只放"剩余时间/里程/到达时刻"，
+    /// 速度是卡外左上角的一个圆（用户对比截图确认）。旧版把速度塞在底部卡
+    /// 第二层最右侧 19pt，属于"底部卡里的一条小读数"，位置和形态都不对。
+    /// 位置按安全区顶 + 72 偏移，正好落在顶部提示条下沿。
+    private var navSpeedGauge: some View {
+        let d: CGFloat = 68
+        let speed = Int((model.navStatusCache?.speedKph ?? 0).rounded())
+        let overSpeed = model.speedLimitKph > 0 && speed > model.speedLimitKph
+        return GeometryReader { geo in
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.95))
+                    .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
+                VStack(spacing: -3) {
+                    Text("\(speed)")
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(overSpeed ? Color.red
+                                         : Color(red: 0.16, green: 0.38, blue: 1.0))
+                    Text("km/h")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+            }
+            .frame(width: d, height: d)
+            .position(x: 12 + d / 2, y: geo.safeAreaInsets.top + 72 + d / 2)
+        }
+        .allowsHitTesting(false)
+    }
+
     /// v2.54 高德同款路程进度条：贴屏幕右边缘的竖直细线（起点在上、终点在下）
     ///
     /// 和 v2.22 那一版（v2.33 已删）的区别，正是它被当成"灰条纹"的原因：
@@ -3387,6 +3420,10 @@ struct ContentView: View {
         // v2.54 高德同款路程进度条（贴右边缘竖直）：显示条件与方位环一致
         if model.navigating && !showRouteOverview && !uiHidden {
             AnyView(navProgressBar)
+        }
+        // v2.54 高德同款速度表（左上角圆形，与底部卡分离）
+        if model.navigating && !showRouteOverview && !uiHidden {
+            AnyView(navSpeedGauge)
         }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
         if model.navigating && !showRouteOverview {
@@ -3577,8 +3614,7 @@ struct ContentView: View {
         let actionFontSize: CGFloat = minimal ? 18 : 14
         // v2.37 G3 速度是骑行最核心读数，层级不应低于公里/分钟：
         // 普通 17→19，极简 21→22（极简档已整体放大）
-        // v2.54 高德同款：速度是骑行首要读数，从 19/22 提到 26/28 并左移到卡内最前
-        let speedFontSize: CGFloat = minimal ? 28 : 26
+        // v2.54 速度读数移出底部卡，改为左上角独立圆形表（高德同款，见 navSpeedGauge）
         // v2.47 Q2 剩余 <1km 显示米（高德式）：800 米比 0.8 公里直观
         let remainMv = max(ns.remainM, 0)
         let kmTxt = remainMv < 1000 ? "\(remainMv)" : String(format: "%.1f", Double(remainMv) / 1000.0)
@@ -3682,22 +3718,6 @@ struct ContentView: View {
 
             // ── 第二层：下一动作 + 当前车速 ──
             HStack(spacing: 8) {
-                // v2.54 高德同款：速度读数左移放大（原在最右 19pt，和 km/h 两个小字
-                // 挤在搜索按钮边上，骑行中一眼扫不到）
-                let overSpeed = model.speedLimitKph > 0 && ns.speedKph > Double(model.speedLimitKph)
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text("\(Int(ns.speedKph.rounded()))")
-                        .font(.system(size: speedFontSize, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(overSpeed ? .red : mainFg)
-                    Text("km/h")
-                        .font(.system(size: 10))
-                        .foregroundStyle(overSpeed ? .red : dimFg)
-                }
-                Rectangle()
-                    .fill(dimFg.opacity(0.2))
-                    .frame(width: 1, height: 18)
-                    .padding(.horizontal, 2)
                 if let t = ns.nextTurn, ns.distToTurnM > 0 {
                     Image(systemName: navTurnIcon(t))
                         .font(.system(size: 19, weight: .bold))
@@ -3757,7 +3777,7 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 14)
-            .frame(height: 44)   // v2.54 速度 26pt 后 32pt 会裁切，抬到 44
+            .frame(height: 32)
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
             // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
