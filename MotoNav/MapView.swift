@@ -273,7 +273,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         let cfg = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .default)
         // ① 关掉苹果原生路况层（与 v2.53 同因，迁到 configuration 上，避免两套 API 打架）
         // ① 路况层打开：用户要求对齐高德观感，主干道按拥堵程度着色
-        cfg.showsTraffic = true
+        // v2.66 用户要求删除地图上的绿色道路线：MapKit 的 showsTraffic 会把畅通路段
+        // 整条染成绿色，和我们的绿色路线叠在一起，屏幕上出现两套绿。
+        // 关掉后底图不再自带绿/黄/红路况着色；路况仍由我们自绘的 trafficColors 图层表达。
+        cfg.showsTraffic = false
         // ② POI 白名单（v2.60 扩充）：原来只留 6 类刚需，地图显得空；补上餐饮、购物、
         // 公园、酒店、银行，层次更接近高德，同时仍不放电影院/夜生活这类扎堆的类别
         cfg.pointOfInterestFilter = MapViewRepresentable.standardPOIFilter
@@ -353,7 +356,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 emphasisStyle: .default)
             // v2.60 翻转重建时把路况与 POI 一起补上：旧版这里漏设，
             // 导航态一进一出重建 configuration 后白名单和路况就被打回苹果默认
-            navCfg.showsTraffic = true
+            navCfg.showsTraffic = false   // v2.66 同上：底图不再自带绿色道路线
             navCfg.pointOfInterestFilter = MapViewRepresentable.standardPOIFilter
             map.preferredConfiguration = navCfg
         }
