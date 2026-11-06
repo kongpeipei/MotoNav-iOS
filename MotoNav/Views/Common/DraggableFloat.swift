@@ -333,8 +333,11 @@ struct DraggableFloat<Content: View>: View {
                                   v.translation.width < -80,
                                   abs(v.translation.width) > abs(v.translation.height) {
                             onSwipeLeft()
-                        } else if !topLocked, !resetOnAppear {
-                            // resetOnAppear 的卡片不落盘：下次出现一律回默认位
+                        } else if !resetOnAppear {
+                            // v2.80 按用户要求"所有卡片下次打开保持上次位置"：
+                            // 原来还排除了 topLocked（起终点卡是顶边锁定语义），
+                            // 结果它每次重开都回 0.10，其他卡却记得住，行为不一致。
+                            // 现在只排除"每次出现都回默认位"的卡片。
                             UserDefaults.standard.set(pos.x, forKey: "\(key).x")
                             UserDefaults.standard.set(pos.y, forKey: "\(key).y")
                         }

@@ -1609,7 +1609,7 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
-                                   resetOnAppear: true) { AnyView(routePlanBottomCard) }
+                                   ) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
                     // v2.66 删除地图常驻「分类条」：和搜索面板里的 6 宫格是同一批
@@ -1638,13 +1638,12 @@ struct ContentView: View {
                     // 无论有没有"回家/去公司"那一行、键盘弹不弹，卡底都压在 tab 条上沿上方 9pt。
                     // 上一版的"中心定位 0.88"在卡变高时底边会跟着往下探、压到 tab 上。
                     // v2.74 按用户要求：整张卡必须常驻屏幕最下方（高德首页就是贴底），
-                    // 0.89 → 0.97（底边锚定，钳制会自动落在安全区底） + resetOnAppear
-                    // 保证每次回首页都在底部，不会记住上次被拖到半空的位置。
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
+                    // 0.89 → 0.97（底边锚定，钳制会自动落在安全区底）。
+                    // v2.80 按用户要求改成"记住上次拖到的位置"，不再每次回默认位。
+                    DraggableFloat(key: "bottommain2", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
-                                   resetOnAppear: true,
                                    // v2.64 去掉"不许压 tab 条"的底部避让：卡片要能拖到屏幕最下
                                    // v2.62 去掉"搜索卡躲避定位点"（用户明确要求）：
                                    // 旧版为了不让卡片盖住定位蓝点，把卡片最高位置限在
@@ -1678,23 +1677,19 @@ struct ContentView: View {
             // v2.56 地点卡原来停在屏幕中部（0.66 屏高），横切在"我的位置→搜索点"的黑线中间，
             // 把连线和当前位置箭头都压住了。改成贴底悬浮（对齐高德地点卡），
             // 地图中上部完整露出，黑线一眼看全；左右可拖、上滑仍在。
-            // v2.60 resetOnAppear：地点卡是"选中后临时弹出"的一次性卡片，
-            // 不该记住被拖到哪儿 —— 历史上只要拖过一次，之后每次点搜索结果都会停在
-            // 半空（用户实机里长期卡在 57% 屏高，压着路线）。改成每次出现都贴底。
+            // v2.80 取消 resetOnAppear：用户要求所有卡片下次打开保持上次拖到的位置
             DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
                            bottomAnchor: true,
                            deleteLabel: "关闭",
                            onSwipeLeft: { closeTapPlace() },
-                           resetOnAppear: true) { AnyView(tapPlaceCard(tp)) }
+                           ) { AnyView(tapPlaceCard(tp)) }
         } else if let t = tipCard {
             // v2.56 同 tapplace：贴底，不再横在画面中间遮路线
             DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
                            bottomAnchor: true,
                            deleteLabel: "删除",
                            onSwipeLeft: { closeTipCard() },
-                           // v2.75 与 tapplace 同病：没有 resetOnAppear 就会记住上次被拖到
-                           // 半空的位置，之后每次点地点都停在中部横切路线。一次性的浮卡一律贴底。
-                           resetOnAppear: true) { AnyView(tipInfoCard(t)) }
+                           ) { AnyView(tipInfoCard(t)) }
         }
     }
 
@@ -3352,8 +3347,7 @@ struct ContentView: View {
             DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
                            deleteLabel: "删除",
                            onSwipeLeft: { dismissTripAndReset() },
-                           onFrameChange: { tripCardFrame = $0 },
-                           resetOnAppear: true) { AnyView(tripSummaryCard(s)) }
+                           onFrameChange: { tripCardFrame = $0 }) { AnyView(tripSummaryCard(s)) }
         }
         // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
         if mapLoadFailed {
@@ -3396,7 +3390,7 @@ struct ContentView: View {
                     //（多方案、加禁摩提示行、途经点变多），−/3D 就重新被压住半个。
                     // 卡片占据的底部高度 = 屏幕高 − 卡片顶边 y，这个值恒等于真实占位。
                     // v2.64 缩放组不再按卡片实测框避让（卡片要全屏自由拖）
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.36),
+                    DraggableFloat(key: "zoom2", defaultPos: CGPoint(x: 0.885, y: 0.36),
                                    ) { AnyView(zoomOverlay) }
                 }
                 // v2.72 按用户要求彻底删除右上角比例尺（不再挂载）。
