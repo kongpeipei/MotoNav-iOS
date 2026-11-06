@@ -843,7 +843,10 @@ struct ContentView: View {
             .frame(height: 54)
             // v2.56 外形改成整颗胶囊（对齐"我的"页截图：外层是一整条圆头药丸，
             // 选中的一半在里面铺成蓝色胶囊），旧版是 22 圆角矩形，两头不是圆的
-            .background(.ultraThinMaterial, in: Capsule())
+            // v2.57 白底：旧版 .ultraThinMaterial 是半透明毛玻璃，叠在浅色底图上透成灰白，
+            // 跟"我的"页那条干净的白色 tab 条不是一个观感。改成 systemBackground
+            //（浅色=纯白、深色=深灰，跟随系统），并去掉透过底图的那层脏色。
+            .background(Color(.systemBackground), in: Capsule())
             .overlay(Capsule().strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
             .padding(.horizontal, 20)
