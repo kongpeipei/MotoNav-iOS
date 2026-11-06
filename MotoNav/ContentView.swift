@@ -4385,6 +4385,12 @@ struct ContentView: View {
         searchLinkFrom = model.currentLocation
         searchHitCoord = target
         searchHitTitle = name
+        // v2.58 选中搜索结果后把目的地推到「地图可用区」正中：
+        // 旧版只换了标注和连线，地图没动，命中点常常落在屏幕上方甚至被卡片压住。
+        // focusTick 那条路径用的是 setVisibleMapRect + edgePadding(mapViewportInsets)，
+        // 会把点放在"扣掉底部卡片之后"的可见区域中心，而不是整屏中心。
+        model.focusCoord = target
+        model.focusTick += 1
         model.status = "已定位到「\(name)」"
         Task {
             let info = await model.amapRegeoInfo(lat: lat, lon: lon)

@@ -100,7 +100,10 @@ struct DraggableFloat<Content: View>: View {
         if topLocked {
             py = defaultPos.y
         } else {
-            py = min(0.93, max(0.10, savedY ?? defaultPos.y))
+            // v2.58 底锚定卡片（地点卡 / 行程卡 / 导航底卡）放开到 0.97：
+            // 旧的 0.93 上限会把"贴底"再往上拉 35pt，卡片离 home indicator 空出一截，
+            // 看着不像贴底。普通卡片仍保持 0.93，避免压住底部 tab。
+            py = min(bottomAnchor ? 0.97 : 0.93, max(0.10, savedY ?? defaultPos.y))
         }
         _pos = State(initialValue: CGPoint(x: px, y: py))
         _defaultTopY = State(initialValue: defaultPos.y)
