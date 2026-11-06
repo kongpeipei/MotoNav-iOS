@@ -102,6 +102,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.13：只在导航中更新。导航时地图要跟着手机转向，这时发布一次是值得的；
     /// 平时全部走 `compass`，避免 10~20Hz 的朝向回调把整个界面重算打满主线程。
     @Published var heading: Double = 0
+    /// v2.90 GPS 行进方向（度）：>10 km/h 时用来驱动地图朝向，
+    /// 不受手机在支架上装歪的影响；停车时置 nil，回落到罗盘
+    private var gpsHeading: Double? = nil
     /// 指南针朝向（独立发布，只驱动指南针小圆圈）
     let compass = CompassState()
     /// 自定义背景图片（相册选择，v1.11 已移除入口，保留字段兼容旧数据）
@@ -1480,6 +1483,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 locationAccuracy = loc.horizontalAccuracy
                 currentSpeed = speed
             }
+            // v2.90 采集 GPS 行进方向（供地图朝向融合用）：
+            // CLLocation.course 在速度无效时返回 -1，这里一并当作无效处理。
+            if loc.speed > 2.8, loc.course >= 0 {
+                gpsHeading = loc.course
+            } else {
+                gpsHeading = nil
+            }
             // v2.27（优化建议 #22）：运动状态分级（静止降频 / 骑行恢复）+ 隧道信号丢失检测
             lastLocationAt = Date()
             updateMotionState()
@@ -1506,6 +1516,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 updateNavProgress(at: coord)
                 // v2.29 按速度自动切换视野档位（低速看清路口 / 高速看远）
                 updateAutoNavScale()
+                // v2.90 每个定位都重算一次朝向（高速用 GPS 方向，低速用罗盘）
+                applyFusedHeading()
                 // v2.36 F5 超速语音播报：E8 视觉变红的语音版（高优先级可打断普通播报）
                 // v2.38 H3 语音加 4km/h 缓冲：GPS 瞬时速度误差 ±2km/h，
                 // 限速 60 时 61 就报会频繁误报；视觉红线保持瞬时（见 navBottomCard E8）
@@ -1574,6 +1586,31 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         status = "已退出巡航 · 本次使用内不再自动进入"
     }
 
+    /// v2.90 导航朝向融合：这是地图旋转的唯一出口
+    ///
+    /// 旧版只用手机罗盘（CLHeading.trueHeading）驱动 camera.heading。
+    /// 骑行时手机装在支架上，支架一旦装歪（比如斜着夹 20°），
+    /// 地图就会永远比真实行进方向偏同样一个角度 —— 高德不会，它优先用 GPS 行进方向。
+    ///
+    /// 现在的规则：
+    ///  · 速度 > 10 km/h 且 GPS course 有效 → 用行进方向（不受支架角度影响）
+    ///  · 其余情况（停车、GPS 方向无效）→ 回落手机罗盘
+    /// GPS course 是瞬时方向、抖动比罗盘大，所以死区放宽到 5°（罗盘仍是 4°）。
+    private func applyFusedHeading() {
+        guard navigating else { return }
+        let fast = currentSpeed > 2.8       // 2.8 m/s ≈ 10 km/h
+        let target: Double
+        if fast, let g = gpsHeading {
+            target = g
+        } else {
+            target = compass.angle
+        }
+        let diff = abs(target - heading)
+        let delta = min(diff, 360 - diff)
+        guard delta >= (fast ? 5 : 4) else { return }
+        heading = target
+    }
+
     nonisolated func locationManager(
         _ manager: CLLocationManager,
         didUpdateHeading newHeading: CLHeading
@@ -1591,8 +1628,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // 导航中地图要跟着手机转，这时才发布 heading；再叠加 4° 死区，
             // 把 20Hz 压到 5Hz 左右 —— 4° 在这块 56pt 的指北针和 200 米视野上看不出来。
             if navigating {
-                let hd = abs(h - heading)
-                if min(hd, 360 - hd) >= 4 { heading = h }
+                // v2.90 不再直接用罗盘写 heading：高速行驶交给 GPS 行进方向
+                applyFusedHeading()
             }
         }
     }
