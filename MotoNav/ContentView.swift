@@ -3138,7 +3138,7 @@ struct ContentView: View {
     private var zoomOverlay: some View {
         // v1.97 修复定位按钮消失：旧版内容带 150 底部内边距，配合 6% 的顶部锚点会把整组顶出屏幕；
         // 改为紧凑竖排（定位 / + / -），位置由 DraggableFloat 负责
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
                     // 当前定位按钮（放大按钮上方，非导航中显示；点击清空路线规划回到主页）
                     if !model.navigating {
                         Button {
@@ -3155,7 +3155,7 @@ struct ContentView: View {
                                     .font(.title3)
                                     .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                             }
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                         }
                     }
@@ -3168,7 +3168,7 @@ struct ContentView: View {
                         Image(systemName: "plus")
                             .font(.title3.bold())
                             .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .background(Color.white, in: Circle())
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
@@ -3181,7 +3181,7 @@ struct ContentView: View {
                         Image(systemName: "minus")
                             .font(.title3.bold())
                             .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .background(Color.white, in: Circle())
                             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
@@ -3442,7 +3442,7 @@ struct ContentView: View {
                     //（多方案、加禁摩提示行、途经点变多），−/3D 就重新被压住半个。
                     // 卡片占据的底部高度 = 屏幕高 − 卡片顶边 y，这个值恒等于真实占位。
                     // v2.64 缩放组不再按卡片实测框避让（卡片要全屏自由拖）
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.26),
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.22),
                                    ) { AnyView(zoomOverlay) }
                 }
                 // v2.01 右上角比例尺（随缩放实时变化）
@@ -4748,7 +4748,8 @@ struct ContentView: View {
             // 搜索卡只留搜索框本身，既跟高德一致，也让卡片变矮、能被自由上下拖动。
             // 旧的 tabButtonsRow 定义保留在下方，但不再挂载。
         }
-        .padding(.horizontal, 20)   // v2.58 10→20：与底部 tab 条左右外沿对齐
+        // v2.68 20 → 12：用户要求搜索框横向再长一点，两侧多让出 8pt
+        .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
         // v2.54 搜索整屏态：卡片退成整面白色面板（不透明、无圆角、无投影），
