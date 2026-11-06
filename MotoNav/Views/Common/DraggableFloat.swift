@@ -102,6 +102,9 @@ struct DraggableFloat<Content: View>: View {
             // 但作废表里一直没有这个 key —— 只要历史上有一次被拖到屏幕中部，
             // 之后每次规划都停在半空（本轮用户截图里卡在 66% 屏高就是这个）。
             || (key == "routeplanbottom" && posVersion < 1)
+            // v2.59 搜索卡从"底边锚定 0.97"改成"中心定位 0.88"，语义变了，
+            // 记忆里的 0.97（旧语义=底边）直接套到中心定位会把卡片整体推下去半个卡高 —— 必须作废
+            || (key == "bottommain" && posVersion < 1)
         if stale {
             let v = key == "zoom" ? 3 : (key == "exitnav2" ? 2 : 1)
             UserDefaults.standard.set(v, forKey: "\(key).posV")
@@ -135,7 +138,14 @@ struct DraggableFloat<Content: View>: View {
         let gap: CGFloat = 6
         let h = contentSize.height
         let screenH = geo.size.height
-        guard h > 0, screenH > 0 else { return pos.y * screenH }
+        // v2.59 兜底：内容尺寸还没测到时旧版直接返回 pos.y * screenH —— 那是"中心"语义，
+        // 对 bottomAnchor 的卡片就等于把底边当中心，下半截整个掉出屏幕
+        //（v2.59 搜索卡实机就是这副样子）。这里改成按锚点语义 + 屏内钳制。
+        guard h > 0, screenH > 0 else {
+            let fallbackH: CGFloat = 64
+            let raw = bottomAnchor ? pos.y * screenH - fallbackH / 2 : pos.y * screenH
+            return min(screenH - fallbackH / 2, max(fallbackH / 2, raw))
+        }
 
         var center: CGFloat
         if bottomAnchor {

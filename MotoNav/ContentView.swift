@@ -1618,8 +1618,8 @@ struct ContentView: View {
                     // 且与安全区钳制叠加（卡片顶部跑出屏幕）
                     // v2.56 搜索卡上避让底部常驻 tab：卡片可以自由上下拖，
                     // 但不许拖到 tab 底下（原来 tab 在卡里，没有这个约束）
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
-                                   lockX: true, bottomAnchor: true,
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88),
+                                   lockX: true, bottomAnchor: false,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
                                    avoidBottom: 74,
@@ -4671,8 +4671,8 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0), radius: 0, y: 0)
         // 背景透明后命中区不能只依赖可见内容，否则拖动时手指落在胶囊两侧的空白会落空
         .contentShape(Rectangle())
-        // v2.58 再加长：横向留白 8 → 4（卡宽 +8pt），输入行 56 → 58pt
-        .padding(.horizontal, searchActive ? 0 : 4)
+        // v2.59 这里原来还有一条 .padding(.horizontal, searchActive ? 0 : 4)，
+        // 和上面的 20 叠成 24pt，卡片比底部 tab 条窄 8pt、左边缘不齐 —— 已删。
     }
 
     /// v1.99 搜索框快捷词（回家 / 去公司）
