@@ -92,6 +92,10 @@ struct DraggableFloat<Content: View>: View {
             || (key == "tipcard" && posVersion < 1)
             || (key == "exitnav2" && posVersion < 2)
             || (key == "navside" && posVersion < 1)
+            // v2.58 规划页下卡（方案卡）补作废：它的 defaultPos 从 v2.23 起就是 0.97，
+            // 但作废表里一直没有这个 key —— 只要历史上有一次被拖到屏幕中部，
+            // 之后每次规划都停在半空（本轮用户截图里卡在 66% 屏高就是这个）。
+            || (key == "routeplanbottom" && posVersion < 1)
         if stale {
             let v = key == "zoom" ? 3 : (key == "exitnav2" ? 2 : 1)
             UserDefaults.standard.set(v, forKey: "\(key).posV")
