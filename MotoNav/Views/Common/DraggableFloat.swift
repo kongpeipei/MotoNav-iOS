@@ -93,21 +93,30 @@ struct DraggableFloat<Content: View>: View {
         // 否则装过旧版的手机会继续按记忆里的 0.66 屏高渲染，遮挡问题原样复现
         // v2.58 又挪了两组控件：缩放组 0.655→0.26（归位右上角）、左侧竖排 0.50→0.72（让开中轴）、
         // 导航底卡再作废一次（旧版 0.66 屏高的记忆值会让"继续导航"悬在屏幕中间）。
-        let stale = (key == "zoom" && posVersion < 3)
-            || (key == "tapplace" && posVersion < 1)
-            || (key == "tipcard" && posVersion < 1)
-            || (key == "exitnav2" && posVersion < 2)
-            || (key == "navside" && posVersion < 1)
+        // v2.59 版本号整体推进一档：旧版作废时只写了版本号、没清坐标值，
+        // 已经在手机上跑过旧版的设备 posV 已经是 1，再也不会进 stale。
+        // 推一档才能让它们重新作废一次，并借这次真正的清值。
+        let stale = (key == "zoom" && posVersion < 4)
+            || (key == "tapplace" && posVersion < 2)
+            || (key == "tipcard" && posVersion < 2)
+            || (key == "exitnav2" && posVersion < 3)
+            || (key == "navside" && posVersion < 2)
             // v2.58 规划页下卡（方案卡）补作废：它的 defaultPos 从 v2.23 起就是 0.97，
             // 但作废表里一直没有这个 key —— 只要历史上有一次被拖到屏幕中部，
             // 之后每次规划都停在半空（本轮用户截图里卡在 66% 屏高就是这个）。
-            || (key == "routeplanbottom" && posVersion < 1)
+            || (key == "routeplanbottom" && posVersion < 2)
             // v2.59 搜索卡从"底边锚定 0.97"改成"中心定位 0.88"，语义变了，
             // 记忆里的 0.97（旧语义=底边）直接套到中心定位会把卡片整体推下去半个卡高 —— 必须作废
-            || (key == "bottommain" && posVersion < 1)
+            || (key == "bottommain" && posVersion < 2)
         if stale {
-            let v = key == "zoom" ? 3 : (key == "exitnav2" ? 2 : 1)
+            let v = key == "zoom" ? 4 : (key == "exitnav2" ? 3 : 2)
             UserDefaults.standard.set(v, forKey: "\(key).posV")
+            // v2.59 真正把旧坐标清掉。旧版这里只推进了版本号，UserDefaults 里的 y 原样留着：
+            // 作废只在"当次显示"生效（用 defaultPos），下一次进页面 posVersion 已经是 1、
+            // 不再 stale，又把旧 y 读回来 —— 用户实机里方案卡/地点卡第二次以后又回到
+            // 屏幕中部，就是这条造成的。作废必须同时把存储值改写为默认位置。
+            UserDefaults.standard.set(Double(defaultPos.x), forKey: "\(key).x")
+            UserDefaults.standard.set(Double(defaultPos.y), forKey: "\(key).y")
         }
         let savedX = stale ? nil : x
         let savedY = stale ? nil : y
