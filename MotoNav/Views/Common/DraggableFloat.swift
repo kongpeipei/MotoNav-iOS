@@ -44,6 +44,10 @@ struct DraggableFloat<Content: View>: View {
     /// v2.54 底部避让：底部另有常驻卡片（规划下卡 / 行程卡）时，把它占掉的高度传进来，
     /// 让本浮层被钳制在卡片上沿以上，避免"按钮露半个、点不到"。
     var avoidBottom: CGFloat = 0
+    /// v2.58 顶部避让：屏幕上方有必须留白的东西（首页定位点恒在屏幕正中）时，
+    /// 传它下沿的 y，本浮层顶边不得高于它 —— 即"卡片去躲那个点"，而不是把点挪走。
+    /// 传 0 表示不限制（默认）。
+    var avoidTop: CGFloat = 0
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -67,6 +71,7 @@ struct DraggableFloat<Content: View>: View {
          onFrameChange: ((CGRect) -> Void)? = nil,
          extraBottomInset: CGFloat = 0,
          avoidBottom: CGFloat = 0,
+         avoidTop: CGFloat = 0,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -77,6 +82,7 @@ struct DraggableFloat<Content: View>: View {
         self.onFrameChange = onFrameChange
         self.extraBottomInset = extraBottomInset
         self.avoidBottom = avoidBottom
+        self.avoidTop = avoidTop
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -151,7 +157,9 @@ struct DraggableFloat<Content: View>: View {
         // v2.54 底部常驻卡片避让（规划下卡 / 行程卡）
         let cardAvoid = max(0, avoidBottom)
         let usableBottom = screenH - bottomInset - gap - cardAvoid
-        let minCenter = usableTop + h / 2
+        // v2.58 顶部避让：顶边不得高于 avoidTop（center - h/2 >= avoidTop）
+        let keepBelow = avoidTop + h / 2
+        let minCenter = max(usableTop + h / 2, keepBelow)
         // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
         let maxCenter = max(minCenter, usableBottom - h / 2)
         return min(max(center, minCenter), maxCenter)

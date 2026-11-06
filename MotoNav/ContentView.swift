@@ -1622,7 +1622,11 @@ struct ContentView: View {
                                    lockX: true, bottomAnchor: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
-                                   avoidBottom: 74) {
+                                   avoidBottom: 74,
+                                   // v2.58 顶部避让：首页定位点由系统跟随恒定在屏幕正中，
+                                   // 搜索卡不许上拖穿过它 —— 卡的最高位置压在点下沿 28pt 之外。
+                                   // 整屏搜索态另说：那一刻是全屏面板，点被盖住是预期行为。
+                                   avoidTop: searchActive ? 0 : (UIScreen.main.bounds.height * 0.5 + 28)) {
                         AnyView(bottomMainCard)
                     }
                 }
