@@ -151,8 +151,13 @@ struct DraggableFloat<Content: View>: View {
         // 对 bottomAnchor 的卡片就等于把底边当中心，下半截整个掉出屏幕
         //（v2.59 搜索卡实机就是这副样子）。这里改成按锚点语义 + 屏内钳制。
         guard h > 0, screenH > 0 else {
+            // v2.60 内容高度未知时不再信任 pos.y。pos.y 可能是旧语义的记忆值、
+            // 也可能是拖动残留（拖动上限只钳到 0.99），拿它当中心/底边都会把卡片
+            // 放到屏幕外 —— 用户实机里搜索卡整个沉到 tab 条以下就是这条。
+            // 这种时候只认 defaultPos，至少保证卡片出现在设计位置上。
             let fallbackH: CGFloat = 64
-            let raw = bottomAnchor ? pos.y * screenH - fallbackH / 2 : pos.y * screenH
+            let raw = bottomAnchor ? defaultPos.y * screenH - fallbackH / 2
+                                   : defaultPos.y * screenH
             return min(screenH - fallbackH / 2, max(fallbackH / 2, raw))
         }
 
@@ -181,7 +186,10 @@ struct DraggableFloat<Content: View>: View {
         let minCenter = max(usableTop + h / 2, keepBelow)
         // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
         let maxCenter = max(minCenter, usableBottom - h / 2)
-        return min(max(center, minCenter), maxCenter)
+        // v2.60 最终保险：无论上面怎么算，卡片底边一律不许越过 home indicator
+        //（历史上出现过多条路径叠加后整卡掉出屏幕的情况）
+        let hardMax = max(minCenter, screenH - h / 2 - 8)
+        return min(max(center, minCenter), min(maxCenter, hardMax))
     }
 
     /// v2.50 横向钳制：按卡片**实际宽度**保证左右不出屏。
