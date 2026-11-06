@@ -1690,7 +1690,10 @@ struct ContentView: View {
             DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
                            bottomAnchor: true,
                            deleteLabel: "删除",
-                           onSwipeLeft: { closeTipCard() }) { AnyView(tipInfoCard(t)) }
+                           onSwipeLeft: { closeTipCard() },
+                           // v2.75 与 tapplace 同病：没有 resetOnAppear 就会记住上次被拖到
+                           // 半空的位置，之后每次点地点都停在中部横切路线。一次性的浮卡一律贴底。
+                           resetOnAppear: true) { AnyView(tipInfoCard(t)) }
         }
     }
 
@@ -3344,10 +3347,12 @@ struct ContentView: View {
         }
         // v1.81.4 本次行程卡：结束导航后显示
         if let s = model.tripSummary {
+            // v2.75 行程卡是"导航结束"的一次性结果卡，位置不该被记忆（否则下次停在上次拖到的地方）
             DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
                            deleteLabel: "删除",
                            onSwipeLeft: { dismissTripAndReset() },
-                           onFrameChange: { tripCardFrame = $0 }) { AnyView(tripSummaryCard(s)) }
+                           onFrameChange: { tripCardFrame = $0 },
+                           resetOnAppear: true) { AnyView(tripSummaryCard(s)) }
         }
         // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
         if mapLoadFailed {
@@ -3390,7 +3395,7 @@ struct ContentView: View {
                     //（多方案、加禁摩提示行、途经点变多），−/3D 就重新被压住半个。
                     // 卡片占据的底部高度 = 屏幕高 − 卡片顶边 y，这个值恒等于真实占位。
                     // v2.64 缩放组不再按卡片实测框避让（卡片要全屏自由拖）
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.22),
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.36),
                                    ) { AnyView(zoomOverlay) }
                 }
                 // v2.72 按用户要求彻底删除右上角比例尺（不再挂载）。
