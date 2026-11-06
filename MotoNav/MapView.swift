@@ -223,7 +223,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MKMapView 没有任何"按坐标删掉某个底图道路"的能力。
         // emphasisStyle = .muted 是苹果唯一能把道路/边界/建筑这类底图要素**压淡**的官方开关，
         // 也是"删除"这件事能做到的最接近的程度：路网仍在（导航要看路，不能真抹），但不再抢眼。
-        let cfg = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .muted)
+        // v2.60 底图强调样式 muted → default：用户实机反馈"灰呼呼看不清"。
+        // muted 是苹果唯一能把道路/绿地/水系一起压淡的开关，代价就是整张图发灰、
+        // 对比度低。改回 default 后道路更白、绿地更绿、水面更蓝，图层区分度明显回来
+        //（历史上 muted 是为了压淡底图里一条高德色带，那条带子现在会重新显眼，取舍已记在案）。
+        let cfg = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .default)
         // ① 关掉苹果原生路况层（与 v2.53 同因，迁到 configuration 上，避免两套 API 打架）
         cfg.showsTraffic = false
         // ② POI 白名单：苹果默认铺全类别（餐馆/购物/景点都画），比高德"花"得多
@@ -303,7 +307,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastRealisticElevation = wantRealistic
             let navCfg = MKStandardMapConfiguration(
                 elevationStyle: wantRealistic ? .realistic : .flat,
-                emphasisStyle: .muted)
+                emphasisStyle: .default)
             navCfg.showsTraffic = false
             navCfg.pointOfInterestFilter = MKPointOfInterestFilter(including: [
                 .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport
