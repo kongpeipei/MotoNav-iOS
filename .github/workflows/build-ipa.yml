@@ -75,11 +75,20 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: 选择 Xcode 16（工程 objectVersion 63 需 Xcode 16+）
+      - name: 选择 Xcode（工程 objectVersion 63 需 Xcode 16+，取镜像内最高正式版）
         run: |
-          for X in /Applications/Xcode_16*.app; do
-            if [ -d "$X" ]; then sudo xcode-select -s "$X"; break; fi
+          # v2.53 macos-15 镜像同时装了多个 Xcode。固定取 Xcode_16* 会命中 16.0，
+          # 而 16.0 的 iOS SDK(22A3362) 与镜像内的 simulator runtime
+          # (22F77 / 22G86 / 23A8464 / 23B86 / 23C54) 都不配套 —— actool 编译
+          # Assets.xcassets 直接报 "No simulator runtime version ... available"，archive 失败。
+          # 改为挑版本最高的正式版（排除 beta），并打印清单便于排查。
+          ls -d /Applications/Xcode*.app 2>/dev/null | sed 's#.*/##' || true
+          LAST=""
+          for X in /Applications/Xcode*.app; do
+            case "$X" in *beta*|*Beta*) continue;; esac
+            LAST="$X"
           done
+          if [ -n "$LAST" ]; then sudo xcode-select -s "$LAST"; fi
           xcodebuild -version | head -1
 
       - name: 2) 本地静态校验（1 秒）
@@ -145,11 +154,20 @@ jobs:
           fetch-depth: 1
 
       # 准备阶段：密钥注入 + 工程修补 + 版本号 + 打包环境自检，一次 shell 完成
-      - name: 选择 Xcode 16（工程 objectVersion 63 需 Xcode 16+）
+      - name: 选择 Xcode（工程 objectVersion 63 需 Xcode 16+，取镜像内最高正式版）
         run: |
-          for X in /Applications/Xcode_16*.app; do
-            if [ -d "$X" ]; then sudo xcode-select -s "$X"; break; fi
+          # v2.53 macos-15 镜像同时装了多个 Xcode。固定取 Xcode_16* 会命中 16.0，
+          # 而 16.0 的 iOS SDK(22A3362) 与镜像内的 simulator runtime
+          # (22F77 / 22G86 / 23A8464 / 23B86 / 23C54) 都不配套 —— actool 编译
+          # Assets.xcassets 直接报 "No simulator runtime version ... available"，archive 失败。
+          # 改为挑版本最高的正式版（排除 beta），并打印清单便于排查。
+          ls -d /Applications/Xcode*.app 2>/dev/null | sed 's#.*/##' || true
+          LAST=""
+          for X in /Applications/Xcode*.app; do
+            case "$X" in *beta*|*Beta*) continue;; esac
+            LAST="$X"
           done
+          if [ -n "$LAST" ]; then sudo xcode-select -s "$LAST"; fi
           xcodebuild -version | head -1
 
       - name: 2) 准备（密钥 / 工程修补 / 版本号 / 导出配置）
