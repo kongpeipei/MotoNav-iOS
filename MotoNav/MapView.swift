@@ -952,13 +952,21 @@ struct MapViewRepresentable: UIViewRepresentable {
             let scale = min(navScaleTarget, AppModel.navScaleSteps[1])
             let distance = MapViewRepresentable.altitudeForScale(scale, screenH: sh)
             var cam = map.camera
-            // 首帧让车本身落在中心，等跟随接管后再按前移比例微调到中部偏下
-            cam.centerCoordinate = MapGeo.toGCJ(loc)
+            // v2.83 对齐高德"开始导航"的入戏方式：
+            //  ① 首帧就直接按前移比例把车放到屏幕下部（旧版先居中、下一个定位回调
+            //    再跳下去，用户看到的是两级跳变 —— 这也是"导航态乱跳"的一部分）；
+            //  ② 用动画过渡而不是瞬切。高德从规划页的俯视全览“飞”进跟随视角，
+            //    全程约半秒；瞬切会让人觉得画面被硬拽了一下。
+            let fwd = MapViewRepresentable.forwardCoordinate(
+                loc,
+                meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                bearingDeg: heading)
+            cam.centerCoordinate = MapGeo.toGCJ(fwd)
             cam.centerCoordinateDistance = distance
             cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
             context.coordinator.setRegionProgrammatically {
                 map.userTrackingMode = .none
-                map.setCamera(cam, animated: false)
+                map.setCamera(cam, animated: true)
             }
         }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
