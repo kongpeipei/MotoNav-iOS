@@ -1680,11 +1680,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                     r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
                     r.lineWidth = self.navigating ? 7 : 5
                 } else if self.alternatePolylines.contains(where: { $0 === poly }) {
-                    // v2.34 备选路线：深蓝虚线（对比度增强）——原灰 0.62 在浅色底图上发灰发浅，
-                    // 与推荐路线的绿双层难区分；改深蓝+虚线后"主/备"一眼可辨（点哪条哪条变绿不变）。
-                    r.strokeColor = UIColor(red: 0.16, green: 0.42, blue: 0.88, alpha: 0.95)
-                    r.lineWidth = 5
-                    r.lineDashPattern = [6, 4]
+                    // v2.71 备选路线改高德风：中性灰细实线，主动"退到背景层"。
+                    // 旧版是深蓝 + 虚线，看着像施工绕行或禁行路段，两条备选并排时
+                    // 蓝虚线比绿主路线还抢眼，主次完全颠倒。
+                    // 高德的做法正好相反：备选只是一条淡淡的灰线，靠"主路线是彩色的"来区分。
+                    r.strokeColor = self.navigating
+                        ? UIColor(white: 0.78, alpha: 0.85)
+                        : UIColor(white: 0.56, alpha: 0.85)
+                    r.lineWidth = 3.5
+                    r.lineDashPattern = nil
                 } else {
                     r.strokeColor = UIColor(red: 0.32, green: 0.74, blue: 0.35, alpha: 1.0)
                     r.lineWidth = 4
