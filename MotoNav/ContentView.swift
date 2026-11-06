@@ -1656,10 +1656,14 @@ struct ContentView: View {
             // v2.56 地点卡原来停在屏幕中部（0.66 屏高），横切在"我的位置→搜索点"的黑线中间，
             // 把连线和当前位置箭头都压住了。改成贴底悬浮（对齐高德地点卡），
             // 地图中上部完整露出，黑线一眼看全；左右可拖、上滑仍在。
+            // v2.60 resetOnAppear：地点卡是"选中后临时弹出"的一次性卡片，
+            // 不该记住被拖到哪儿 —— 历史上只要拖过一次，之后每次点搜索结果都会停在
+            // 半空（用户实机里长期卡在 57% 屏高，压着路线）。改成每次出现都贴底。
             DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
                            bottomAnchor: true,
                            deleteLabel: "关闭",
-                           onSwipeLeft: { closeTapPlace() }) { AnyView(tapPlaceCard(tp)) }
+                           onSwipeLeft: { closeTapPlace() },
+                           resetOnAppear: true) { AnyView(tapPlaceCard(tp)) }
         } else if let t = tipCard {
             // v2.56 同 tapplace：贴底，不再横在画面中间遮路线
             DraggableFloat(key: "tipcard", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,

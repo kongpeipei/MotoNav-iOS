@@ -92,6 +92,28 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 「屏幕减去 edgePadding」的可见带里，矩形中心因此落在可见带中心 ——
     /// 这正是高德"选中地点后点位在卡片之间居中"的效果，
     /// 直接 setRegion 只能把点放在全屏中心，底部会被卡片吃掉一半。
+    /// v2.60 把两个坐标装进同一个矩形（含最小边长），用于"连线居中"：
+    /// 两点几乎重合时矩形会退化成一个点，setVisibleMapRect 会把地图顶到最大缩放，
+    /// 所以补一个 minSideMeters 的下限（约 900m 见方，城市里看得清路名与街区）。
+    static func rect(between a: CLLocationCoordinate2D,
+                     and b: CLLocationCoordinate2D,
+                     minSideMeters: Double) -> MKMapRect {
+        let pa = MKMapPoint(a)
+        let pb = MKMapPoint(b)
+        var r = MKMapRect(x: min(pa.x, pb.x), y: min(pa.y, pb.y),
+                          width: abs(pa.x - pb.x), height: abs(pa.y - pb.y))
+        let minSide = minSideMeters * MKMapPointsPerMeterAtLatitude((a.latitude + b.latitude) / 2)
+        if r.size.width < minSide {
+            r.origin.x -= (minSide - r.size.width) / 2
+            r.size.width = minSide
+        }
+        if r.size.height < minSide {
+            r.origin.y -= (minSide - r.size.height) / 2
+            r.size.height = minSide
+        }
+        return r
+    }
+
     static func centerRect(_ c: CLLocationCoordinate2D, meters: Double) -> MKMapRect {
         let p = MKMapPoint(c)
         let half = meters / 2 * MKMapPointsPerMeterAtLatitude(c.latitude)
@@ -770,12 +792,25 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 下方全是身后的路，顶部提示还会被换成"继续导航"。
             if !navigating, focusTick > 0, let fc = focusCoord {
                 context.coordinator.userMoved = true
+                let from = searchLinkFrom
+                let dest = MapGeo.toGCJ(fc)
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .none
-                    // v2.50 途经点定位同样按可视区留白居中，避免贴到卡片边缘
-                    map.setVisibleMapRect(
-                        MapViewRepresentable.centerRect(MapGeo.toGCJ(fc), meters: 600),
-                        edgePadding: viewportInsets, animated: true)
+                    // v2.60 选中地点：把「我的位置 → 目的地」整条连线装进可见区，
+                    // 而不是只把目的地居中。setVisibleMapRect 会把矩形铺满
+                    // （屏幕减去 viewportInsets），矩形中心 = 可见区中心，
+                    // 于是连线的中点正好落在卡片上方那块地图的正中间。
+                    if let from {
+                        map.setVisibleMapRect(
+                            MapViewRepresentable.rect(between: MapGeo.toGCJ(from), and: dest,
+                                                      minSideMeters: 900),
+                            edgePadding: viewportInsets, animated: true)
+                    } else {
+                        // v2.50 途经点定位同样按可视区留白居中，避免贴到卡片边缘
+                        map.setVisibleMapRect(
+                            MapViewRepresentable.centerRect(dest, meters: 600),
+                            edgePadding: viewportInsets, animated: true)
+                    }
                 }
             }
         }

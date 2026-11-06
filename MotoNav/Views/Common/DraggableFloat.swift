@@ -48,6 +48,10 @@ struct DraggableFloat<Content: View>: View {
     /// 传它下沿的 y，本浮层顶边不得高于它 —— 即"卡片去躲那个点"，而不是把点挪走。
     /// 传 0 表示不限制（默认）。
     var avoidTop: CGFloat = 0
+    /// v2.60 每次出现都回默认位（不读 UserDefaults 记忆值）。
+    /// 用于"选中地点后临时弹出的卡片"：这类卡没有"用户希望它记住位置"的语义，
+    /// 反而一旦被拖过一次就永久停在半空（地点卡长期卡在 57% 屏高就是这个）。
+    var resetOnAppear: Bool = false
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -72,6 +76,7 @@ struct DraggableFloat<Content: View>: View {
          extraBottomInset: CGFloat = 0,
          avoidBottom: CGFloat = 0,
          avoidTop: CGFloat = 0,
+         resetOnAppear: Bool = false,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -83,6 +88,7 @@ struct DraggableFloat<Content: View>: View {
         self.extraBottomInset = extraBottomInset
         self.avoidBottom = avoidBottom
         self.avoidTop = avoidTop
+        self.resetOnAppear = resetOnAppear
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -118,8 +124,9 @@ struct DraggableFloat<Content: View>: View {
             UserDefaults.standard.set(Double(defaultPos.x), forKey: "\(key).x")
             UserDefaults.standard.set(Double(defaultPos.y), forKey: "\(key).y")
         }
-        let savedX = stale ? nil : x
-        let savedY = stale ? nil : y
+        // v2.60 一次性弹出的卡片每次都回默认位：不读记忆坐标
+        let savedX = (stale || resetOnAppear) ? nil : x
+        let savedY = (stale || resetOnAppear) ? nil : y
         // v1.97 兜底钳制：历史拖动位置可能落在屏幕外（如旧版缩放键 6%），这里拉回可视区
         // v2.23 顶部锁定：y 一律取 defaultPos.y（顶部），历史位置不再生效，
         // 保证"下次打开软件卡片顶部仍在屏幕顶部"。
@@ -312,7 +319,8 @@ struct DraggableFloat<Content: View>: View {
                                   v.translation.width < -80,
                                   abs(v.translation.width) > abs(v.translation.height) {
                             onSwipeLeft()
-                        } else if !topLocked {
+                        } else if !topLocked, !resetOnAppear {
+                            // resetOnAppear 的卡片不落盘：下次出现一律回默认位
                             UserDefaults.standard.set(pos.x, forKey: "\(key).x")
                             UserDefaults.standard.set(pos.y, forKey: "\(key).y")
                         }
