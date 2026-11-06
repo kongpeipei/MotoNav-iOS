@@ -1662,7 +1662,11 @@ struct ContentView: View {
                 // v2.32 默认位置上移 0.70→0.66：与退出卡清晰分层（路口放大图在上、退出卡贴底）。
                 // v2.32 全览时一并隐藏：全览条在 y0.70，不清掉这两卡会叠在全览条上
                 if !showRouteOverview {
-                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.66)) { AnyView(turnAheadCard) }
+                    // v2.63 位置 0.66 → 0.20：这个 110x110 的路口方块和顶部提示条
+                    // 报的是同一件事（下一步怎么转、多远），却悬在屏幕中段，
+                    // 正好横在中轴线把整条路线切成两截。高德的路口放大图只出现在屏幕上部，
+                    // 这里跟着上移，中下部留给路线和定位箭头。
+                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.20)) { AnyView(turnAheadCard) }
                 }
             }
         }
@@ -3411,7 +3415,10 @@ struct ContentView: View {
             // 头盔视野下这两块是纯视觉噪声，而且缩放按钮在骑行中几乎不用
             //（有"视野"档位按钮就够了）。屏幕上少两块，地图信息更干净。
             if !model.ridingMinimalUI {
-                if tapPlace == nil && tipCard == nil {
+                // v2.63 规划态也显示缩放组：旧条件只认"没地点卡、没提示卡"，
+                // 而选中地点进入规划后 tapPlace 仍在，整组 +/−/3D 被一起隐藏 ——
+                // 用户 v2.58 截图里"起终点卡与缩放组同时不见"就是这条。
+                if (tapPlace == nil && tipCard == nil) || !model.routeChoices.isEmpty {
                     // v2.54 底部卡片避让：规划态下卡约 250pt、行程卡约 215pt，
                     // 否则右侧 +/−/3D 会被卡片压住半个（看着在、点不到）
                     // v2.55 避让量改成"卡片实测屏幕框"推导。
