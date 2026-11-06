@@ -47,11 +47,15 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 注：这里必须是 **static** —— 调用点在 MapViewRepresentable.updateUIView 里，
     /// 而 Coordinator 是它的嵌套类，Coordinator 的实例方法在 struct 层不可见。
     static func altitudeForScale(_ metersPerCm: Int, screenH: CGFloat) -> Double {
+        // v2.60 首帧兜底：makeUIView 与"刚点开始导航"那一刻，map.bounds 有可能还是 .zero，
+        // 传进来 0 会把物理高度算成 0、相机距离被钳到下限 50m —— 相机等于贴在地面上，
+        // 一栋普通楼就盖住半个屏幕，当前位置箭头和路线整条被楼块吞掉（用户实机就是这样）。
+        let sh = screenH > 200 ? screenH : UIScreen.main.bounds.height
         // ① 屏幕物理高度（厘米）
         //    pt 本身就是物理单位（1pt = 1/72 英寸），与 nativeScale 无关。
         //    注意：不能写成 screenH / nativeScale / 2.54 —— 那会多除了一个缩放倍数，
         //    iPhone 14（844pt @3x）会算成 110cm（真实 29.8cm），差 3.7 倍。
-        let physicalHeightCm = Double(screenH) / 72.0 * 2.54
+        let physicalHeightCm = Double(sh) / 72.0 * 2.54
         // ② 「1 厘米 = N 米」→ 屏幕竖直方向张开的地面距离
         let spanMeters = physicalHeightCm * Double(metersPerCm)
         // ③ 俯视 45°（导航态）时，屏幕张开地面距离 ≈ 1.689 × 相机到中心的地面距离，
@@ -60,7 +64,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         //      顶边射线水平距 + 底边射线水平距 = 1.689 × D
         //    旧代码用的 0.62 恰好接近，但它是设给 altitude（垂直高度）用的，
         //    而 altitude = D × sin(45°) = 0.707D，两者是不同的量。
-        return max(spanMeters * 0.592, 50)
+        // v2.60 下限 50 → 190：50m 是"贴地视角"，任何一栋楼都能糊住线路；
+        // 190m 保证即使按最内档（20 米/厘米）算错，画面上仍至少有三百米的前方视野。
+        // 正常档位算出来的值（20 档约 365m）都在这个下限之上，不影响原有换算。
+        return max(spanMeters * 0.592, 190)
     }
 
     /// v2.60 底图 POI 白名单（make 与导航态翻转重建两处共用）。
