@@ -274,9 +274,9 @@ struct ContentView: View {
             // 又和行程卡的下沿挤在一起。关掉行程卡后 tab 自动回来。
             // v2.60 规划页（方案卡在屏）也隐藏 tab：下卡改成贴底后，
             // 卡片底边就在 tab 条上沿，tab 露在下面既没用又会被卡压住。
-            if !model.navigating && !uiHidden && !searchActive && tapPlace == nil
-                && tipCard == nil && model.tripSummary == nil
-                && model.routeChoices.isEmpty {
+            // v2.68 首页的 tab 已合并进搜索卡；这条常驻 tab 只在「我的」页保留
+            // （那一页整页替换，卡不在屏上，需要一个回「导航」的入口）。
+            if selectedTab == 1 {
                 AnyView(bottomTabBar)
             }
         }
@@ -4744,9 +4744,18 @@ struct ContentView: View {
                     AnyView(onlineTipsList)
                 }
             }
-            // v2.56 "导航/我的"从卡片内移出（见 bottomLayerGroup 里的常驻贴底 tab）：
-            // 搜索卡只留搜索框本身，既跟高德一致，也让卡片变矮、能被自由上下拖动。
-            // 旧的 tabButtonsRow 定义保留在下方，但不再挂载。
+            // v2.68 用户要求把「搜索框」和「tab 按钮」合并成一张卡（高德首页就是这种）：
+            // 搜索框在上，导航/我的 一行在下，整块一起上下拖。
+            // 搜索整屏页不挂 tab（高德搜索页也没有）。
+            if !searchActive {
+                // 普通态整卡是透明底（只留搜索胶囊），tab 行必须自带白底胶囊，
+                // 否则未选中的"我的"是透明按钮、文字直接压在地图上读不清。
+                AnyView(tabButtonsRow)
+                    .padding(4)
+                    .background(Color(.systemBackground), in: Capsule())
+                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                    .padding(.top, 6)
+            }
         }
         // v2.68 20 → 12：用户要求搜索框横向再长一点，两侧多让出 8pt
         .padding(.horizontal, 12)
