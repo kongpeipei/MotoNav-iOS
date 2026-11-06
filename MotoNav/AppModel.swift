@@ -2679,8 +2679,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             heading = compass.angle
             UIApplication.shared.isIdleTimerDisabled = true // 导航中屏幕常亮（高德式）
             pitchDeg = 45         // v2.01 开始导航：3D 45° 俯视（视野见 MapView）
-            // v2.22 导航开启即切到"比例尺 1 厘米 = 50 米"的视野档位
-            navScaleTarget = 50
+            // v2.49 起步视野按当前速度直接定档
+            // （旧版先写死 50、再被自动切档改掉，开导航瞬间地图要跳两次）
+            navScaleTarget = autoNavScaleTarget(snap: true)
             navScaleTick += 1
             navUserMoved = false
             navigateFollowTick += 1
@@ -3626,7 +3627,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return deg < 0 ? deg + 360 : deg
     }
 
-    /// 导航视野切换：1 厘米对应多少米（50 = 近，500 = 远）
+    /// 导航视野切换：1 厘米对应多少米（25 = 最近，100 = 最远）
     func setNavScale(_ metersPerCm: Int) {
         guard navScaleTarget != metersPerCm else { return }
         navScaleTarget = metersPerCm
@@ -3649,17 +3650,53 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.29 用户最后一次手动切档的时间（用于抑制自动切换）
     private var lastManualScaleAt: Date = .distantPast
 
-    /// v2.29 按速度自动选择视野档位（米/厘米）
+    /// v2.49 五档视野表（米/厘米）：25 / 35 / 50 / 70 / 100
     ///
-    /// 速度阈值参考城区骑行实际体验：
-    /// · < 18 km/h（≈5 m/s）→ 近景 30：路口密集的老城区，要看清下一个路口
-    /// · 18~38 km/h → 中景 50：市区常规骑行
-    /// · > 38 km/h → 远景 200：快速路，要看前方排队
-    func autoNavScaleTarget() -> Int {
-        let kph = currentSpeed * 3.6
-        if kph < 18 { return 30 }
-        if kph < 38 { return 50 }
-        return 200
+    /// 高德对照结论：旧版只有 30/50/200 三档，38 km/h 以上直接进 200 档
+    /// —— 整屏地面跨度 5.9 km、前方可见近 3 km，路口与车道线全糊成一片；
+    /// 且 50→200 是 4 倍硬跳，无中间档。现改为 5 档、跨度最大 100（前方约 1.5 km）。
+    static let navScaleSteps = [25, 35, 50, 70, 100]
+    /// 相邻档位的升级边界（km/h）：25→35→50→70→100 分别在 12/22/35/50 以上
+    private static let navScaleUpBounds = [12, 22, 35, 50]
+    /// 切档滞回带宽（km/h）：GPS 速度在阈值附近抖动时不来回切档
+    private static let navScaleHysteresis = 3.0
+    /// 临近转向的临时近景半径（米）
+    private static let navTurnZoomRadiusM = 250
+
+    /// v2.49 按速度自动选择视野档位（米/厘米）
+    ///
+    /// 相比 v2.29 的三档：
+    /// ① 五档细分，市区 20~35 km/h 不再被迫用"前方 745m"的中景；
+    /// ② ±3 km/h 滞回，速度抖动不会把地图来回缩放；
+    /// ③ 每次只挪一档，速度突变时 1~2 秒平滑推进，而不是一次跳 4 倍；
+    /// ④ 距下一转向 <250m 临时降一档，路口看得清（转过后自动恢复）。
+    /// - Parameter snap: true 时直接按速度查表定档（不逐档递进）——
+    ///   用于"开始导航 / 继续导航"这类需要一步到位的场景，避免从上次档位一秒一档地挪
+    func autoNavScaleTarget(snap: Bool = false) -> Int {
+        let kph = max(0.0, currentSpeed * 3.6)
+        let steps = AppModel.navScaleSteps
+        var idx: Int
+        if snap {
+            idx = 0
+            for b in AppModel.navScaleUpBounds where kph >= Double(b) { idx += 1 }
+        } else {
+            idx = steps.firstIndex(of: navScaleTarget) ?? 2
+        }
+        // 升档：超过边界 + 滞回带
+        if !snap, idx < steps.count - 1,
+           kph >= Double(AppModel.navScaleUpBounds[idx]) + AppModel.navScaleHysteresis {
+            idx += 1
+        }
+        // 降档：低于边界 - 滞回带
+        else if !snap, idx > 0,
+                kph <= Double(AppModel.navScaleUpBounds[idx - 1]) - AppModel.navScaleHysteresis {
+            idx -= 1
+        }
+        // 临近转向：临时降一档看清路口
+        if navigating, (navStatusCache?.distToTurnM ?? 9_999) < AppModel.navTurnZoomRadiusM, idx > 0 {
+            idx -= 1
+        }
+        return steps[idx]
     }
 
     /// v2.29 在定位回调里调用：按速度自动切视野
@@ -3677,22 +3714,20 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// v2.28 循环切换导航视野档位（近 / 中 / 远）
+    /// v2.49 循环切换导航视野档位（五档：25 / 35 / 50 / 70 / 100 米每厘米）
     ///
-    /// 三档对应骑行时三种真实需求：
-    /// · 近景 30m/cm —— 看清下一个路口的转向细节（路口密集的老城区）
-    /// · 中景 50m/cm —— 默认档，兼顾路口与前方路况
-    /// · 远景 200m/cm —— 看前方几百米的排队情况（大路/高架）
+    /// 五档对应骑行时五种真实需求：
+    /// · 25/35 —— 看清下一个路口的转向细节（路口密集的老城区）
+    /// · 50 —— 默认档，兼顾路口与前方路况
+    /// · 70/100 —— 看前方几百米的排队情况（大路/高架）
     ///
     /// 骑行中单手操作，所以只做一个循环按钮而不是分段控件：
     /// 按一次切到下一档，不用瞄准。
     func cycleNavScale() {
-        let next: Int
-        switch navScaleTarget {
-        case ..<40: next = 50      // 近 → 中
-        case 40..<120: next = 200  // 中 → 远
-        default: next = 30         // 远 → 近
-        }
+        // v2.49 五档循环：25 → 35 → 50 → 70 → 100 → 25
+        let steps = AppModel.navScaleSteps
+        let idx = steps.firstIndex(of: navScaleTarget) ?? 2
+        let next = steps[(idx + 1) % steps.count]
         // v2.29 记录手动操作：20 秒内不被自动切换覆盖
         lastManualScaleAt = Date()
         setNavScale(next)

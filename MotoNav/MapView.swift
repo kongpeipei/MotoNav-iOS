@@ -63,6 +63,27 @@ struct MapViewRepresentable: UIViewRepresentable {
         return max(spanMeters * 0.592, 50)
     }
 
+    /// v2.49 导航态"车位置下移"比例：相机中心落在车前 35% 视距处。
+    ///
+    /// 0 = 车在屏幕正中（45° 俯角下前方只剩半屏，远处还会被透视压缩）；
+    /// 0.35 = 车出现在屏高约 70%，前方占 2/3 屏——高德同款布局，前方视野提升约 40%。
+    static let navCameraForwardRatio: Double = 0.35
+
+    /// 沿方位角前移若干米（球面近似）。用于把相机中心放到车前方，
+    /// 这样车就落在屏幕下方 1/3，而不是正中。
+    static func forwardCoordinate(_ c: CLLocationCoordinate2D,
+                                  meters: Double,
+                                  bearingDeg: Double) -> CLLocationCoordinate2D {
+        let earthR = 6_371_000.0
+        let br = bearingDeg * .pi / 180
+        let lat1 = c.latitude * .pi / 180
+        let lon1 = c.longitude * .pi / 180
+        let d = meters / earthR
+        let lat2 = asin(sin(lat1) * cos(d) + cos(lat1) * sin(d) * cos(br))
+        let lon2 = lon1 + atan2(sin(br) * sin(d) * cos(lat1), cos(d) - sin(lat1) * sin(lat2))
+        return CLLocationCoordinate2D(latitude: lat2 * 180 / .pi, longitude: lon2 * 180 / .pi)
+    }
+
     /// v2.12 外观跟随：手动浅色/深色时地图底图一起切（导航中始终深色）
     @Environment(\.colorScheme) private var colorScheme
     let userLocation: CLLocationCoordinate2D?
@@ -235,7 +256,24 @@ struct MapViewRepresentable: UIViewRepresentable {
             if locateTick > 0 {
                 context.coordinator.userMoved = false // 恢复跟随/自动旋转
                 context.coordinator.setRegionProgrammatically {
-                    map.userTrackingMode = .followWithHeading
+                    if navigating {
+                        // v2.49 导航态手动跟随：点定位恢复"车在下方 1/3 + 前视"，
+                        // 而不是系统跟随（系统跟随只能把车放正中）
+                        map.userTrackingMode = .none
+                        let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: map.bounds.height)
+                        if let loc = userLocation {
+                            var cam = map.camera
+                            cam.centerCoordinate = MapGeo.toGCJ(
+                                MapViewRepresentable.forwardCoordinate(
+                                    loc,
+                                    meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                                    bearingDeg: heading))
+                            cam.centerCoordinateDistance = distance
+                            map.setCamera(cam, animated: true)
+                        }
+                    } else {
+                        map.userTrackingMode = .followWithHeading
+                    }
                 }
             }
         } else if !context.coordinator.hasCentered, let loc = userLocation {
@@ -696,22 +734,32 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 用 altitude（相机到地面的距离）反推：正交俯视时 altitude ≈ 视野米数
         if navScaleTick != context.coordinator.lastNavScaleTick {
             context.coordinator.lastNavScaleTick = navScaleTick
-            if navScaleTick > 0, let loc = userLocation {
-                context.coordinator.userMoved = false
+            // v2.49 切档不抢跟随：用户拖开地图看路况时只换比例尺，不把画面拽回来
+            // （旧版这里把 userMoved 置 false 并重设 followWithHeading，速度一变地图就自己跳回）
+            if navScaleTick > 0, let loc = userLocation, !context.coordinator.userMoved {
                 let screenH = map.bounds.height
                 // v2.28：用真实物理尺寸换算（不再用 ptPerCm=38 硬编码）
-                let altitude = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: screenH)
+                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: screenH)
                 context.coordinator.setRegionProgrammatically {
-                    map.userTrackingMode = .followWithHeading
+                    // v2.49 导航态改手动跟随（.none）：相机中心放在车前 35% 视距，
+                    // 车落在屏幕下方 1/3，前方视野比"车居中"多约 40%（高德同款）
+                    map.userTrackingMode = navigating ? .none : .followWithHeading
                     var cam = map.camera
-                    cam.centerCoordinate = MapGeo.toGCJ(loc)
+                    cam.centerCoordinate = MapGeo.toGCJ(
+                        navigating
+                            ? MapViewRepresentable.forwardCoordinate(
+                                loc,
+                                meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                                bearingDeg: heading)
+                            : loc)
                     // v2.28：用 centerCoordinateDistance（相机到地图中心的地面距离），
                     // 不用 altitude（相机到地面的垂直高度）——
                     // 有俯角（pitch=45°）时两者不相等，而 altitudeForScale
                     // 算出来的是"中心点的地面距离"，必须用同一个量才准。
-                    cam.centerCoordinateDistance = altitude
+                    cam.centerCoordinateDistance = distance
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-                    map.camera = cam
+                    // v2.49 平滑过渡：档位切换用 MapKit 动画，不再瞬跳（旧版直接赋值，画面硬切）
+                    map.setCamera(cam, animated: true)
                 }
             }
         }
@@ -723,14 +771,25 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.navLastFollow = loc
             }
             context.coordinator.setRegionProgrammatically {
-                map.userTrackingMode = .followWithHeading
+                // v2.49 导航态用手动跟随（车位置下移），非导航态保持系统朝向跟随
+                map.userTrackingMode = navigating ? .none : .followWithHeading
                 if navigating {
                     // v2.22 导航视野改为按"比例尺 1 厘米 = N 米"反推（默认 50 米/厘米）
                     var cam = map.camera
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
                     // v2.28：与 navScaleTick 用同一套换算（真实物理尺寸）
-                    cam.centerCoordinateDistance = MapViewRepresentable.altitudeForScale(navScaleTarget,
-                                                                           screenH: map.bounds.height)
+                    let distance = MapViewRepresentable.altitudeForScale(navScaleTarget,
+                                                                        screenH: map.bounds.height)
+                    cam.centerCoordinateDistance = distance
+                    // v2.49 相机中心放到车前 35% 视距：车出现在屏高约 70%，前方占 2/3 屏
+                    if let loc = userLocation {
+                        cam.centerCoordinate = MapGeo.toGCJ(
+                            MapViewRepresentable.forwardCoordinate(
+                                loc,
+                                meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                                bearingDeg: heading))
+                    }
+                    map.camera = cam
                 } else {
                     // v2.33 退出导航/到达/清路线：回 2D 平视，导航 45° 俯视不残留
                     // （到达终点分支此前没把 pitchDeg 置 0，地图会一直停在俯视视角）
@@ -768,11 +827,40 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.userMoved = false
                 context.coordinator.navLastFollow = loc
                 context.coordinator.setRegionProgrammatically {
-                    map.userTrackingMode = .followWithHeading
+                    // v2.49 拉回时同步把相机放到车前（.none 下系统不再自动居中）
+                    map.userTrackingMode = .none
+                    let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: map.bounds.height)
+                    var cam = map.camera
+                    cam.centerCoordinate = MapGeo.toGCJ(
+                        MapViewRepresentable.forwardCoordinate(
+                            loc,
+                            meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                            bearingDeg: heading))
+                    cam.centerCoordinateDistance = distance
+                    map.setCamera(cam, animated: true)
                 }
             }
         } else if navigating, let loc = userLocation {
+            // v2.49 手动跟随：坐标移动超过 4m 才挪相机（定位回调 1Hz，足够平滑；
+            // 避免每次 updateUIView 都重设相机造成画面抖动）
+            let last = context.coordinator.navLastFollow
+            let movedM = last.map {
+                CLLocation(latitude: loc.latitude, longitude: loc.longitude)
+                    .distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude))
+            } ?? .greatestFiniteMagnitude
             context.coordinator.navLastFollow = loc
+            if !context.coordinator.userMoved, movedM > 4, map.userTrackingMode == .none {
+                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: map.bounds.height)
+                let fwd = MapViewRepresentable.forwardCoordinate(
+                    loc,
+                    meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                    bearingDeg: heading)
+                context.coordinator.setRegionProgrammatically {
+                    var cam = map.camera
+                    cam.centerCoordinate = MapGeo.toGCJ(fwd)
+                    map.setCamera(cam, animated: true)
+                }
+            }
         }
         // v1.84 巡航模式：进入时缩放巡航视野（约 2000m 高，平视），随后定位点跟随（GPS 抖动 >25m 才更新相机）
         if cruise != context.coordinator.lastCruise {

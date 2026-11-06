@@ -3279,7 +3279,9 @@ struct ContentView: View {
                     Button {
                         haptic()
                         model.navUserMoved = false
-                        model.setNavScale(500)
+                        // v2.49 恢复导航视野：按当前速度重新定档。
+                        // （旧版写死 500 米/厘米 = 整屏近 15km，等于把地图拉到看不见路）
+                        model.setNavScale(model.autoNavScaleTarget(snap: true))
                         model.navigateFollowTick += 1
                     } label: {
                         Text("继续导航")
@@ -3744,9 +3746,10 @@ struct ContentView: View {
 
     /// v2.28 视野档位标题（导航左侧竖排按钮）
     private var navScaleTitle: String {
+        // v2.49 五档：25/35 近景、50 中景、70/100 远景
         switch model.navScaleTarget {
-        case ..<40: return "近景"
-        case 40..<120: return "中景"
+        case 25, 35: return "近景"
+        case 50: return "中景"
         default: return "远景"
         }
     }
@@ -3754,8 +3757,8 @@ struct ContentView: View {
     /// v2.28 视野档位图标
     private var navScaleIcon: String {
         switch model.navScaleTarget {
-        case ..<40: return "plus.magnifyingglass"
-        case 40..<120: return "circle.lefthalf.filled"
+        case 25, 35: return "plus.magnifyingglass"
+        case 50: return "circle.lefthalf.filled"
         default: return "minus.magnifyingglass"
         }
     }
