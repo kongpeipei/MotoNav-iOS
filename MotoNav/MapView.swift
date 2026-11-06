@@ -244,7 +244,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var parts: [String] = [
             "\(route.count)", navigating ? "nav" : "plan", "\(selectedRouteIdx)",
             "\(choiceRoutes.count)", "\(trafficSpans.count)", "\(footprint.count)",
-            "\(tipPolygon?.count ?? 0)"
+            "\(tipPolygon?.count ?? 0)",
+            // v2.52 已走段灰色取决于 traveledIdx，旧键不含它 —— 路况不刷新时
+            // 整条路线一直是绿的，走过的部分不会变灰。按 10 个点为粒度纳入键，
+            // 避免每秒全量重建上千点折线（v2.02 的性能教训）。
+            navigating ? "ti:\(traveledIdx / 10)" : "ti:0"
         ]
         if let f = route.first { parts.append("\(f.latitude),\(f.longitude)") }
         if let l = route.last { parts.append("\(l.latitude),\(l.longitude)") }
@@ -265,6 +269,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.choiceRoutes = choiceRoutes
         context.coordinator.selectedRouteIdx = selectedRouteIdx
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
+        context.coordinator.navigating = navigating
         context.coordinator.onMapLoad = onMapLoad
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
         if locateTick != context.coordinator.lastLocateTick {
@@ -1025,6 +1030,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var selectedRouteIdx = 0
         /// v1.98 规划态：此时轻点地图任何位置（含地名标签）都应退出规划回首页
         var planning = false
+        /// v2.52 导航态（渲染器按它加粗路线：导航中视距更远，9pt 线在 3D 下太细）
+        var navigating = false
         /// v1.69 地图加载回调（MKMapView 渲染完成/失败）
         var onMapLoad: ((Bool, String) -> Void)?
         /// v1.69 重载计数记忆
@@ -1475,13 +1482,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 if let ti = self.trafficPolylines.firstIndex(where: { $0 === poly }) {
                     // 防御：数组若因并发/重建短暂不同步，越界会直接崩（crash 日志里的常见项）
                     r.strokeColor = ti < self.trafficColors.count ? self.trafficColors[ti] : UIColor.systemOrange
-                    r.lineWidth = 7
+                    r.lineWidth = self.navigating ? 9 : 7
                     return r
                 }
                 if poly === self.traveledPolyline {
                     // v2.22 已走过的路段：灰色实线（未走的保持草绿）
                     r.strokeColor = UIColor(white: 0.55, alpha: 0.95)
-                    r.lineWidth = 6
+                    r.lineWidth = self.navigating ? 12 : 6   // v2.52 与导航路线同宽
                     return r
                 }
                 if self.connectorPolylines.contains(where: { $0 === poly }) {
@@ -1506,11 +1513,12 @@ struct MapViewRepresentable: UIViewRepresentable {
                 if poly === self.underPolyline {
                     // v1.66 高德式绿色并行线：深绿外框（路线更贴路、双线视觉）
                     r.strokeColor = UIColor(red: 0.10, green: 0.55, blue: 0.22, alpha: 1.0)
-                    r.lineWidth = 9
+                    // v2.52 导航态加粗到 13/7（高德导航路线约 12~14pt；规划态保持 9/5）
+                    r.lineWidth = self.navigating ? 13 : 9
                 } else if poly === self.mainPolyline {
                     // 推荐路线：浅绿内芯（高德绿路线双线效果）
                     r.strokeColor = UIColor(red: 0.42, green: 0.84, blue: 0.46, alpha: 1.0)
-                    r.lineWidth = 5
+                    r.lineWidth = self.navigating ? 7 : 5
                 } else if self.alternatePolylines.contains(where: { $0 === poly }) {
                     // v2.34 备选路线：深蓝虚线（对比度增强）——原灰 0.62 在浅色底图上发灰发浅，
                     // 与推荐路线的绿双层难区分；改深蓝+虚线后"主/备"一眼可辨（点哪条哪条变绿不变）。

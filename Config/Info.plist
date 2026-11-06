@@ -33,6 +33,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音输入目的地：说话即可搜索，骑行时不必停车打字。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>用于把您说的地名转成文字并填入搜索框（识别在本机/系统完成）。</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>骑行导航时需要在后台持续定位，以便及时提醒前方点位</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

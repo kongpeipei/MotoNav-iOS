@@ -3650,14 +3650,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.29 用户最后一次手动切档的时间（用于抑制自动切换）
     private var lastManualScaleAt: Date = .distantPast
 
-    /// v2.49 五档视野表（米/厘米）：25 / 35 / 50 / 70 / 100
+    /// v2.52 五档视野表（米/厘米）：22 / 30 / 42 / 58 / 80
     ///
-    /// 高德对照结论：旧版只有 30/50/200 三档，38 km/h 以上直接进 200 档
-    /// —— 整屏地面跨度 5.9 km、前方可见近 3 km，路口与车道线全糊成一片；
-    /// 且 50→200 是 4 倍硬跳，无中间档。现改为 5 档、跨度最大 100（前方约 1.5 km）。
-    static let navScaleSteps = [25, 35, 50, 70, 100]
-    /// 相邻档位的升级边界（km/h）：25→35→50→70→100 分别在 12/22/35/50 以上
-    private static let navScaleUpBounds = [12, 22, 35, 50]
+    /// 对照高德的结论：v2.49 这一版**整体偏大 30%~40%**。
+    /// 旧值 25/35/50/70/100 对应前方可见约 520/730/1040/1460/2080 m，
+    /// 而升级门槛只有 12/22/35/50 km/h —— 摩托车市区 30~45 km/h 就落到 50/70 档
+    /// （前方 1.0~1.5 km），高德同车速市区视距约 600~800 m。
+    /// 现整体收 12~20% 并把门槛上调（16/26/40/58），低车速时看得更近更清。
+    static let navScaleSteps = [22, 30, 42, 58, 80]
+    /// 相邻档位的升级边界（km/h）：22→30→42→58→80 分别在 16/26/40/58 以上
+    private static let navScaleUpBounds = [16, 26, 40, 58]
     /// 切档滞回带宽（km/h）：GPS 速度在阈值附近抖动时不来回切档
     private static let navScaleHysteresis = 3.0
     /// 临近转向的临时近景半径（米）
@@ -3714,7 +3716,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// v2.49 循环切换导航视野档位（五档：25 / 35 / 50 / 70 / 100 米每厘米）
+    /// v2.52 循环切换导航视野档位（五档：22 / 30 / 42 / 58 / 80 米每厘米）
     ///
     /// 五档对应骑行时五种真实需求：
     /// · 25/35 —— 看清下一个路口的转向细节（路口密集的老城区）
@@ -3724,7 +3726,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 骑行中单手操作，所以只做一个循环按钮而不是分段控件：
     /// 按一次切到下一档，不用瞄准。
     func cycleNavScale() {
-        // v2.49 五档循环：25 → 35 → 50 → 70 → 100 → 25
+        // v2.52 五档循环：22 → 30 → 42 → 58 → 80 → 22
         let steps = AppModel.navScaleSteps
         let idx = steps.firstIndex(of: navScaleTarget) ?? 2
         let next = steps[(idx + 1) % steps.count]

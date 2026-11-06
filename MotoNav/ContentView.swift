@@ -2,6 +2,8 @@ import SwiftUI
 import MapKit
 import UIKit
 import UniformTypeIdentifiers
+import Speech          // v2.52 语音搜索（SFSpeechRecognizer）
+import AVFoundation     // v2.52 语音搜索录音 / 音频会话
 
 /// v2.12 外观设置：跟随系统 / 强制浅色 / 强制深色
 struct ContentView: View {
@@ -154,6 +156,8 @@ struct ContentView: View {
     @State private var tipTask: Task<Void, Never>? = nil
     /// v2.51 联想请求进行中（无结果占位不要误报"未找到"）
     @State private var searchLoading = false
+    /// v2.52 语音搜索服务（说话即填搜索框）
+    @StateObject private var voiceSearch = VoiceSearchService()
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
     @State private var minimalMap = false
     /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
@@ -412,6 +416,10 @@ struct ContentView: View {
         // v2.16 同理：沉浸态下点了"搜周边"，类别结果条要能看到
         .onChange(of: model.categoryResults.isEmpty) { _, empty in
             if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
+        }
+        // v2.52 语音失败（未授权 / 无麦克风）用状态栏提示，避免按钮"点了没反应"
+        .onChange(of: voiceSearch.errorText) { _, e in
+            if !e.isEmpty { model.status = e }
         }
         // v2.51 键盘高度：搜索主卡靠它坐在键盘上方
         //（替代旧版手写 offset(-300)，那套不受浮层钳制约束，会把卡片顶出屏幕）
@@ -874,6 +882,16 @@ struct ContentView: View {
                            place: model.commonPlace(for: .home), slot: .home)
             commonPlaceRow(icon: "briefcase.fill", title: "公司",
                            place: model.commonPlace(for: .work), slot: .work)
+            // v2.52 收藏搜索无结果提示（旧版列表直接变空，看不出是搜错了还是没收藏）
+            if !favSearch.trimmingCharacters(in: .whitespaces).isEmpty && favoriteEntries.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                    Text("未找到「\(favSearch)」")
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 8)
+            }
             ForEach(favoriteEntries, id: \.key) { f in
                 favoriteRow(f)
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -1935,6 +1953,25 @@ struct ContentView: View {
     }
 
     /// v1.81.3 左滑关闭路线规划卡（清掉路线方案，搜索主卡自动恢复）
+    /// v2.52 规划页"改目的地"：点终点行 → 清路线回首页并聚焦搜索
+    /// （与导航底卡"搜索"入口同一套收尾，避免退出后停在一个没有搜索框的页面上）
+    private func beginDestReselect() {
+        haptic()
+        closeRoutePlan()
+        searchText = ""
+        suggestions = []
+        onlineTips = []
+        searchLoading = false
+        showSuggestions = false
+        searchExpanded = false
+        tipTask?.cancel()
+        model.status = "请选择新的目的地"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            searchFocused = true
+            uiHidden = false
+        }
+    }
+
     private func closeRoutePlan() {
         waypointSelecting = false
         model.route = []
@@ -2346,14 +2383,20 @@ struct ContentView: View {
                         model.focusWaypoint(wp)
                     }
                 }
-                // 终点（红点）
+                // 终点（红点）—— v2.52 点这一行可改目的地（高德规划页同款入口）
                 HStack(spacing: 7) {
                     Circle().fill(Color.red).frame(width: 9, height: 9)
                     Text(model.destName)
                         .font(.subheadline.bold())
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture { beginDestReselect() }
                 // v2.23 服务小卡只在 routePlanTopCard 里渲染一次（这里曾重复渲染一次，
                 // 导致"加油/充电"小卡和设施列表出现两遍）
             }
@@ -3937,6 +3980,7 @@ struct ContentView: View {
 
     private func dismissKeyboard() {
         searchFocused = false
+        voiceSearch.stop()   // v2.52 收起键盘时同时结束录音，避免后台持续占用麦克风
         // 收起键盘（同步给 focus 状态）
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
@@ -4496,6 +4540,56 @@ struct ContentView: View {
         }
     }
 
+    /// v2.52 搜索框右侧控件组：清空 / 麦克风 / 搜索·取消
+    /// 抽出来是为了让 searchInputRow 只剩「图标 + 输入框 + 控件组」，避免 ViewBuilder 分支过多
+    /// 触发 Xcode 16 的 type-check 超时（v2.47 那次踩过）
+    @ViewBuilder
+    private var searchTrailingControls: some View {
+        if !searchText.isEmpty {
+            Button {
+                searchText = ""
+                suggestions = []
+                onlineTips = []
+                searchLoading = false
+                showSuggestions = false
+                searchExpanded = false   // v2.51 清空同时复位展开高度（旧版会留 400pt 空白面板）
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 21))
+                    .foregroundStyle(.gray)
+                    .frame(width: 40, height: 40)   // v2.51 热区 40pt（旧版图标仅 15pt，骑车点不准）
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        // v2.52 麦克风：v2.23 曾因"语音搜索未实现"摘掉，现已接入 iOS 原生识别
+        if !searchFocused {
+            Button {
+                haptic()
+                if voiceSearch.isListening {
+                    voiceSearch.stop()
+                } else {
+                    model.invalidateAudioSession()   // 让 TTS 播报之后重新激活播放会话
+                    voiceSearch.start { text in
+                        searchText = text
+                        suggestions = []
+                        showSuggestions = !text.trimmingCharacters(in: .whitespaces).isEmpty
+                        searchExpanded = false
+                    }
+                }
+            } label: {
+                Image(systemName: voiceSearch.isListening ? "waveform" : "mic.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(voiceSearch.isListening ? .red : .gray)
+                    .frame(width: 40, height: 40)   // v2.52 40pt 热区
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(voiceSearch.isListening ? "停止语音输入" : "语音输入目的地")
+        }
+        searchActionButton
+    }
+
     private var searchInputRow: some View {
         return HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -4534,26 +4628,8 @@ struct ContentView: View {
                         }
                     }
                 }
-            // 一键清除输入内容（有内容时显示）
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                    suggestions = []
-                    onlineTips = []
-                    searchLoading = false
-                    showSuggestions = false
-                    searchExpanded = false   // v2.51 清空同时复位展开高度（旧版会留 400pt 空白面板）
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 21))
-                        .foregroundStyle(.gray)
-                        .frame(width: 40, height: 40)   // v2.51 热区 40pt（旧版图标仅 15pt，骑车点不准）
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            // v2.23 去掉麦克风图标（语音搜索未实现，占位按钮只会让人误以为可用）
-            searchActionButton
+            // 清除 / 麦克风 / 搜索·取消（v2.52 抽成一组，见 searchTrailingControls）
+            searchTrailingControls
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)      // v2.51 40pt 高按钮 + 6 上下 = 52，保持搜索框原高度
@@ -4863,3 +4939,153 @@ struct ContentView: View {
 }
 
 /// v1.97 "我的-常用地点"收藏项（ForEach 需要 Identifiable，不能用元组）
+
+// MARK: - v2.52 语音搜索（iOS 原生 Speech，不依赖第三方 ASR）
+
+/// 说话即搜索：SFSpeechRecognizer（zh-CN）+ AVAudioEngine 实时转写。
+///
+/// v2.23 曾因为"语音搜索未实现"把搜索框里的麦克风图标摘掉（占位按钮会误导用户）；
+/// 这一版补上真实实现，凭 iOS 自带能力，不用再引入讯飞 IAT。
+///
+/// 并发处理：这个类**不标 @MainActor**（避开 SwiftUI View 方法同步调用时的隔离冲突），
+/// 而是把所有状态写入与 AVAudioEngine 操作统一回到主线程（onMain）。
+/// 权限回调、识别回调天然在后台线程，必须先 hop 回主线程再碰 engine / @Published。
+///
+/// 音频会话：TTS 播报用的是 .playback（由 AppModel 管理并缓存激活态）。
+/// 录音必须切到 .record，因此：
+///   ① 启动前由调用方先 `model.invalidateAudioSession()`，让 TTS 下次播报重新激活；
+///   ② 结束时恢复 .playback 并 setActive(false)，把路由还给系统。
+final class VoiceSearchService: ObservableObject {
+    @Published var isListening = false
+    @Published var errorText = ""
+
+    private let engine = AVAudioEngine()
+    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var onText: ((String) -> Void)?
+    /// 只有真的装过 tap 才 removeTap —— 对没装 tap 的 bus 调 removeTap 会抛异常直接崩
+    private var tapInstalled = false
+
+    /// 统一切回主线程执行（已在主线程则直接执行，保持同步语义）
+    private func onMain(_ block: @escaping () -> Void) {
+        if Thread.isMainThread { block() } else { DispatchQueue.main.async(execute: block) }
+    }
+
+    func start(onText: @escaping (String) -> Void) {
+        guard !isListening else { return }
+        self.onText = onText
+        errorText = ""
+        guard let recognizer, recognizer.isAvailable else {
+            errorText = "语音识别暂不可用，请检查网络"
+            return
+        }
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized:
+            requestMicThenBegin()
+        case .notDetermined:
+            SFSpeechRecognizer.requestAuthorization { [weak self] status in
+                guard let self else { return }
+                self.onMain {
+                    if status == .authorized { self.requestMicThenBegin() }
+                    else { self.errorText = "未授权语音识别：设置 → 机车地图 → 语音识别" }
+                }
+            }
+        default:
+            errorText = "未授权语音识别：设置 → 机车地图 → 语音识别"
+        }
+    }
+
+    /// 结束录音并把音频会话还给 TTS
+    func stop() { finishSession() }
+
+    // MARK: - 内部
+
+    private func requestMicThenBegin() {
+        AVAudioApplication.requestRecordPermission { [weak self] granted in
+            guard let self else { return }
+            self.onMain {
+                if granted { self.begin() }
+                else { self.errorText = "未授权麦克风：设置 → 机车地图 → 麦克风" }
+            }
+        }
+    }
+
+    private func begin() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.record, mode: .measurement, options: [.duckOthers, .allowBluetooth])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        } catch {
+            errorText = "麦克风启动失败：\(error.localizedDescription)"
+            return
+        }
+        guard let recognizer, recognizer.isAvailable else {
+            errorText = "语音识别暂不可用，请检查网络"
+            restoreSession()
+            return
+        }
+
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.taskHint = .search
+        request = req
+
+        let input = engine.inputNode
+        let fmt = input.outputFormat(forBus: 0)
+        guard fmt.sampleRate > 0 else {
+            errorText = "当前设备没有可用麦克风"
+            restoreSession()
+            return
+        }
+        if tapInstalled { input.removeTap(onBus: 0) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: fmt) { buf, _ in
+            req.append(buf)
+        }
+        tapInstalled = true
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            errorText = "录音启动失败：\(error.localizedDescription)"
+            if tapInstalled { input.removeTap(onBus: 0); tapInstalled = false }
+            restoreSession()
+            return
+        }
+
+        isListening = true
+        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
+            guard let self else { return }
+            // 识别回调在后台线程：先取出值，再回主线程更新状态
+            let transcript = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal ?? false
+            let failed = error != nil
+            self.onMain {
+                if let transcript, !transcript.isEmpty { self.onText?(transcript) }
+                if isFinal || failed { self.finishSession() }
+            }
+        }
+    }
+
+    private func finishSession() {
+        // 从 UI 调 stop() 时已在主线程；从识别回调过来时调用方已 hop 回主线程
+        if engine.isRunning { engine.stop() }
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        request?.endAudio()
+        task?.cancel()
+        task = nil
+        request = nil
+        if isListening { isListening = false }
+        restoreSession()
+    }
+
+    private func restoreSession() {
+        let s = AVAudioSession.sharedInstance()
+        try? s.setActive(false, options: .notifyOthersOnDeactivation)
+        // 还给 TTS：AppModel 的 audioSessionActive 已置 false，下次播报会重新激活 Playback
+        try? s.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+    }
+}
