@@ -3611,11 +3611,15 @@ struct ContentView: View {
         //   · 距离分级：>300 米不显示米数；60~300 米取整到 10 米；≤60 米精确；
         //   · 副行显示「进入 XX 路 · 走第 N 车道」（车道数据高德本来就有，之前没用上）。
         let event = model.currentGuidanceEvent()
+        // v2.76 对齐高德的"临近转弯强调"：高德在距转向 <100 米时整条提示变绿、
+        // 箭头放大，是它导航态最容易认的一个行为。骑行时眼睛不敢长时间离开路面，
+        // 一条绿了 = 该准备转了，不用再读数字。
+        let urgent = event.distanceM > 0 && event.distanceM < 100
         return Group {
             if !event.text.isEmpty {
                 HStack(spacing: 10) {
                     Image(systemName: event.icon)
-                        .font(.system(size: 24, weight: .bold))
+                        .font(.system(size: urgent ? 30 : 24, weight: .bold))
                         .foregroundStyle(.white)
                     VStack(alignment: .leading, spacing: 1) {
                         // v2.63 主次分离（对齐高德）：把"还多远"抽出来单独放大，
@@ -3624,7 +3628,7 @@ struct ContentView: View {
                         HStack(spacing: 6) {
                             if event.distanceM > 0 {
                                 Text(topHintDistance(event.distanceM))
-                                    .font(.system(size: 27, weight: .heavy))
+                                    .font(.system(size: urgent ? 31 : 27, weight: .heavy))
                                     .foregroundStyle(.white)
                                     .monospacedDigit()
                             }
@@ -3678,8 +3682,10 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.black.opacity(0.86), in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+                .background(urgent ? Color(red: 0.10, green: 0.52, blue: 0.22).opacity(0.94)
+                                  : Color.black.opacity(0.86), in: Capsule())
+                .overlay(Capsule().strokeBorder(urgent ? Color.white.opacity(0.5) : Color.white.opacity(0.22),
+                                               lineWidth: urgent ? 1.5 : 1))
                 .padding(.horizontal, 12)   // v2.72 比例尺已删，顶部条不再让位，改为贴边全宽
             }
         }

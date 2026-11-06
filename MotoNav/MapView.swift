@@ -75,6 +75,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 旧版只留加油/医院/药店/学校/停车/公交六类，地图画面偏空；
     /// 这里补上餐饮、购物、公园、酒店、银行，层次更接近高德。
     /// 不放电影院、夜生活、景点这类会扎堆铺满的类别。
+    /// v2.76 导航态专用 POI 过滤：比普通态收紧到 5 类。
+    /// 高德一进导航，底图上的饭店/酒店/学校标签几乎全消失，只留加油站、停车这类
+    /// 骑行当下真用得上的点。我们过去导航和浏览共用一个 14 类的过滤器，
+    /// 屏幕上满是无关的店名，路线和车反而被文字盖住。
+    static let navPOIFilter = MKPointOfInterestFilter(including: [
+        .gasStation, .parking, .hospital, .pharmacy, .store
+    ])
+
     static let standardPOIFilter = MKPointOfInterestFilter(including: [
         .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport,
         .restaurant, .cafe, .bakery, .store, .park, .hotel, .bank, .atm
@@ -357,7 +365,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             // v2.60 翻转重建时把路况与 POI 一起补上：旧版这里漏设，
             // 导航态一进一出重建 configuration 后白名单和路况就被打回苹果默认
             navCfg.showsTraffic = false   // v2.66 同上：底图不再自带绿色道路线
-            navCfg.pointOfInterestFilter = MapViewRepresentable.standardPOIFilter
+            navCfg.pointOfInterestFilter = MapViewRepresentable.navPOIFilter
             map.preferredConfiguration = navCfg
         }
         // v2.53 导航态锁旋转/倾斜手势：高德导航松手即回车头朝上，
