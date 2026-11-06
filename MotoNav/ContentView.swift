@@ -1758,6 +1758,13 @@ struct ContentView: View {
             tipPolygon = nil
             return true
         }
+        // v2.58 行程卡显示期间（导航已结束）任何返回动作都应退回首页：
+        // 旧版这里缺分支，会落进下面的"退出规划"，只清了路线规划卡，
+        // 行程卡还挂在屏幕上 —— 点地图/滑返都没有"回到首页"的效果。
+        if model.tripSummary != nil {
+            dismissTripAndReset()
+            return true
+        }
         // v2.56 同 onBlankTap：导航态不清路线（routeChoices 在导航中是有意保留的）
         if !model.routeChoices.isEmpty && !model.navigating {
             closeRoutePlan()
