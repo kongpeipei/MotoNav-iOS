@@ -1591,18 +1591,7 @@ struct ContentView: View {
                     // v2.64 起终点卡：默认贴顶，全屏范围自由拖动（不再与下卡互斥）
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.10),
                                    lockX: true, topLocked: true,
-                                   onFrameChange: { planTopCardFrame = $0 },
-                                   // v2.66 松手吸附：拖的时候和方案卡随便叠，
-                                   // 松手后如果压住了方案卡，弹回方案卡顶边上方 8pt
-                                   onDragEnded: { y in
-                                       let sh = UIScreen.main.bounds.height
-                                       guard planBottomCardFrame.minY > 0,
-                                             planTopCardFrame.height > 0 else { return nil }
-                                       let bottomEdge = y * sh + planTopCardFrame.height
-                                       let limit = planBottomCardFrame.minY - 8
-                                       guard bottomEdge > limit else { return nil }
-                                       return (limit - planTopCardFrame.height) / sh
-                                   }) {
+                                   onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
                     }
                     .zIndex(60)
@@ -1620,17 +1609,7 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
-                                   resetOnAppear: true,
-                                   // v2.66 松手吸附：压住上卡时弹回，拖的过程不设限
-                                   onDragEnded: { y in
-                                       let sh = UIScreen.main.bounds.height
-                                       guard planTopCardFrame.maxY > 0,
-                                             planBottomCardFrame.height > 0 else { return nil }
-                                       let topEdge = y * sh - planBottomCardFrame.height
-                                       let limit = planTopCardFrame.maxY + 8
-                                       guard topEdge < limit else { return nil }
-                                       return (limit + planBottomCardFrame.height) / sh
-                                   }) { AnyView(routePlanBottomCard) }
+                                   resetOnAppear: true) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
                     // v2.66 删除地图常驻「分类条」：和搜索面板里的 6 宫格是同一批
