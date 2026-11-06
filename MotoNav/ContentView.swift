@@ -145,6 +145,8 @@ struct ContentView: View {
     /// 否则路线起终点正好被上下两卡遮住（用户反馈"规划了但看不到地图上的路线"）
     @State private var planTopCardFrame: CGRect = .zero
     @State private var planBottomCardFrame: CGRect = .zero
+    /// v2.55 行程卡实测屏幕框：右侧 −/3D 的避让量改由它真实推导（原来写死 215 是按估算卡高拍的）
+    @State private var tripCardFrame: CGRect = .zero
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
@@ -3266,7 +3268,8 @@ struct ContentView: View {
         if let s = model.tripSummary {
             DraggableFloat(key: "tripsummary", defaultPos: CGPoint(x: 0.5, y: 0.62), lockX: true,
                            deleteLabel: "删除",
-                           onSwipeLeft: { dismissTripAndReset() }) { AnyView(tripSummaryCard(s)) }
+                           onSwipeLeft: { dismissTripAndReset() },
+                           onFrameChange: { tripCardFrame = $0 }) { AnyView(tripSummaryCard(s)) }
         }
         // v1.69 高德地图加载失败诊断条（黑屏根因提示 + 重试）
         if mapLoadFailed {
@@ -3301,9 +3304,21 @@ struct ContentView: View {
                 if tapPlace == nil && tipCard == nil {
                     // v2.54 底部卡片避让：规划态下卡约 250pt、行程卡约 215pt，
                     // 否则右侧 +/−/3D 会被卡片压住半个（看着在、点不到）
+                    // v2.55 避让量改成"卡片实测屏幕框"推导。
+                    // 旧版写死 215/250 是按瘦身前的估算卡高拍的：卡片内容一变高
+                    //（多方案、加禁摩提示行、途经点变多），−/3D 就重新被压住半个。
+                    // 卡片占据的底部高度 = 屏幕高 − 卡片顶边 y，这个值恒等于真实占位。
                     let avoid: CGFloat = {
-                        if model.tripSummary != nil { return 215 }
-                        if !model.routeChoices.isEmpty { return 250 }
+                        let h = UIScreen.main.bounds.height
+                        if model.tripSummary != nil {
+                            // 行程卡不在屏底（中心约 0.62 屏高），同样按其实测顶边算
+                            if tripCardFrame.minY > 0 { return max(0, h - tripCardFrame.minY) }
+                            return h * 0.50
+                        }
+                        if !model.routeChoices.isEmpty {
+                            if planBottomCardFrame.minY > 0 { return max(0, h - planBottomCardFrame.minY) }
+                            return 250
+                        }
                         return 0
                     }()
                     DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655),
@@ -3374,7 +3389,10 @@ struct ContentView: View {
                 }
             }
             .frame(width: d, height: d)
-            .position(x: 12 + d / 2, y: geo.safeAreaInsets.top + 72 + d / 2)
+            // v2.55 遮挡修正：原偏移 72 时圆盘顶边落在提示卡"双行"状态下会压进去 12pt
+            //（提示卡顶 55 + 高 56 单行 / 76 双行）。量高德截图：提示卡底到圆盘顶留 13pt，
+            // 这里取 88 让双行时也留 4pt，单行时 8→24pt 略松但绝不再压。
+            .position(x: 12 + d / 2, y: geo.safeAreaInsets.top + 88 + d / 2)
         }
         .allowsHitTesting(false)
     }
@@ -3993,6 +4011,8 @@ struct ContentView: View {
     /// v1.81.4 关闭本次行程卡并回到初始界面（清空路线/方案/地点卡等全部残留状态）
     private func dismissTripAndReset() {
         model.tripSummary = nil
+        // v2.55 清掉行程卡实测框：否则下次行程开始前，−/3D 会按上一张卡的旧高度提前上移
+        tripCardFrame = .zero
         tipCard = nil
         tipRoad = nil
         tipAoiName = nil
