@@ -1641,6 +1641,10 @@ struct ContentView: View {
                                    lockX: true, bottomAnchor: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
+                                   // v2.87 这张卡内部有方格按钮排 + 建议列表（ScrollView），
+                                   // 竖直手势会被它们接管，手指落在卡里几乎拖不动。
+                                   // 启用顶部热区后，卡顶那一条空白是"只能拖"的地方。
+                                   dragHandle: true,
                                    // v2.64 去掉"不许压 tab 条"的底部避让：卡片要能拖到屏幕最下
                                    // v2.62 去掉"搜索卡躲避定位点"（用户明确要求）：
                                    // 旧版为了不让卡片盖住定位蓝点，把卡片最高位置限在
@@ -3456,6 +3460,30 @@ struct ContentView: View {
         model.navigating && !showRouteOverview && !uiHidden
     }
 
+    /// v2.87 把 trafficSpans 折成"沿路线累计的起止里程 + 等级"，供竖进度条分色
+    private var navTrafficRanges: [(start: Double, end: Double, level: Int)] {
+        var acc = 0.0
+        var out: [(Double, Double, Int)] = []
+        for sp in model.trafficSpans {
+            var d = 0.0
+            let n = max(0, sp.points.count - 1)
+            for i in 0..<n { d += model.distanceM(sp.points[i], sp.points[i + 1]) }
+            out.append((acc, acc + d, sp.level))
+            acc += d
+        }
+        return out
+    }
+
+    /// v2.87 路况配色：0 畅通 / 1 缓行 / 2 拥堵 / 3 严重拥堵
+    private func navTrafficColor(_ level: Int) -> Color {
+        switch level {
+        case 1: return Color(red: 0.98, green: 0.76, blue: 0.18)
+        case 2: return Color(red: 0.94, green: 0.36, blue: 0.20)
+        case 3: return Color(red: 0.62, green: 0.10, blue: 0.10)
+        default: return Color(red: 0.20, green: 0.80, blue: 0.36)
+        }
+    }
+
     private var navProgressBar: some View {
         GeometryReader { geo in
             // v2.56 语义反转 —— 对齐高德：绿色代表「剩余路程」，不是「已走过」。
@@ -3491,6 +3519,25 @@ struct ContentView: View {
                     .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
                     .frame(width: w, height: left)
                     .animation(.easeOut(duration: 0.6), value: left)
+                // v2.87 路况并入进度条：把剩余路段的拥堵段按真实占比叠在绿条上。
+                // 顶部=终点、底部=当前位置，所以 y 用"距当前位置的距离"反推。
+                // 已走过的路段不画（那部分本来就露在外面的灰轨道上）。
+                if model.trafficSpans.count > 0, left > 2 {
+                    let total = Double(max(model.routeDistanceM, 1))
+                    let walked = total * p
+                    let remain = total - walked
+                    ForEach(Array(navTrafficRanges.enumerated()), id: \.offset) { _, r in
+                        let d0 = max(0, r.start - walked)
+                        let d1 = min(remain, r.end - walked)
+                        if r.level >= 1, d1 > d0 {
+                            Rectangle()
+                                .fill(navTrafficColor(r.level))
+                                .frame(width: w,
+                                       height: max(1.5, (d1 - d0) / max(1, remain) * left))
+                                .offset(y: (remain - d1) / max(1, remain) * left)
+                        }
+                    }
+                }
                 // 当前位置：蓝圆 + 白边（高德同款，比纯白点在浅色底图上清楚得多）
                 Circle()
                     .fill(Color(red: 0.16, green: 0.38, blue: 1.0))
@@ -3875,12 +3922,9 @@ struct ContentView: View {
             .padding(.leading, 10)
             .frame(height: 46)
 
-            // v2.45 O1 全程路况概览条（高德式）：一眼看全程哪里拥堵
-            // 绿底 + 黄/红覆盖拥堵段；trafficSpans 为高德路线真实路况
-            if !model.trafficSpans.isEmpty, ns.remainM > 0 {
-                trafficOverviewBar(spans: model.trafficSpans,
-                                   totalM: Double(max(model.routeDistanceM, 1)))
-            }
+            // v2.87 路况概览条并入右侧竖进度条（见 navProgressBar）：
+            // 卡片里横着一条、右边竖着一条，同一份路况画了两遍。
+            // 高德是只有右边那条竖的，按路段分色：绿=畅通、黄=缓行、红=拥堵。
 
             Divider().padding(.horizontal, 12)
 
@@ -3890,23 +3934,10 @@ struct ContentView: View {
             // 这一层删掉后底卡只剩：三数字行 + 路况条 +（极简模式外的）红绿灯/车道槽位。
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
-            // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
-            //
-            // v2.29 骑行极简模式：这一层整体不渲染。
-            // 头盔视野下车道图和红绿灯读秒都是视觉噪声（调研确认竞品都还在显示这些），
-            // 极简档把它们全交给语音，屏幕只留"下一步做什么 + 多远 + 多快"。
-            if !minimal {
-                ZStack {
-                    if let nl = model.nextTrafficLight {
-                        lightCountdownRow(nl)
-                    } else if let t = ns.nextTurn, ns.distToTurnM > 0, ns.distToTurnM < 300 {
-                        laneGuideRow(t, dimFg: dimFg, mainFg: mainFg)
-                    }
-                }
-                .frame(height: 32)
-                .frame(maxWidth: .infinity)
-                .background(Color.black.opacity(0.02))
-            }
+            // v2.87 按用户要求删掉"红绿灯 / 车道"那一行：
+            // 红绿灯只有"前方 xx 米有信号灯"这个事实（没有真实灯色，读秒是推算的，
+            // 早已降级）；车道引导在高铁/高德的车道级视图里是画在图上的，不是卡片一行。
+            // 这一行留着经常是空槽，还把卡片撑高 32pt。
         }
         // v2.63 圆角 18 → 28（高德导航底卡是胶囊级圆角），并加一条顶部拖动指示条：
         // 高德那条细灰线不装饰，是"这张卡能上滑展开"的提示，缺了它用户不知道能拉。
@@ -3929,43 +3960,6 @@ struct ContentView: View {
     /// v2.29：文字颜色原先硬编码为黑色，深色模式下又是"黑底黑字"。
     /// 改为跟随底卡配色（浅色模式黑字、深色模式白字）。
     /// v2.45 O1 全程路况概览条：按里程比例把缓行黄/拥堵红画在绿底上
-    private func trafficOverviewBar(spans: [TrafficSpan], totalM: Double) -> some View {
-        // 预计算每段起止里程（沿路线方向累计），避免在视图闭包里可变累计
-        let ranges: [(start: Double, end: Double, level: Int)] = {
-            var acc = 0.0
-            var out: [(Double, Double, Int)] = []
-            for sp in spans {
-                var d = 0.0
-                for i in 0..<max(0, sp.points.count - 1) {
-                    d += model.distanceM(sp.points[i], sp.points[i + 1])
-                }
-                out.append((acc, acc + d, sp.level))
-                acc += d
-            }
-            return out
-        }()
-        return GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.green.opacity(0.22)).frame(height: 6)
-                ForEach(ranges, id: \.start) { r in
-                    if r.level >= 1 {
-                        let w = max(4, geo.size.width * (r.end - r.start) / totalM)
-                        Capsule()
-                            .fill(Color([UIColor(red: 0.94, green: 0.36, blue: 0.20, alpha: 1),
-                                         UIColor(red: 0.98, green: 0.76, blue: 0.18, alpha: 1),
-                                         UIColor(red: 0.94, green: 0.36, blue: 0.20, alpha: 1),
-                                         UIColor(red: 0.62, green: 0.10, blue: 0.10, alpha: 1)][max(0, min(3, r.level))]))
-                            .frame(width: w, height: 6)
-                            .offset(x: geo.size.width * r.start / totalM)
-                    }
-                }
-            }
-        }
-        .frame(height: 6)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-    }
-
     private func lightCountdownRow(_ nl: (light: TrafficLight, dist: Int)) -> some View {
         // v2.44 N1 红绿灯状态/秒数原是固定周期推算（非实时信号灯数据），
         // 显示"红灯 23 秒"会给骑手错误预期（实际灯色与周期完全不同）。
@@ -4510,9 +4504,11 @@ struct ContentView: View {
                     .padding(.top, 2)
             }
         }
-        // v2.74 一张卡的内部留白：左右 10、上 10、下 8
+        // v2.74 一张卡的内部留白：左右 10、下 8
+        // v2.87 上留白 10 → 26：让出浮层顶部那条 26pt 拖动热区，
+        // 内容整体下沉，热区不会压到 tab 行的按钮上。
         .padding(.horizontal, 10)
-        .padding(.top, 10)
+        .padding(.top, 26)
         .padding(.bottom, 8)
         // v2.54 搜索整屏态：卡片退成整面白色面板（不透明、无圆角、无投影），
         // 普通态保持原来的毛玻璃浮卡

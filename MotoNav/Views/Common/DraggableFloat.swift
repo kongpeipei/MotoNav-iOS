@@ -51,6 +51,10 @@ struct DraggableFloat<Content: View>: View {
     /// 用途：让"能随手拖"和"不长期互相遮挡"两个要求同时成立 ——
     /// 拖的时候两卡可以叠在一起，松手后才弹开去。
     var onDragEnded: ((CGFloat) -> CGFloat?)? = nil
+    /// v2.87 卡片顶部是否留一条"拖动热区"。
+    /// 不需要它的卡片照旧整卡可拖；卡片内部有 ScrollView / 一排按钮时，
+    /// 竖直手势会被子孙控件吃掉，手指落在那些区域里拖不动 —— 那时才需要这条热区。
+    var dragHandle: Bool = false
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -74,6 +78,7 @@ struct DraggableFloat<Content: View>: View {
          onFrameChange: ((CGRect) -> Void)? = nil,
          extraBottomInset: CGFloat = 0,
          resetOnAppear: Bool = false,
+         dragHandle: Bool = false,
          onDragEnded: ((CGFloat) -> CGFloat?)? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
@@ -85,6 +90,7 @@ struct DraggableFloat<Content: View>: View {
         self.onFrameChange = onFrameChange
         self.extraBottomInset = extraBottomInset
         self.resetOnAppear = resetOnAppear
+        self.dragHandle = dragHandle
         self.onDragEnded = onDragEnded
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
@@ -276,6 +282,37 @@ struct DraggableFloat<Content: View>: View {
             .shadow(color: .black.opacity(dragging ? 0.3 : 0.12), radius: 8, y: 3)
             .scaleEffect(dragging ? 1.08 : 1.0)
             .animation(.easeOut(duration: 0.12), value: dragging)
+            // v2.87 拖动热区：卡片顶部 26pt 透明区，手指落在那里由这张卡自己接管，
+            // 不会被卡内的 ScrollView / 按钮排抢走。整卡手势仍然保留 ——
+            // 顶部以外的地方（空白、大数字）照样能拖，只是不再"哪都能拖"。
+            .overlay(alignment: .top) {
+                if dragHandle {
+                    Color.clear
+                        .frame(height: 26)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 2)
+                                .onChanged { v in
+                                    dragging = true
+                                    let base = dragStartPos ?? pos
+                                    if dragStartPos == nil { dragStartPos = base }
+                                    let sh = max(1, geo.size.height)
+                                    pos = CGPoint(x: base.x,
+                                                  y: min(0.998, max(0.002,
+                                                       base.y + v.translation.height / sh)))
+                                }
+                                .onEnded { _ in
+                                    dragging = false
+                                    dragStartPos = nil
+                                    if !resetOnAppear {
+                                        UserDefaults.standard.set(pos.x, forKey: "\(key).x")
+                                        UserDefaults.standard.set(pos.y, forKey: "\(key).y")
+                                    }
+                                }
+                        )
+                }
+            }
             .gesture(
                 DragGesture(minimumDistance: 4)
                     .onChanged { v in
