@@ -94,6 +94,10 @@ struct ContentView: View {
     /// v2.51 从导航底卡"搜索"进入退出确认：确认后要回到首页并聚焦搜索框
     // v1.81.4 导航全览：导航退出卡"全览"→ 缩放显示全程路线 + 固定全览/取消全览(13s倒计时) 操作条
     @State private var showRouteOverview = false
+    /// v2.89 顶部提示条的实测高度（单行 56 / 双行 76）。
+    /// 速度表位置要贴着它的下沿走，不能用写死的 88 —— 写死只能保证"双行时不压"，
+    /// 单行时就会多出 20pt 空隙，看起来速度表离顶部太远。
+    @State private var navHintHeight: CGFloat = 56
     @State private var overviewCountdown = 13
     @State private var overviewPinned = false
     @State private var overviewTask: Task<Void, Never>?
@@ -3440,10 +3444,11 @@ struct ContentView: View {
                 }
             }
             .frame(width: d, height: d)
-            // v2.55 遮挡修正：原偏移 72 时圆盘顶边落在提示卡"双行"状态下会压进去 12pt
-            //（提示卡顶 55 + 高 56 单行 / 76 双行）。量高德截图：提示卡底到圆盘顶留 13pt，
-            // 这里取 88 让双行时也留 4pt，单行时 8→24pt 略松但绝不再压。
-            .position(x: 12 + d / 2, y: geo.safeAreaInsets.top + 88 + d / 2)
+            // v2.89 改成跟着提示条实测高度走：顶部 8pt 内边距 + 提示条高 + 8pt 呼吸位。
+            // 旧版写死 88，是按"双行 76"算的 —— 单行时圆盘顶与提示卡底之间留了 24pt 空隙，
+            // 视觉上速度表偏低；双行时又只剩 4pt。现在单行上移 16pt、双行自动下移，都不压。
+            .position(x: 12 + d / 2,
+                      y: geo.safeAreaInsets.top + 8 + navHintHeight + 8 + d / 2)
         }
         .allowsHitTesting(false)
     }
@@ -3603,6 +3608,12 @@ struct ContentView: View {
             AnyView(navTopHintBar)
                 // v2.72 比例尺已删，92pt 的让位一起撤掉：顶部条回到贴边全宽
                 .padding(.trailing, 4)
+                // v2.89 实测高度：速度表据此贴到提示条下沿
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { navHintHeight = g.size.height }
+                        .onChange(of: g.size.height) { _, h in navHintHeight = h }
+                })
                 .frame(maxHeight: .infinity, alignment: .top)
                 // v2.50 用 safeAreaPadding：ZStack 里既有全屏地图（ignoresSafeArea）
                 // 也有安全区内容，固定 8 在"全屏坐标系"下会压到状态栏/灵动岛下面
