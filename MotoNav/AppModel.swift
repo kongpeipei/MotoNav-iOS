@@ -3481,7 +3481,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if idx != traveledIdx { traveledIdx = idx }
         // v2.54 路程进度条：从 remainM 反推已走比例。
         // 阈值 0.2% 防抖 —— 每 0.2% 才发布一次，避免定位帧率驱动的整树重算。
-        let total = max(1, routeDistanceM > 0 ? routeDistanceM : Int(distanceM(route.first!, route.last!)))
+        let total = max(1, routeDistanceM > 0 ? routeDistanceM
+                        : (route.count >= 2 ? Int(distanceM(route.first!, route.last!)) : 1))
         let p = max(0.0, min(1.0, 1.0 - Double(navStatusCache?.remainM ?? total) / Double(total)))
         if abs(p - navProgress) > 0.002 { navProgress = p }
     }

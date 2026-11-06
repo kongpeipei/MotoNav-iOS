@@ -4732,7 +4732,11 @@ struct ContentView: View {
     /// 单独成 View：searchInputRow 的 ViewBuilder 分支已够多，再塞 if/else 有类型推断超时风险
     @ViewBuilder
     private var searchActionButton: some View {
-        if searchFocused {
+        // v2.54 修正：整屏搜索态必须始终给"取消"。
+        // 原来只判 searchFocused，而点"搜索"进整屏时 expandSearchResults() 会先
+        // dismissKeyboard()（focus 变 false），按钮就退回成"搜索"——再点还是"搜索"，
+        // 整屏搜索页永远退不出去（用户实机"点了没反应"的另一半就在这里）。
+        if searchActive || searchFocused {
             Button {
                 haptic()
                 cancelSearch()
