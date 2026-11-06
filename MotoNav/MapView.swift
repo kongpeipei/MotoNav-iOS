@@ -744,7 +744,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             let now = Date()
             let dt = max(0.016, min(0.5, now.timeIntervalSince(context.coordinator.lastHeadingTickAt)))
             context.coordinator.lastHeadingTickAt = now
-            let mps = map.userLocation?.speed ?? -1
+            // MKUserLocation 本身没有 speed，速度在它的 CLLocation 上（未定位时 location 为 nil）
+            let mps = map.userLocation.location?.speed ?? -1
             let moving = mps > 1.4 || mps < 0   // <5 km/h 冻结；负值表示速度无效，按行驶处理
             if moving || context.coordinator.lastAppliedHeading == nil {
                 var cur = context.coordinator.lastAppliedHeading ?? target
