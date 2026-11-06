@@ -427,6 +427,30 @@ struct ContentView: View {
         return UIEdgeInsets(top: top, left: 36, bottom: bottom, right: 36)
     }
 
+    /// v2.50 地图可视区留白（全场景统一）
+    ///
+    /// 各入口的 edgePadding 之前各写一套魔法数（导航 90/120、加油站 60/60），
+    /// 卡片一高就会遮住路线端点（尤其导航态的路口放大图 110pt、加油站的底部结果条）。
+    /// 这里按"当前场景真实卡片"统一给一套：规划态直接复用实测卡框，
+    /// 其余场景用卡片布局的固定高度（这些卡本身高度恒定）。
+    private var mapViewportInsets: UIEdgeInsets {
+        // 导航态：顶部路名提示 + 底部导航卡 + 路口放大图
+        if model.navigating {
+            // top 150 = 安全区顶(47/59) + 提示卡（顶 8 + 高约 78）
+            return UIEdgeInsets(top: 150, left: 36, bottom: 320, right: 36)
+        }
+        // 规划态：上下两张规划卡的真实屏幕框（v2.48）
+        if !model.routeChoices.isEmpty, model.tripSummary == nil {
+            return planFitInsets
+        }
+        // 加油站：底部类别结果横条
+        if !model.gasStations.isEmpty {
+            return UIEdgeInsets(top: 90, left: 36, bottom: 260, right: 36)
+        }
+        // 其它（地点信息卡 / 搜索预览）：底部信息卡
+        return UIEdgeInsets(top: 90, left: 36, bottom: 240, right: 36)
+    }
+
     /// 地图全屏层（高德式：地图在上，搜索框下置）
     private var mapLayer: some View {
         MapViewRepresentable(
@@ -436,7 +460,7 @@ struct ContentView: View {
             selectedRouteIdx: model.selectedRouteIdx,
             locateTick: model.locateTick,
             fitTick: model.fitTick,
-            routeFitInsets: planFitInsets,
+            viewportInsets: mapViewportInsets,
             heading: model.heading,
             preview: model.searchPreview,
             gasStations: model.gasStations,
@@ -690,7 +714,7 @@ struct ContentView: View {
             }
             Spacer()
         }
-        .padding(.top, 8)
+        .safeAreaPadding(.top, 8)   // v2.50 比例尺不压状态栏
         .padding(.trailing, 14)
         .allowsHitTesting(false)
     }
@@ -3061,7 +3085,13 @@ struct ContentView: View {
         if !model.navigating && model.waypointCandidate != nil {
             AnyView(waypointCandidateCard)
                 .frame(maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, 96)
+                // v2.50 改用规划下卡实测高度：固定 96 在"下卡内容多/极简模式"时会压住
+                // "开始导航"按钮（两层浮卡重叠）；高德是让候选卡始终浮在底卡上沿外 8pt
+                // 基准换算：候选卡容器底在安全区内（= 屏底上移 home indicator 34pt），
+                // 而 planBottomCardFrame 是屏幕坐标，所以要减掉这一段
+                .padding(.bottom, planBottomCardFrame.minY > 0
+                         ? max(96, UIScreen.main.bounds.height - 34 - planBottomCardFrame.minY + 8)
+                         : 96)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .zIndex(15)
         }
@@ -3084,7 +3114,7 @@ struct ContentView: View {
                     .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
                 Spacer()
             }
-            .padding(.top, 8)
+            .safeAreaPadding(.top, 8)   // v2.50 状态胶囊不压状态栏
             .frame(maxWidth: .infinity, alignment: .center)
             .allowsHitTesting(false)
             .zIndex(150)
@@ -3150,7 +3180,9 @@ struct ContentView: View {
         if model.navigating && !showRouteOverview {
             AnyView(navTopHintBar)
                 .frame(maxHeight: .infinity, alignment: .top)
-                .padding(.top, 8)
+                // v2.50 用 safeAreaPadding：ZStack 里既有全屏地图（ignoresSafeArea）
+                // 也有安全区内容，固定 8 在"全屏坐标系"下会压到状态栏/灵动岛下面
+                .safeAreaPadding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
         }
         // 导航中悬浮退出按钮（仅上下移动；全览时隐藏）
@@ -3827,7 +3859,9 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.leading, 10)
-                .padding(.top, 200)
+                // v2.32 同款比例化：固定 200pt 在 iPhone SE(667) 会撞到底部导航卡，
+                // 在 Pro Max 则空太多；按屏高比例，位置随机型一致
+                .padding(.top, UIScreen.main.bounds.height * 0.24)
                 Spacer()
             }
             Spacer()
@@ -3850,7 +3884,7 @@ struct ContentView: View {
                     .background(Color.black.opacity(0.55), in: Capsule())
                     // v2.32 顶部下移到提示卡下方：提示卡(top 8, 高约66~78)与路名胶囊(top 58)重叠约16pt，
                     // 深色导航中白卡叠黑胶囊视觉糊成一团；移到 88 后两者垂直排开。
-                    .padding(.top, 88)
+                    .safeAreaPadding(.top, 88)
             }
             Spacer()
         }

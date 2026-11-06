@@ -97,11 +97,10 @@ struct DraggableFloat<Content: View>: View {
     /// - 底部锚定：pos.y 是底边位置 → 中心 = 底边 - 半个高度
     /// - 顶部锁定：pos.y 是顶部位置 → 中心 = 顶部 + 半个高度
     /// - 其余：pos.y 直接是中心，但会被钳制到"卡片完整可见"的范围内
-    private func clampedY(_ geoSize: CGSize) -> CGFloat {
-        let margin: CGFloat = 8
+    private func clampedY(_ geo: GeometryProxy) -> CGFloat {
+        let gap: CGFloat = 6
         let h = contentSize.height
-        // 注意：入参已经是 CGSize（不是装着 CGSize 的 geo），不能再取 .size
-        let screenH = geoSize.height
+        let screenH = geo.size.height
         guard h > 0, screenH > 0 else { return pos.y * screenH }
 
         var center: CGFloat
@@ -112,10 +111,32 @@ struct DraggableFloat<Content: View>: View {
         } else {
             center = pos.y * screenH
         }
-        // 钳制：卡片完整可见（上边不越界，下边不越界）
-        let minCenter = margin + h / 2
-        let maxCenter = max(minCenter, screenH - margin - h / 2)
+        // v2.50 钳制到安全区：卡片不进状态栏/灵动岛、不压 home indicator。
+        // 用 geo.safeAreaInsets 而不是 UIKit 的窗口安全区——它和 geo 的坐标原点同源，
+        // 无论这个 GeometryReader 是"安全区内（返回 0）"还是"已被 ignoresSafeArea 拉到全屏
+        // （返回真实 47/34）"，都不会出现双重偏移。
+        let safe = geo.safeAreaInsets
+        let usableTop = safe.top + gap
+        let usableBottom = screenH - safe.bottom - gap
+        let minCenter = usableTop + h / 2
+        // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
+        let maxCenter = max(minCenter, usableBottom - h / 2)
         return min(max(center, minCenter), maxCenter)
+    }
+
+    /// v2.50 横向钳制：按卡片**实际宽度**保证左右不出屏。
+    ///
+    /// 旧版只把pos.x按屏宽比例钳到 4%~96%，宽卡片（规划卡 366pt）中心放到 0.04
+    /// 时左边缘会到 -150pt，一半卡片在屏幕外。高德的做法是浮层四周恒留 8pt。
+    private func clampedX(_ geo: GeometryProxy) -> CGFloat {
+        let gap: CGFloat = 8
+        let w = contentSize.width
+        let screenW = geo.size.width
+        let raw = pos.x * screenW
+        guard w > 0, screenW > 0 else { return raw }
+        let minX = gap + w / 2
+        let maxX = max(minX, screenW - gap - w / 2)
+        return min(max(raw, minX), maxX)
     }
 
     var body: some View {
@@ -136,6 +157,12 @@ struct DraggableFloat<Content: View>: View {
                     .animation(.easeOut(duration: 0.15), value: dragOffset < -8)
                 }
                 content
+                    // v2.50 内容高度上限 = 安全区之间可用高度：
+                    // 超高卡片（内容多的面板、极简模式大字）不再被推到屏幕外，
+                    // 内部是 ScrollView 的卡片会自动变成滚动
+                    .frame(maxHeight: max(200, geo.size.height
+                                          - geo.safeAreaInsets.top
+                                          - geo.safeAreaInsets.bottom - 12))
                     .offset(x: dragOffset)
                     // v2.23 实测内容尺寸：底部锚定/钳制都要用
                     .background(
@@ -158,7 +185,7 @@ struct DraggableFloat<Content: View>: View {
             //  ① bottomAnchor：pos.y 表示卡片**底边**，卡片向上生长
             //     （否则 .position() 按中心定位，高卡片下半截会掉出屏幕 → "开始导航"点不到）
             //  ② 通用钳制：保证卡片完整落在屏幕内（上下各留 8pt 安全边）
-            .position(x: pos.x * geo.size.width, y: clampedY(geo.size))
+            .position(x: clampedX(geo), y: clampedY(geo))
             .shadow(color: .black.opacity(dragging ? 0.3 : 0.12), radius: 8, y: 3)
             .scaleEffect(dragging ? 1.08 : 1.0)
             .animation(.easeOut(duration: 0.12), value: dragging)

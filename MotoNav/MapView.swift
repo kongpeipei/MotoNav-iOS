@@ -69,6 +69,18 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 0.35 = 车出现在屏高约 70%，前方占 2/3 屏——高德同款布局，前方视野提升约 40%。
     static let navCameraForwardRatio: Double = 0.35
 
+    /// v2.50 围绕某点构造一个"边长 meters 见方"的地图矩形。
+    ///
+    /// 配合 `setVisibleMapRect(_:edgePadding:)` 使用：MapKit 会把整个矩形装进
+    /// 「屏幕减去 edgePadding」的可见带里，矩形中心因此落在可见带中心 ——
+    /// 这正是高德"选中地点后点位在卡片之间居中"的效果，
+    /// 直接 setRegion 只能把点放在全屏中心，底部会被卡片吃掉一半。
+    static func centerRect(_ c: CLLocationCoordinate2D, meters: Double) -> MKMapRect {
+        let p = MKMapPoint(c)
+        let half = meters / 2 * MKMapPointsPerMeterAtLatitude(c.latitude)
+        return MKMapRect(x: p.x - half, y: p.y - half, width: half * 2, height: half * 2)
+    }
+
     /// 沿方位角前移若干米（球面近似）。用于把相机中心放到车前方，
     /// 这样车就落在屏幕下方 1/3，而不是正中。
     static func forwardCoordinate(_ c: CLLocationCoordinate2D,
@@ -96,10 +108,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     let locateTick: Int
     /// 路线全览请求计数（规划完成 +1，触发地图缩放全览）
     let fitTick: Int
-    /// v2.48 路线全览留白：规划页上下两张卡片（出发点卡/方案卡）会遮住地图，
-    /// 旧版固定 edgePadding(60/60) 导致路线起终点正好落在卡片后面 ——
-    /// 用户看到"规划完成但地图上找不到路线"。改为按卡片实际高度留白。
-    var routeFitInsets: UIEdgeInsets = UIEdgeInsets(top: 60, left: 36, bottom: 60, right: 36)
+    /// v2.50 地图可视区留白（viewport padding）：屏幕上下被卡片挡住的高度。
+    ///
+    /// 来源统一由 ContentView 按"当前场景真实卡片"计算：
+    /// · 规划态 → 上下规划卡实测屏幕框（v2.48）
+    /// · 导航态 → 顶部提示 + 底部导航卡 + 路口放大图
+    /// · 加油站 → 底部类别结果条
+    /// 旧版各入口各写一套魔法数（90/120、60/60），卡片高度一变就遮住路线端点。
+    var viewportInsets: UIEdgeInsets = UIEdgeInsets(top: 60, left: 36, bottom: 60, right: 36)
     /// 手机朝向（度），驱动地图跟随旋转
     let heading: Double
     /// 搜索预览点（绿色高亮）
@@ -289,18 +305,22 @@ struct MapViewRepresentable: UIViewRepresentable {
         //
         // v2.48：规划页上下卡片（上卡贴顶、下卡锚底）会遮住地图；
         // 旧版固定 edgePadding 60pt 让路线起终点正好落在卡片后面，用户"看不到地图上的路线"。
-        // 现在：① fit 使用 routeFitInsets（按卡片实际高度计算）
+        // 现在：① fit 使用 viewportInsets（按当前场景卡片高度计算）
         //      ② 卡片高度测量完成（insets 变化）后，若仍在规划态则补 fit 一次，
         //         避免首次规划时卡片还没测完就用旧留白 fit。
-        let planFitChanged = context.coordinator.lastFitInsets != routeFitInsets
+        let planFitChanged = context.coordinator.lastFitInsets != viewportInsets
         if fitTick != context.coordinator.lastFitTick
             || (planFitChanged && !choiceRoutes.isEmpty && !navigating) {
             context.coordinator.lastFitTick = fitTick
-            context.coordinator.lastFitInsets = routeFitInsets
+            context.coordinator.lastFitInsets = viewportInsets
             if let tf = tipFit {
                 // v1.81.1 地点信息卡：地图定位到该点（不画黄圈，卡片沉底展示）
+                // v2.50 用"围绕点的小矩形 + 可视区留白"代替居中 setRegion：
+                // 点会落在两张卡之间可见带的正中，而不是被底部卡片吃掉一半
                 context.coordinator.setRegionProgrammatically {
-                    map.setRegion(MKCoordinateRegion(center: MapGeo.toGCJ(tf), latitudinalMeters: 1200, longitudinalMeters: 1200), animated: true)
+                    map.setVisibleMapRect(
+                        MapViewRepresentable.centerRect(MapGeo.toGCJ(tf), meters: 1200),
+                        edgePadding: viewportInsets, animated: true)
                 }
             } else if route.count > 1 {
                 var rect = MKMapRect.null
@@ -313,7 +333,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // v2.48 规划全览固定北向上：从导航/巡航切回来时相机可能还斜着，
                 // 斜着看长路线极易误判"地图上没有路线"
                 map.camera.heading = 0
-                map.setVisibleMapRect(rect, edgePadding: routeFitInsets, animated: true)
+                map.setVisibleMapRect(rect, edgePadding: viewportInsets, animated: true)
             }
         }
         // 加油站全览（仅在新请求时触发一次）
@@ -327,7 +347,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     let p = MKMapPoint(c)
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
-                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 60, left: 40, bottom: 60, right: 40), animated: true)
+                map.setVisibleMapRect(rect, edgePadding: viewportInsets, animated: true)
             }
         }
         // v2.19 途经点标注（高德式橙色"途"，内容键相同跳过）
@@ -391,9 +411,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let p = preview {
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .none
-                    map.setRegion(
-                        MKCoordinateRegion(center: MapGeo.toGCJ(p), latitudinalMeters: 1200, longitudinalMeters: 1200),
-                        animated: true)
+                    // v2.50 同地点卡：点落在可见带中心，不被底部搜索卡遮住
+                    map.setVisibleMapRect(
+                        MapViewRepresentable.centerRect(MapGeo.toGCJ(p), meters: 1200),
+                        edgePadding: viewportInsets, animated: true)
                 }
             }
         }
@@ -637,17 +658,21 @@ struct MapViewRepresentable: UIViewRepresentable {
                         map.userTrackingMode = .none
                     }
                     // 视野同时装下"我的位置"和"搜索点"，黑线两端都在屏内
+                    // v2.50 端点改按可视区留白：旧版 setRegion 居中，黑线两端会被
+                    // 顶部搜索卡 + 底部信息卡压住（用户反馈"看不到线头在哪"）
                     let a = MapGeo.toGCJ(loc)
                     let b = MapGeo.toGCJ(h.coord)
-                    let midLat = (a.latitude + b.latitude) / 2
-                    let midLon = (a.longitude + b.longitude) / 2
-                    let spanLat = max(abs(a.latitude - b.latitude) * 1.6, 0.004)
-                    let spanLon = max(abs(a.longitude - b.longitude) * 1.6, 0.004)
-                    map.setRegion(
-                        MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: midLat, longitude: midLon),
-                                           latitudinalMeters: spanLat * 111_320,
-                                           longitudinalMeters: spanLon * 111_320 * cos(midLat * .pi / 180)),
-                        animated: true)
+                    let pa = MKMapPoint(a)
+                    let pb = MKMapPoint(b)
+                    var r = MKMapRect.null
+                    r = r.union(MKMapRect(x: pa.x, y: pa.y, width: 0, height: 0))
+                    r = r.union(MKMapRect(x: pb.x, y: pb.y, width: 0, height: 0))
+                    // 四周留 12% 呼吸位；两点重合/极近时保底 200 米，避免放大到街道级
+                    let minPad = 200 * MKMapPointsPerMeterAtLatitude(a.latitude)
+                    let padX = max(r.width * 0.12, minPad)
+                    let padY = max(r.height * 0.12, minPad)
+                    map.setVisibleMapRect(r.insetBy(dx: -padX, dy: -padY),
+                                          edgePadding: viewportInsets, animated: true)
                 }
             }
         }
@@ -673,11 +698,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.userMoved = true
                 context.coordinator.setRegionProgrammatically {
                     map.userTrackingMode = .none
-                    map.setRegion(
-                        MKCoordinateRegion(center: MapGeo.toGCJ(fc),
-                                           latitudinalMeters: 600,
-                                           longitudinalMeters: 600),
-                        animated: true)
+                    // v2.50 途经点定位同样按可视区留白居中，避免贴到卡片边缘
+                    map.setVisibleMapRect(
+                        MapViewRepresentable.centerRect(MapGeo.toGCJ(fc), meters: 600),
+                        edgePadding: viewportInsets, animated: true)
                 }
             }
         }
@@ -810,7 +834,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
                 }
                 context.coordinator.setRegionProgrammatically {
-                    map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 90, left: 50, bottom: 120, right: 50), animated: true)
+                    map.setVisibleMapRect(rect, edgePadding: viewportInsets, animated: true)
                 }
             }
         }
