@@ -245,6 +245,9 @@ struct ContentView: View {
                 if searchActive {
                     Color(.systemBackground)
                         .ignoresSafeArea()
+                        // v2.54 修正：这层只是视觉遮罩，绝不能吃触摸 ——
+                        // 否则进搜索态后地图手势全被它拦住（表现"地图不动了"）
+                        .allowsHitTesting(false)
                 }
                 // v1.90 导航数据已全部合并进底部白底卡片（分钟/公里/红绿灯/速度/道路/预计到达），
                 // 移除顶部重复的大数字条 navTopBar，避免信息分散（高德同款单卡片式导航状态）
@@ -407,6 +410,22 @@ struct ContentView: View {
                     }
                 }
         )
+        // v2.54 修正搜索态两个连环坑（用户实机反馈"搜索框不能输入、地图不能移动"）：
+        //  ① 搜索整屏把搜索卡从 DraggableFloat 换成 VStack 顶对齐 —— 容器一变，
+        //     内部 TextField 就是新实例，@FocusState 跟着丢，键盘永远弹不出来；
+        //  ② 而 searchActive 本身依赖 searchFocused：一旦失焦就切回原容器、再重建，
+        //     来回抖动，用户看到的就是"点了搜索框毫无反应"。
+        // 修法：焦点一进就钉住 searchExpanded（容器不再随焦点抖动），
+        // 并在切换完成后延迟一次，把焦点交还给新建出来的 TextField。
+        .onChange(of: searchFocused) { _, focused in
+            if focused && !searchExpanded { searchExpanded = true }
+        }
+        .onChange(of: searchActive) { _, active in
+            guard active else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                if searchActive && !searchFocused { searchFocused = true }
+            }
+        }
         // v1.81.3 新一次导航开始时重置退出确认态；导航结束时清理全览态
         .onChange(of: model.navigating) { _, nv in
             if nv {
