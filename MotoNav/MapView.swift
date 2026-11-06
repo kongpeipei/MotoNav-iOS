@@ -207,13 +207,30 @@ struct MapViewRepresentable: UIViewRepresentable {
         map.showsUserLocation = true
         // v2.53 关闭苹果原生路况层：本项目按高德 API 的 tmc/tmcs 自绘粗色段，
         // 两层同屏（细红线 + 粗橙带）颜色打架；高德只有一层粗色段。
-        map.showsTraffic = false
         map.showsScale = true    // v2.53 左下角比例尺（视野档位收小后需要一个校验地标）
-        // v2.53 底图 POI 白名单：苹果默认铺全类别（餐馆/购物/景点都画），比高德"花"得多。
-        // 只留骑行导航真正用得上的几类，道路与地名优先。
-        map.pointOfInterestFilter = MKPointOfInterestFilter(including: [
+        // v2.54 底图配置集中到 MKStandardMapConfiguration，并加 emphasisStyle = .muted。
+        //
+        // 起因：用户实拍反馈园区里有一条"白色条纹"。实测该条宽约 5pt、
+        // 中心像素 RGB≈(101,116,136)（浅蓝灰，蓝通道明显高于红绿），
+        // 而旁边绿线 RGB=(107,214,117) 正好等于我们的 mainPolyline(0.42,0.84,0.46)。
+        //
+        // 为什么不是本项目画的：我们只有 6 类自绘线——主路线深绿13/浅绿7、备选深蓝虚线5、
+        // 已走段 55% 灰12、起终点连接线 4、搜索连线黑3、足迹蓝虚线5，颜色与线宽都对不上；
+        // 而且这条不在任何路线几何上（当次路线走护城路+包公大道）。
+        //
+        // 为什么也删不掉：MKMapView 在中国大陆的底图数据本身就是高德提供的（GCJ-02，见本文件开头
+        // 第 7 行注释），这条带子是高德数据里的一条道路，由苹果的渲染层着色 ——
+        // MKMapView 没有任何"按坐标删掉某个底图道路"的能力。
+        // emphasisStyle = .muted 是苹果唯一能把道路/边界/建筑这类底图要素**压淡**的官方开关，
+        // 也是"删除"这件事能做到的最接近的程度：路网仍在（导航要看路，不能真抹），但不再抢眼。
+        let cfg = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .muted)
+        // ① 关掉苹果原生路况层（与 v2.53 同因，迁到 configuration 上，避免两套 API 打架）
+        cfg.showsTraffic = false
+        // ② POI 白名单：苹果默认铺全类别（餐馆/购物/景点都画），比高德"花"得多
+        cfg.pointOfInterestFilter = MKPointOfInterestFilter(including: [
             .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport
         ])
+        map.preferredConfiguration = cfg
         map.showsCompass = false // v2.28：按用户要求删除所有界面指南针（含系统自带的）
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
         map.isRotateEnabled = true  // 双指旋转地图
