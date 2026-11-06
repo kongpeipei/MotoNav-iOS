@@ -84,7 +84,11 @@ struct MapViewRepresentable: UIViewRepresentable {
     ///
     /// 0 = 车在屏幕正中（45° 俯角下前方只剩半屏，远处还会被透视压缩）；
     /// 0.35 = 车出现在屏高约 70%，前方占 2/3 屏——高德同款布局，前方视野提升约 40%。
-    static let navCameraForwardRatio: Double = 0.35
+    // v2.65 0.35 → 0.15：0.35 时相机中心压到车前 35% 视距，车落在屏高约 70%，
+    // 配上俯角 45° 和楼块遮挡，实机上经常"找不到自己在哪"。
+    // 用户明确要求"开始导航时当前定位点要在屏幕中显示"，这里把前移量收窄，
+    // 车落在屏高约 56%，既在屏幕中部、前方又仍留有视野。
+    static let navCameraForwardRatio: Double = 0.15
 
     /// v2.50 围绕某点构造一个"边长 meters 见方"的地图矩形。
     ///
@@ -914,6 +918,26 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
+        // v2.65 导航首帧定点：进入导航那一刻必须把相机放到车上。
+        // 旧版只靠 navigateFollowTick 变化 + 4m 位移阈值触发，若 tick 没变或定位还没回调，
+        // 相机就停在规划页那个"全程全览"的位置 —— 视野几公里宽，车缩成看不见的点。
+        if navigating != context.coordinator.lastNavigatingState {
+            context.coordinator.lastNavigatingState = navigating
+            context.coordinator.userMoved = false
+            if navigating, let loc = userLocation {
+                let sh = map.bounds.height > 200 ? map.bounds.height : UIScreen.main.bounds.height
+                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: sh)
+                var cam = map.camera
+                // 首帧让车本身落在中心，等跟随接管后再按前移比例微调到中部偏下
+                cam.centerCoordinate = MapGeo.toGCJ(loc)
+                cam.centerCoordinateDistance = distance
+                cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .none
+                    map.setCamera(cam, animated: false)
+                }
+            }
+        }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
         if navigateFollowTick != context.coordinator.lastNavFollowTick {
             context.coordinator.lastNavFollowTick = navigateFollowTick
@@ -1183,6 +1207,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var searchHitAnnotation: SearchHitAnnotation?
         /// v2.58 记录上次设置的底图高度样式，避免每帧重建 configuration
         var lastRealisticElevation: Bool?
+        /// v2.65 上一次的导航态：用于"进入导航首帧必须对准车"的边沿检测
+        var lastNavigatingState = false
         /// v2.25 高亮内容键（标注增删）
         var lastSearchHitKey = ""
         /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）

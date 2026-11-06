@@ -3591,7 +3591,11 @@ struct ContentView: View {
         // v2.58 浏览态（navUserMoved）整套导航 HUD 收起：只留底部卡上的"继续导航"，
         // 否则方位环/进度条/速度表会停在"车在 65% 屏高"的旧假设位置上，
         // 与真实车位置脱节，看着像几个飘着的孤儿控件。
-        if model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
+        // v2.65 用户要求去掉定位环：v2.54 那圈淡白环 + 东南西北方位字是**固定画在
+        // 屏高 65%** 的，车一旦不在那个假设位置（相机没对准、俯角变化），
+        // 环就和真实的蓝色箭头错开，看着像两个不相干的控件。直接不挂载。
+        // compassRing 定义保留，便于以后再按真实投影位置接回来。
+        if false, model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
             AnyView(compassRing)
         }
         // v2.54 高德同款路程进度条（贴右边缘竖直）：显示条件与方位环一致
