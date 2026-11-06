@@ -3748,7 +3748,7 @@ struct ContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(urgent ? Color(red: 0.10, green: 0.52, blue: 0.22).opacity(0.94)
-                                  : Color.black.opacity(0.86), in: Capsule())
+                                  : Color.black.opacity(0.78), in: Capsule())
                 .overlay(Capsule().strokeBorder(urgent ? Color.white.opacity(0.5) : Color.white.opacity(0.22),
                                                lineWidth: urgent ? 1.5 : 1))
                 .padding(.horizontal, 12)   // v2.72 比例尺已删，顶部条不再让位，改为贴边全宽
@@ -3827,7 +3827,8 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // 贴底但不压 home indicator：34pt 安全区 + 10pt 呼吸位
-        .safeAreaPadding(.bottom, 10)
+        // v2.90 对齐高德：卡片与屏底留出一点呼吸位（旧值 10 贴得太紧）
+        .safeAreaPadding(.bottom, 14)
     }
 
     /// v2.02 高德式导航底部卡（内容分三层，总高度恒定 → 不再跳动）
@@ -3871,35 +3872,37 @@ struct ContentView: View {
                     haptic()
                     showExitConfirm = true
                 } label: {
+                    // v2.90 对齐高德：× 做成 44pt 浅灰圆底 —— 骑行戴手套时 32pt 太难点中
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(mainFg)
-                        .frame(width: 32, height: 32)
-                        .background(Color.black.opacity(0.06), in: Circle())
+                        .frame(width: 44, height: 44)
+                        .background(Color.black.opacity(0.07), in: Circle())
                 }
                 .buttonStyle(.plain)
                 .padding(.leading, 12)
 
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    // v2.90 对齐高德：距离/时间是卡片主视觉，数字放大、单位缩小拉开层级
                     Text(kmTxt)
-                        .font(.system(size: 24, weight: .bold))
+                        .font(.system(size: 32, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(mainFg)
                     Text(kmUnit)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(dimFg)
                 }
-                .padding(.leading, 14)
+                .padding(.leading, 12)
 
                 Spacer(minLength: 6)
 
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text(minTxt)
-                        .font(.system(size: 24, weight: .bold))
+                        .font(.system(size: 32, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(mainFg)
                     Text("分钟")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(dimFg)
                 }
 
@@ -3907,7 +3910,7 @@ struct ContentView: View {
 
                 VStack(alignment: .trailing, spacing: 0) {
                     Text(arriveTxt)
-                        .font(.system(size: 17, weight: .bold))
+                        .font(.system(size: 19, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(mainFg)
                     Text("预计到达")
@@ -3922,8 +3925,8 @@ struct ContentView: View {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(mainFg)
-                        .frame(width: 40, height: 34)
-                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .frame(width: 44, height: 38)
+                        .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 // v2.39 I2 导航中切换备选路线（高德式）：方案列表 sheet，applyRouteChoice 应用
@@ -3935,15 +3938,15 @@ struct ContentView: View {
                         Image(systemName: "arrow.triangle.swap")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(mainFg)
-                            .frame(width: 40, height: 34)
-                            .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .frame(width: 44, height: 38)
+                            .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
             }
             .padding(.trailing, 12)
             .padding(.leading, 10)
-            .frame(height: 46)
+            .frame(height: 54)
 
             // v2.87 路况概览条并入右侧竖进度条（见 navProgressBar）：
             // 卡片里横着一条、右边竖着一条，同一份路况画了两遍。

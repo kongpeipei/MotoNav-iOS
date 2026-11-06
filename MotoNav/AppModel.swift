@@ -2134,6 +2134,22 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             tips = await amapKeywordSearch(query, lat: a.latitude, lon: a.longitude,
                                            radius: 30000, distanceNote: false)
         }
+        // v2.90 补搜"建制镇"：高德 inputtips 对"吴圩"这类地名只做字符串模糊匹配，
+        // 返回同名的村/路（吴小圩、吴大圩、吴圩、吴圩村），**不会返回真正的"吴圩镇"** ——
+        // 因为"镇"是行政建制名，不在它的匹配口径里。
+        // 所以当地名式关键词（2~4 个汉字、本身不带建制后缀）在当前结果里
+        // 没有"名称等于它或名称以它开头"的条目时，追加一次 "<关键词>镇" 检索，
+        // 把真正的建制镇带回来参与排序。
+        let placeSuffixes = ["镇", "村", "街道", "路", "街"]
+        let looksLikePlaceName = (2...4).contains(query.count)
+            && !placeSuffixes.contains(where: { query.hasSuffix($0) })
+        if looksLikePlaceName,
+           !tips.contains(where: { $0.name == query || $0.name.hasPrefix(query) }) {
+            let richer = await amapInputTipsRaw(query + "镇", anchor: anchor, city: city, cityLimit: false)
+            for t in richer where !tips.contains(where: { $0.id == t.id }) {
+                tips.append(t)
+            }
+        }
         return rankTips(tips, anchor: anchor, keyword: query)
     }
 
@@ -2248,7 +2264,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func rankTips(_ tips: [AmapTip], anchor: CLLocationCoordinate2D?,
                           keyword: String = "") -> [AmapTip] {
         var seen = Set<String>()
-        var rows: [(AmapTip, Double, Bool)] = []
+        var rows: [(AmapTip, Double, Int)] = []
         let kw = keyword.trimmingCharacters(in: .whitespaces)
         for t in tips {
             guard seen.insert(t.id).inserted else { continue }
@@ -2258,27 +2274,43 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v2.25 精确命中优先：名称里包含关键词的排在前面。
             // 搜"吴圩镇"时，高德会先返回合肥的"吴圩"（同名村），
             // 不做这一步的话用户看到的第一条就是错的那个。
-            let exact = !kw.isEmpty && t.name.contains(kw)
-            rows.append((t, d, exact))
+            // v2.90 从"两级（含/不含）"改成"四级"：
+            //   0 名称与关键词完全相同（"吴圩"）
+            //   1 名称以关键词开头（"吴圩镇" / "吴圩村"）
+            //   2 名称包含关键词（"老吴圩桥"）
+            //   3 其他（"吴小圩""吴大圩" 这类高德的字序模糊匹配）
+            // 旧的二级排序里 "吴小圩" 因为不含"吴圩"直接被扔到"其他"，
+            // 却又靠距离最近排在第一屏，看起来就像"搜吴圩给了个吴小圩"。
+            let rank = AppModel.nameMatchRank(t.name, kw)
+            rows.append((t, d, rank))
         }
         guard anchor != nil else { return rows.map { $0.0 } }
-        // 排序：精确命中优先 → 距离近优先
+        // 排序：名称匹配等级优先 → 距离近优先
         rows.sort { a, b in
-            if a.2 != b.2 { return a.2 }
+            if a.2 != b.2 { return a.2 < b.2 }
             return a.1 < b.1
         }
         // v2.25 距离过滤放宽：**精确命中（名称含关键词）的条目不受距离限制**。
         // 用户搜"吴圩镇"（在滁州定远县，距合肥 55~68km；若人在更远的城市可能超 100km）
         // 就是明确要那个地方，不能因为"跨市"就把它从列表里抹掉。
         // 非精确命中的条目仍按 100km 过滤，避免外地无关 POI 挤进列表。
-        let exactRows = rows.filter { $0.2 }
-        let otherRows = rows.filter { !$0.2 && $0.1 <= 100_000 }
+        let exactRows = rows.filter { $0.2 <= 2 }
+        let otherRows = rows.filter { $0.2 > 2 && $0.1 <= 100_000 }
         var kept = exactRows + otherRows
         if kept.isEmpty {
             // 全都超距（且无精确命中）→ 退而取最近的 10 条，别让列表空掉
             kept = Array(rows.prefix(10))
         }
         return kept.map { $0.0 }
+    }
+
+    /// v2.90 名称与关键词的匹配等级（数字越小越精确）
+    static func nameMatchRank(_ name: String, _ kw: String) -> Int {
+        if kw.isEmpty { return 3 }
+        if name == kw { return 0 }
+        if name.hasPrefix(kw) { return 1 }
+        if name.contains(kw) { return 2 }
+        return 3
     }
 
     /// 右下角定位按钮：地图回中
