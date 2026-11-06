@@ -52,6 +52,11 @@ struct DraggableFloat<Content: View>: View {
     /// 用于"选中地点后临时弹出的卡片"：这类卡没有"用户希望它记住位置"的语义，
     /// 反而一旦被拖过一次就永久停在半空（地点卡长期卡在 57% 屏高就是这个）。
     var resetOnAppear: Bool = false
+    /// v2.66 松手吸附：拖动过程 1:1 跟手、不设任何中途限制；
+    /// 手指松开时回调一次（入参是松手时的 pos.y），返回要吸附到的 y，返回 nil 表示不吸附。
+    /// 用途：让"能随手拖"和"不长期互相遮挡"两个要求同时成立 ——
+    /// 拖的时候两卡可以叠在一起，松手后才弹开去。
+    var onDragEnded: ((CGFloat) -> CGFloat?)? = nil
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -77,6 +82,7 @@ struct DraggableFloat<Content: View>: View {
          avoidBottom: CGFloat = 0,
          avoidTop: CGFloat = 0,
          resetOnAppear: Bool = false,
+         onDragEnded: ((CGFloat) -> CGFloat?)? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -89,6 +95,7 @@ struct DraggableFloat<Content: View>: View {
         self.avoidBottom = avoidBottom
         self.avoidTop = avoidTop
         self.resetOnAppear = resetOnAppear
+        self.onDragEnded = onDragEnded
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -308,6 +315,12 @@ struct DraggableFloat<Content: View>: View {
                     .onEnded { v in
                         dragging = false
                         dragStartPos = nil
+                        // v2.66 松手吸附（不打断跟手，只在手指抬起这一下做一次归位）
+                        if !deleting, let cb = onDragEnded, let snapped = cb(pos.y) {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                pos.y = min(0.995, max(0.02, snapped))
+                            }
+                        }
                         if deleting {
                             // 左拉过卡片一半宽度即完成删除
                             let cardW = geo.size.width - 28

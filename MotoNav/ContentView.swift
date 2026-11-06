@@ -1590,9 +1590,20 @@ struct ContentView: View {
                     // 默认位压到 0.04（约 35pt），层级抬到 60（高于下卡的 50），
                     // 用户实机里它长期整条不显示，先保证它在最上面稳定可见。
                     // v2.64 起终点卡：默认贴顶，全屏范围自由拖动（不再与下卡互斥）
-                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.04),
+                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.10),
                                    lockX: true, topLocked: true,
-                                   onFrameChange: { planTopCardFrame = $0 }) {
+                                   onFrameChange: { planTopCardFrame = $0 },
+                                   // v2.66 松手吸附：拖的时候和方案卡随便叠，
+                                   // 松手后如果压住了方案卡，弹回方案卡顶边上方 8pt
+                                   onDragEnded: { y in
+                                       let sh = UIScreen.main.bounds.height
+                                       guard planBottomCardFrame.minY > 0,
+                                             planTopCardFrame.height > 0 else { return nil }
+                                       let bottomEdge = y * sh + planTopCardFrame.height
+                                       let limit = planBottomCardFrame.minY - 8
+                                       guard bottomEdge > limit else { return nil }
+                                       return (limit - planTopCardFrame.height) / sh
+                                   }) {
                         AnyView(routePlanTopCard)
                     }
                     .zIndex(60)
@@ -1610,10 +1621,22 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
-                                   resetOnAppear: true) { AnyView(routePlanBottomCard) }
+                                   resetOnAppear: true,
+                                   // v2.66 松手吸附：压住上卡时弹回，拖的过程不设限
+                                   onDragEnded: { y in
+                                       let sh = UIScreen.main.bounds.height
+                                       guard planTopCardFrame.maxY > 0,
+                                             planBottomCardFrame.height > 0 else { return nil }
+                                       let topEdge = y * sh - planBottomCardFrame.height
+                                       let limit = planTopCardFrame.maxY + 8
+                                       guard topEdge < limit else { return nil }
+                                       return (limit + planBottomCardFrame.height) / sh
+                                   }) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
-                    DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
+                    // v2.66 删除地图常驻「分类条」：和搜索面板里的 6 宫格是同一批
+                    // ServiceKind，两个入口做同一件事；高德只在搜索页给一次分类入口。
+                    // categoryBar 定义保留，需要时可再挂。
                     // v1.99 移除地图上浮动的"历史搜索"横条：搜索框聚焦时面板内已有历史列表，
                     // 地图上再挂一条既挡视线又重复
                 }
@@ -3637,9 +3660,11 @@ struct ContentView: View {
         // v1.63 导航态左侧竖排：刷新 / 极简
         // v2.58 默认位置 0.50 → 0.72：原来这排正好落在屏幕中部左侧，
         // 加上右上角的 +/− 把前方路线的可视区从两边各切掉一条。下移让开中轴。
-        if model.navigating && !showRouteOverview {
-            DraggableFloat(key: "navside", defaultPos: CGPoint(x: 0.07, y: 0.72)) { AnyView(navSideOverlay) }
-        }
+        // v2.66 用户要求：删除导航态左侧「刷新 / 极简 / 远景」三个按钮。
+        // 它们压在屏幕左侧 7% 位置，正是车与前方路线最常经过的一带；
+        // 而且刷新用尾部转向自动重算、极简在「我的」页有设置项、视野档位本就按速度自动切，
+        // 三个常驻按钮都在替已经自动化的东西重复提供手动入口。
+        // navSideOverlay 定义保留（含 navScaleTitle / navScaleIcon），需要时再挂回。
     }
 
     /// v2.22 导航顶部路线提示卡（高德式）
@@ -4731,11 +4756,13 @@ struct ContentView: View {
         // v2.58 普通态去掉外层卡片底：旧版 .ultraThinMaterial 会在搜索胶囊外围
         // 再糊一层灰白矩形，把底图压暗一圈。去掉后只剩里面那条白色搜索胶囊浮在地图上，
         // 跟高德首页一致；搜整屏态仍铺白面板（列表要有实底可读）。
+        // v2.66 搜索整屏从"整块铺白到屏幕四边"改成顶部圆角 28 的大卡：
+        // 高德搜索页是"顶部白卡 + 四角露出地图"，白色压满全屏会让人失去位置感。
         .background(searchActive ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(Color.clear),
-                    in: RoundedRectangle(cornerRadius: searchActive ? 0 : 22, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         // 透明底上再描边/投影会在胶囊外围画出一个空矩形，一并去掉
-        .overlay(RoundedRectangle(cornerRadius: searchActive ? 0 : 22, style: .continuous)
-                    .strokeBorder(Color.black.opacity(searchActive ? 0 : 0), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0), lineWidth: 1))
         .shadow(color: .black.opacity(0), radius: 0, y: 0)
         // 背景透明后命中区不能只依赖可见内容，否则拖动时手指落在胶囊两侧的空白会落空
         .contentShape(Rectangle())
