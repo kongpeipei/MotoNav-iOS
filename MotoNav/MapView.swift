@@ -946,7 +946,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         if context.coordinator.pendingNavSnap, navigating, let loc = userLocation {
             context.coordinator.pendingNavSnap = false
             let sh = map.bounds.height > 200 ? map.bounds.height : UIScreen.main.bounds.height
-            let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: sh)
+            // v2.82 刚进导航时 navScaleTarget 往往还带着规划页"全程全览"的档位
+            //（一次几公里），用它对准车 = 车缩成一个小点，用户看到的就是"一进导航
+            //自动变成了全览"。首帧一律不超过第二紧档（400 m 视野）。
+            let scale = min(navScaleTarget, AppModel.navScaleSteps[1])
+            let distance = MapViewRepresentable.altitudeForScale(scale, screenH: sh)
             var cam = map.camera
             // 首帧让车本身落在中心，等跟随接管后再按前移比例微调到中部偏下
             cam.centerCoordinate = MapGeo.toGCJ(loc)
@@ -1027,7 +1031,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             } ?? .greatestFiniteMagnitude
             context.coordinator.navLastFollow = loc
             if !context.coordinator.userMoved, movedM > 4, map.userTrackingMode == .none {
-                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: map.bounds.height)
+                // v2.82 同一条约束：跟随接管时若档位还没被 autoNavScaleTarget 收敛，
+                // 也会用全览档位，视野突然拉远。这里同样夹到第二紧档以内。
+                let distance = MapViewRepresentable.altitudeForScale(
+                    min(navScaleTarget, AppModel.navScaleSteps[1]), screenH: map.bounds.height)
                 let fwd = MapViewRepresentable.forwardCoordinate(
                     loc,
                     meters: distance * MapViewRepresentable.navCameraForwardRatio,
