@@ -4593,16 +4593,19 @@ struct ContentView: View {
         .padding(.bottom, 8)
         // v2.54 搜索整屏态：卡片退成整面白色面板（不透明、无圆角、无投影），
         // 普通态保持原来的毛玻璃浮卡
-        .background(searchActive ? AnyShapeStyle(Color(.systemBackground))
-                                : AnyShapeStyle(.ultraThinMaterial),
+        // v2.58 普通态去掉外层卡片底：旧版 .ultraThinMaterial 会在搜索胶囊外围
+        // 再糊一层灰白矩形，把底图压暗一圈。去掉后只剩里面那条白色搜索胶囊浮在地图上，
+        // 跟高德首页一致；搜整屏态仍铺白面板（列表要有实底可读）。
+        .background(searchActive ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(Color.clear),
                     in: RoundedRectangle(cornerRadius: searchActive ? 0 : 22, style: .continuous))
+        // 透明底上再描边/投影会在胶囊外围画出一个空矩形，一并去掉
         .overlay(RoundedRectangle(cornerRadius: searchActive ? 0 : 22, style: .continuous)
-                    .strokeBorder(Color.black.opacity(searchActive ? 0 : 0.08), lineWidth: 1))
-        .shadow(color: .black.opacity(searchActive ? 0 : 0.12), radius: searchActive ? 0 : 8,
-                y: searchActive ? 0 : 3)
-        // v2.56 搜索框加长：左右留白 14 → 8（卡宽 +12pt），配合输入行 52→56pt 高度，
-        // 整体比原来更长一截，跟高德首页那条搜索胶囊的比例更接近。
-        .padding(.horizontal, searchActive ? 0 : 8)
+                    .strokeBorder(Color.black.opacity(searchActive ? 0 : 0), lineWidth: 1))
+        .shadow(color: .black.opacity(0), radius: 0, y: 0)
+        // 背景透明后命中区不能只依赖可见内容，否则拖动时手指落在胶囊两侧的空白会落空
+        .contentShape(Rectangle())
+        // v2.58 再加长：横向留白 8 → 4（卡宽 +8pt），输入行 56 → 58pt
+        .padding(.horizontal, searchActive ? 0 : 4)
     }
 
     /// v1.99 搜索框快捷词（回家 / 去公司）
@@ -4963,7 +4966,7 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)      // v2.51 40pt 高按钮 + 6 上下 = 52，保持搜索框原高度
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 56)
+        .frame(minHeight: 58)
         // v1.63：跟随系统深浅色（浅色白底/深色深底，夜间骑行不刺眼）
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
