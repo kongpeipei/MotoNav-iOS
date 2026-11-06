@@ -3719,7 +3719,11 @@ struct ContentView: View {
         // v2.02 按高德导航底部卡片重做：
         //   位置贴底、高度固定（旧版红绿灯/车道行"有就插、没有就撤"→ 卡片高度反复跳变）
         //   左侧灰色圆形 ×、右侧浅灰圆角"全览"，中间三段大数字（剩余/用时/到达）
-        VStack {
+        // v2.60 贴底：这个 VStack 没有 Spacer，默认按内容垂直居中 ——
+        // 导航底卡（6.5 公里 / 14 分钟 / 预计到达）因此在屏幕正中悬着，
+        // 下方露出一整条地图。补 Spacer 撑满后内容自然沉到最下方。
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
             if model.navigating {
                 if showExitConfirm {
                     HStack(spacing: 10) {
@@ -3791,6 +3795,9 @@ struct ContentView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 贴底但不压 home indicator：34pt 安全区 + 10pt 呼吸位
+        .safeAreaPadding(.bottom, 10)
     }
 
     /// v2.02 高德式导航底部卡（内容分三层，总高度恒定 → 不再跳动）
