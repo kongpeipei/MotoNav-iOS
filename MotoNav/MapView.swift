@@ -205,7 +205,15 @@ struct MapViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.showsUserLocation = true
-        map.showsTraffic = true // v2.31 原生实时路况图层(替换自绘瓦片后 MapKit 自带)
+        // v2.53 关闭苹果原生路况层：本项目按高德 API 的 tmc/tmcs 自绘粗色段，
+        // 两层同屏（细红线 + 粗橙带）颜色打架；高德只有一层粗色段。
+        map.showsTraffic = false
+        map.showsScale = true    // v2.53 左下角比例尺（视野档位收小后需要一个校验地标）
+        // v2.53 底图 POI 白名单：苹果默认铺全类别（餐馆/购物/景点都画），比高德"花"得多。
+        // 只留骑行导航真正用得上的几类，道路与地名优先。
+        map.pointOfInterestFilter = MKPointOfInterestFilter(including: [
+            .gasStation, .hospital, .pharmacy, .school, .parking, .publicTransport
+        ])
         map.showsCompass = false // v2.28：按用户要求删除所有界面指南针（含系统自带的）
         map.isPitchEnabled = true   // 双指俯仰调节 3D 角度
         map.isRotateEnabled = true  // 双指旋转地图
@@ -270,6 +278,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.selectedRouteIdx = selectedRouteIdx
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
         context.coordinator.navigating = navigating
+        // v2.53 导航态锁旋转/倾斜手势：高德导航松手即回车头朝上，
+        // 本版直接禁掉手势 —— 双指一转会把 userMoved 置真，跟随永久停住、只能点定位救
+        let gestureLocked = navigating
+        if map.isRotateEnabled == gestureLocked { map.isRotateEnabled = !gestureLocked }
+        if map.isPitchEnabled == gestureLocked { map.isPitchEnabled = !gestureLocked }
         context.coordinator.onMapLoad = onMapLoad
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
         if locateTick != context.coordinator.lastLocateTick {
@@ -716,28 +729,45 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 直接赋值会导致地图每帧瞬跳旋转。改为每帧最多转 45°；掉头（>120°）直接跟随避免迟滞。
         // v2.48 规划态不跟手机朝向：规划页要看整条路线做选择，
         // 地图跟着手机转会把路线转出视野、甚至看起来"地图不见了"（高德规划页同款北向上）
-        if !context.coordinator.userMoved && (navigating || cruise) {
+        // v2.53 航向滤波重做。旧版写法「每帧最多转 45°，≤45° 直接赋值」对 GPS 抖动
+        // 完全无效：course 噪声常年在 ±30°，正好落进直接赋值区间 → 一帧内瞬跳；
+        // 再叠加没有低速冻结，停车等灯时地图会左右小幅摇摆。
+        // 现在：
+        //   ① 车速 <5 km/h 冻结航向（高德同款，静止时地图不动）
+        //   ② 按时间常数 0.25s 低通逼近目标（与帧率无关，肉眼连续）
+        //   ③ 偏差 <2° 视为噪声
+        //   ④ 掉头（>120°）直接跟，避免长时间指错方向
+        //   ⑤ 只对导航态生效：巡航态用 .followWithHeading 由系统跟手机朝向，
+        //      再手动每帧写 camera.heading 会与系统跟随打架（v2.34 的平滑在巡航上就不成立）
+        if !context.coordinator.userMoved && navigating {
             let target = CLLocationDirection(heading)
-            var cur = context.coordinator.lastAppliedHeading ?? target
-            var d = target - cur
-            while d > 180 { d -= 360 }
-            while d < -180 { d += 360 }
-            let step = 45.0
-            if abs(d) > 120 {
-                cur = target
-            } else if abs(d) > step {
-                cur += (d > 0 ? step : -step)
-            } else {
-                cur = target
+            let now = Date()
+            let dt = max(0.016, min(0.5, now.timeIntervalSince(context.coordinator.lastHeadingTickAt)))
+            context.coordinator.lastHeadingTickAt = now
+            let mps = map.userLocation?.speed ?? -1
+            let moving = mps > 1.4 || mps < 0   // <5 km/h 冻结；负值表示速度无效，按行驶处理
+            if moving || context.coordinator.lastAppliedHeading == nil {
+                var cur = context.coordinator.lastAppliedHeading ?? target
+                var d = target - cur
+                while d > 180 { d -= 360 }
+                while d < -180 { d += 360 }
+                if abs(d) > 120 {
+                    cur = target
+                } else if abs(d) >= 2 {
+                    let k = min(1.0, dt / 0.25)
+                    cur += d * k
+                }
+                cur = (cur.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+                context.coordinator.lastAppliedHeading = cur
             }
-            cur = (cur.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
-            context.coordinator.lastAppliedHeading = cur
-            map.camera.heading = cur
+            if let applied = context.coordinator.lastAppliedHeading {
+                map.camera.heading = applied
+            }
         }
         // v2.32 MapKit 3D 俯视加固：部分机型在 followWithHeading 下会把 pitch 重置回 0
         // （MapKit known issue：3D 相机由系统接管）。导航态每 ≥3 秒检测一次，
         // 俯角被吞（<30°）就恢复 45°；不打断手势、不每次刷新。
-        if navigating, pitchDeg > 0, !context.coordinator.userMoved,
+        if (navigating || cruise), pitchDeg > 0, !context.coordinator.userMoved,
            Date().timeIntervalSince(context.coordinator.lastPitchRestoreAt) > 3,
            map.camera.pitch < 30 {
             context.coordinator.lastPitchRestoreAt = Date()
@@ -848,28 +878,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastUserMovedFlag = context.coordinator.userMoved
             onUserMovedChanged?(context.coordinator.userMoved)
         }
-        // 导航中拖动/旋转地图后，车开远（>100米）自动拉回跟随（高德导航行为）
-        if navigating && context.coordinator.userMoved {
-            if let loc = userLocation, let last = context.coordinator.navLastFollow,
-               CLLocation(latitude: loc.latitude, longitude: loc.longitude)
-                .distance(from: CLLocation(latitude: last.latitude, longitude: last.longitude)) > 100 {
-                context.coordinator.userMoved = false
-                context.coordinator.navLastFollow = loc
-                context.coordinator.setRegionProgrammatically {
-                    // v2.49 拉回时同步把相机放到车前（.none 下系统不再自动居中）
-                    map.userTrackingMode = .none
-                    let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: map.bounds.height)
-                    var cam = map.camera
-                    cam.centerCoordinate = MapGeo.toGCJ(
-                        MapViewRepresentable.forwardCoordinate(
-                            loc,
-                            meters: distance * MapViewRepresentable.navCameraForwardRatio,
-                            bearingDeg: heading))
-                    cam.centerCoordinateDistance = distance
-                    map.setCamera(cam, animated: true)
-                }
-            }
-        } else if navigating, let loc = userLocation {
+        // v2.53 取消"拖动后开够 100m 自动拉回"：高德导航里拖开地图会停在浏览态、
+        // 由用户点底部"继续导航"返回（ContentView 已有该按钮，navUserMoved 驱动）。
+        // 40 km/h 开 100m 只要 9 秒 —— 用户刚拖开看前方路况就被拽回去；
+        // 而且回跳只重设了 center/distance，pitch/heading 沿用旧值，动画途中会斜着飞。
+        if navigating, !context.coordinator.userMoved, let loc = userLocation {
             // v2.49 手动跟随：坐标移动超过 4m 才挪相机（定位回调 1Hz，足够平滑；
             // 避免每次 updateUIView 都重设相机造成画面抖动）
             let last = context.coordinator.navLastFollow
@@ -914,8 +927,12 @@ struct MapViewRepresentable: UIViewRepresentable {
                         .distance(from: CLLocation(latitude: last!.latitude, longitude: last!.longitude)) > 25 {
                     context.coordinator.cruiseLastLoc = loc
                     context.coordinator.setRegionProgrammatically {
+                        // v2.53 巡航前视偏移：车不再钉在正中，前移 20% 当前视距（导航为 35%）
                         var cam = map.camera
-                        cam.centerCoordinate = MapGeo.toGCJ(loc)
+                        let d = cam.centerCoordinateDistance
+                        cam.centerCoordinate = MapGeo.toGCJ(
+                            MapViewRepresentable.forwardCoordinate(
+                                loc, meters: d * 0.2, bearingDeg: heading))
                         map.camera = cam
                     }
                 }
@@ -926,7 +943,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // v2.01 俯仰角由 AppModel.pitchDeg 驱动（导航开始 45°，退出 0°，右侧 3D 按钮切换）
         if pitchDeg != context.coordinator.lastPitchDeg {
             context.coordinator.lastPitchDeg = pitchDeg
-            let target = CGFloat(max(0, min(70, pitchDeg)))
+            // v2.53 上限 70°→55°：3D 俯角越大地名/路名拉伸越严重，55° 是可读上限
+            let target = CGFloat(max(0, min(55, pitchDeg)))
             context.coordinator.setRegionProgrammatically {
                 var cam = map.camera
                 cam.pitch = target
@@ -1124,6 +1142,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var navLastFollow: CLLocationCoordinate2D?
         /// v2.34 自车航向平滑：上一次实际应用的 camera.heading，避免 GPS course 抖动导致地图瞬跳旋转
         var lastAppliedHeading: CLLocationDirection?
+        /// v2.53 航向滤波的时间基准（算 dt 用，保证与帧率无关）
+        var lastHeadingTickAt = Date()
         /// 程序主动设置区域（避免被标记为用户移动）
         /// v2.29 程序化移动标志：**计数器**（原来是 Bool）
         ///
