@@ -992,6 +992,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.setRegionProgrammatically {
                     var cam = map.camera
                     cam.centerCoordinate = MapGeo.toGCJ(fwd)
+                    // v2.62 补距离：旧版这里只挪中心不设距离，相机沿用的是上一次
+                    // 的视距（规划页全览 2 公里 / 上一档位），车会被缩成看不见的小点，
+                    // 或直接被推出屏幕 —— "导航开始看不到当前位置"的另一半原因。
+                    cam.centerCoordinateDistance = distance
+                    if pitchDeg > 0 { cam.pitch = CGFloat(pitchDeg) }
                     map.setCamera(cam, animated: true)
                 }
             }
@@ -1479,15 +1484,27 @@ struct MapViewRepresentable: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             // 当前位置：缩小版指南针图标（玻璃圆底 + 红色指北针）
             if annotation is MKUserLocation {
-                let id = "userLoc"
+                // v2.62 导航态换蓝色箭头：旧的指南针图标在 3D 灰楼块上几乎看不见，
+                // 用户实机反馈"导航态看不到当前位置"。两种态用不同 reuse id，
+                // 避免复用时 image 不刷新。
+                let navMode = self.navigating
+                let id = navMode ? "userLocNav" : "userLoc"
                 var v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
                 if v == nil {
                     v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
                 }
-                v?.image = MapViewRepresentable.makeUserIcon()
-                v?.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+                v?.image = navMode ? MapViewRepresentable.makeUserArrow()
+                                   : MapViewRepresentable.makeUserIcon()
+                // v2.62 不再手写 frame：MapKit 会按 image 尺寸改写它，
+                // 手设的 44x44 会被打回 40x40，反而让图标在 offsets 上错位
                 v?.centerOffset = .zero
                 v?.canShowCallout = false
+                // v2.62 导航态必显：俯角 45° 时 3D 建筑会把定位点压到楼下，
+                // 用户实机"导航刚开始看不到当前位置"多半就是这条。
+                // required 保证它永远不被别的标注挤掉，zPosition 保证盖在楼块之上。
+                v?.displayPriority = .required
+                v?.layer.zPosition = 1000
+                v?.isEnabled = true
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
@@ -1929,6 +1946,38 @@ extension MKPolyline {
 
 extension MapViewRepresentable {
     /// v1.63 精简定位图标：高德同款实心蓝色指向箭头（无光晕/无中心点/无装饰，保留指向功能）
+    /// v2.62 导航态定位箭头：蓝色实心箭头 + 白色描边 + 淡投影，
+    /// 保证在 45° 俯视、灰色建筑块、绿色路线三种背景上都一眼可见。
+    static func makeUserArrow() -> UIImage {
+        let size: CGFloat = 46
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { ctx in
+            let c = ctx.cgContext
+            // 白色描边底
+            let white = UIColor.white
+            c.setFillColor(white.cgColor)
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: size / 2, y: 4))
+            path.addLine(to: CGPoint(x: size - 8, y: size - 4))
+            path.addLine(to: CGPoint(x: size / 2, y: size - 14))
+            path.addLine(to: CGPoint(x: 8, y: size - 4))
+            path.close()
+            // 先把整体填白（描边效果）
+            white.setFill()
+            path.fill()
+            // 再内缩填蓝
+            let inner = UIBezierPath()
+            let inset: CGFloat = 3.2
+            inner.move(to: CGPoint(x: size / 2, y: 4 + inset * 1.6))
+            inner.addLine(to: CGPoint(x: size - 8 - inset, y: size - 4 - inset * 0.6))
+            inner.addLine(to: CGPoint(x: size / 2, y: size - 14))
+            inner.addLine(to: CGPoint(x: 8 + inset, y: size - 4 - inset * 0.6))
+            inner.close()
+            UIColor(red: 0.10, green: 0.42, blue: 0.92, alpha: 1.0).setFill()
+            inner.fill()
+        }
+    }
+
     static func makeUserIcon() -> UIImage {
         let size: CGFloat = 40
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))

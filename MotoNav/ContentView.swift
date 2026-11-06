@@ -1589,9 +1589,15 @@ struct ContentView: View {
                     // v2.60 起终点卡改为"硬贴顶"：去掉 avoidBottom 的额外挤压，
                     // 默认位压到 0.04（约 35pt），层级抬到 60（高于下卡的 50），
                     // 用户实机里它长期整条不显示，先保证它在最上面稳定可见。
+                    // v2.62 两卡互不重叠：上卡底边不得低于下卡顶边（实测框动态换算）
+                    let screenHPlan = UIScreen.main.bounds.height
+                    let topAvoidBottom: CGFloat = planBottomCardFrame.minY > 0
+                        ? max(120, screenHPlan - planBottomCardFrame.minY + 8)
+                        : screenHPlan * 0.30
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.04),
                                    lockX: true, topLocked: true,
-                                   onFrameChange: { planTopCardFrame = $0 }) {
+                                   onFrameChange: { planTopCardFrame = $0 },
+                                   avoidBottom: topAvoidBottom) {
                         AnyView(routePlanTopCard)
                     }
                     .zIndex(60)
@@ -1609,6 +1615,8 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
+                                   // v2.62 上卡顶边下方 8pt 以下才允许下卡出现（实测框动态换算）
+                                   avoidTop: planTopCardFrame.maxY > 0 ? planTopCardFrame.maxY + 8 : 120,
                                    resetOnAppear: true) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
@@ -1640,10 +1648,12 @@ struct ContentView: View {
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
                                    avoidBottom: 74,
-                                   // v2.58 顶部避让：首页定位点由系统跟随恒定在屏幕正中，
-                                   // 搜索卡不许上拖穿过它 —— 卡的最高位置压在点下沿 28pt 之外。
-                                   // 整屏搜索态另说：那一刻是全屏面板，点被盖住是预期行为。
-                                   avoidTop: searchActive ? 0 : (UIScreen.main.bounds.height * 0.5 + 28)) {
+                                   // v2.62 去掉"搜索卡躲避定位点"（用户明确要求）：
+                                   // 旧版为了不让卡片盖住定位蓝点，把卡片最高位置限在
+                                   // 半屏 + 28pt，碰上卡片较高/实测高度异常时整张卡被推到底边外。
+                                   // 定位点由系统跟随恒定在屏幕正中，卡片盖住它是可接受的，
+                                   // 位置约束只保留"不许压 tab 条"这一条。
+                                   avoidTop: 0) {
                         AnyView(bottomMainCard)
                     }
                 }
