@@ -2257,7 +2257,8 @@ struct ContentView: View {
     /// 视觉上更接近截图的整体观感。
     private var routePlanActionBar: some View {
         HStack(spacing: 10) {
-            // 省钱信息（禁摩/绕行费用提示）
+            // v2.54 原叫"省钱信息"，但点开的实际内容是禁摩/限行风险摘要
+            //（model.riderRisks），名不副实 —— 改名并把角标换成警示三角
             Button {
                 haptic()
                 model.status = model.riderRisks.isEmpty
@@ -2265,9 +2266,9 @@ struct ContentView: View {
                     : RiderAnalyzer.summary(model.riderRisks)
             } label: {
                 VStack(spacing: 2) {
-                    Image(systemName: "yensign.circle")
+                    Image(systemName: "exclamationmark.triangle")
                         .font(.footnote)
-                    Text("省钱信息")
+                    Text("禁摩提示")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)
@@ -2468,7 +2469,8 @@ struct ContentView: View {
                     haptic()
                     model.swapOriginDest()
                 } label: {
-                    Image(systemName: "arrow.up.arrow.down")
+                    // v2.54 上下箭头读不出"交换"，换成 swap 符号（同文件 3612 行已在用）
+                    Image(systemName: "arrow.triangle.swap")
                         .font(.body.bold())
                         .foregroundStyle(.primary)
                         .frame(width: 32, height: 32)
