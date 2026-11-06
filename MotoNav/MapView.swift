@@ -1449,12 +1449,12 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return v
             }
             if let pa = annotation as? PreviewAnnotation {
-                let id = "preview"
-                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
-                    ?? MKMarkerAnnotationView(annotation: pa, reuseIdentifier: id)
-                v.markerTintColor = .systemGreen
-                v.glyphText = "✓"
-                v.titleVisibility = .adaptive
+                // v2.58 搜索目的地改脉冲标注：绿圆 + 白勾 + 下方"搜索目标"标签 + 外圈呼吸扩散环
+                let id = "previewPulse"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? PulseHitAnnotationView
+                    ?? PulseHitAnnotationView(annotation: pa)
+                v.annotation = pa
+                v.canShowCallout = false
                 return v
             }
             if let sh = annotation as? SearchHitAnnotation {
@@ -1700,6 +1700,109 @@ final class SearchHitAnnotation: NSObject, MKAnnotation {
 }
 
 /// 加油站标注（橙色"油"）
+/// v2.58 搜索目的地脉冲标注：绿圆 + 白勾 + "搜索目标"标签 + 外圈呼吸扩散环。
+/// 不用 MKMarkerAnnotationView：marker 内部渲染不可控，没法在圆底外面挂独立脉冲环。
+final class PulseHitAnnotationView: MKAnnotationView {
+    private let ring = CAShapeLayer()
+    private let dotView = UIImageView()
+    private let label = UILabel()
+    private static let dotSide: CGFloat = 34
+    private static let canvasW: CGFloat = 108
+    private static let canvasH: CGFloat = 78
+
+    init(annotation: MKAnnotation?) {
+        super.init(annotation: annotation, reuseIdentifier: "previewPulse")
+        frame = CGRect(x: 0, y: 0, width: Self.canvasW, height: Self.canvasH)
+        backgroundColor = .clear
+        isOpaque = false
+        let dotCenterY = Self.dotSide / 2 + 2
+        centerOffset = CGPoint(x: 0, y: dotCenterY - Self.canvasH / 2)
+
+        ring.fillColor = UIColor.clear.cgColor
+        ring.strokeColor = UIColor(red: 0.13, green: 0.72, blue: 0.36, alpha: 1.0).cgColor
+        ring.lineWidth = 2.5
+        ring.opacity = 0
+        layer.addSublayer(ring)
+
+        // 不用 MKAnnotationView.image：一旦设了 image，MapKit 会按图片尺寸改写 frame，
+        // 108×78 的画布会被压成 34×34，脉冲环和标签就没地方放了。
+        dotView.image = Self.makeDot()
+        dotView.contentMode = .scaleAspectFit
+        addSubview(dotView)
+
+        label.text = "搜索目标"
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = UIColor(white: 0.15, alpha: 1)
+        label.textAlignment = .center
+        label.backgroundColor = UIColor.white.withAlphaComponent(0.92)
+        label.layer.cornerRadius = 5
+        label.layer.masksToBounds = true
+        addSubview(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private static func makeDot() -> UIImage {
+        let side: CGFloat = 34
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        return renderer.image { _ in
+            let rect = CGRect(x: 1.5, y: 1.5, width: side - 3, height: side - 3)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: (side - 3) / 2)
+            UIColor(red: 0.13, green: 0.72, blue: 0.36, alpha: 1.0).setFill()
+            path.fill()
+            UIColor.white.withAlphaComponent(0.9).setStroke()
+            path.lineWidth = 2
+            path.stroke()
+            let cfg = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+            if let check = UIImage(systemName: "checkmark", withConfiguration: cfg)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                let sz = check.size
+                check.draw(at: CGPoint(x: (side - sz.width) / 2, y: (side - sz.height) / 2))
+            }
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let cx = bounds.midX
+        let cy = Self.dotSide / 2 + 2
+        ring.frame = CGRect(x: cx - Self.dotSide / 2, y: cy - Self.dotSide / 2,
+                            width: Self.dotSide, height: Self.dotSide)
+        ring.path = UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: Self.dotSide, height: Self.dotSide)).cgPath
+        dotView.frame = CGRect(x: cx - Self.dotSide / 2, y: cy - Self.dotSide / 2,
+                               width: Self.dotSide, height: Self.dotSide)
+        let tw = min(bounds.width, label.intrinsicContentSize.width + 10)
+        label.frame = CGRect(x: (bounds.width - tw) / 2, y: cy + Self.dotSide / 2 + 3, width: tw, height: 17)
+    }
+
+    /// 呼吸脉冲：从圆底边缘扩到 2.1 倍同时淡出，1.7s 一轮循环。
+    func startPulse() {
+        ring.removeAllAnimations()
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.96
+        scale.toValue = 2.1
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.85
+        fade.toValue = 0.0
+        let group = CAAnimationGroup()
+        group.animations = [scale, fade]
+        group.duration = 1.7
+        group.repeatCount = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        ring.add(group, forKey: "pulse")
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        if superview != nil { startPulse() }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        startPulse()
+    }
+}
+
 final class GasAnnotation: NSObject, MKAnnotation {
     let id: String
     private var wgs: CLLocationCoordinate2D
