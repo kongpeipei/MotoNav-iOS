@@ -1576,8 +1576,8 @@ struct ContentView: View {
                     // 顶部卡最多下拖到方案卡上沿，两张卡永远不重叠。
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.06),
                                    lockX: true, topLocked: true,
-                                   avoidBottom: 260,
-                                   onFrameChange: { planTopCardFrame = $0 }) {
+                                   onFrameChange: { planTopCardFrame = $0 },
+                                   avoidBottom: 260) {
                         AnyView(routePlanTopCard)
                     }
                     // v2.23 底部锚定：pos.y 是卡片底边位置，卡片向上生长。
