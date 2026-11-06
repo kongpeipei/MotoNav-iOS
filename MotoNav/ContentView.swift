@@ -1622,8 +1622,11 @@ struct ContentView: View {
                     // 且与安全区钳制叠加（卡片顶部跑出屏幕）
                     // v2.56 搜索卡上避让底部常驻 tab：卡片可以自由上下拖，
                     // 但不许拖到 tab 底下（原来 tab 在卡里，没有这个约束）
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.88),
-                                   lockX: true, bottomAnchor: false,
+                    // v2.60 搜索卡改"底边锚定 0.89"（778pt）：底边与卡片高度无关，
+                    // 无论有没有"回家/去公司"那一行、键盘弹不弹，卡底都压在 tab 条上沿上方 9pt。
+                    // 上一版的"中心定位 0.88"在卡变高时底边会跟着往下探、压到 tab 上。
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.89),
+                                   lockX: true, bottomAnchor: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
                                    avoidBottom: 74,
