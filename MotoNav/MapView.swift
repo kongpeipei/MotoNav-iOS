@@ -943,6 +943,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 改成只"记意图"，真正的对准推迟到定位第一次可用的那一帧。
             context.coordinator.pendingNavSnap = navigating
         }
+        context.coordinator.navActive = navigating
         if context.coordinator.pendingNavSnap, navigating, let loc = userLocation {
             context.coordinator.pendingNavSnap = false
             let sh = map.bounds.height > 200 ? map.bounds.height : UIScreen.main.bounds.height
@@ -964,9 +965,33 @@ struct MapViewRepresentable: UIViewRepresentable {
             cam.centerCoordinate = MapGeo.toGCJ(fwd)
             cam.centerCoordinateDistance = distance
             cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-            context.coordinator.setRegionProgrammatically {
-                map.userTrackingMode = .none
-                map.setCamera(cam, animated: true)
+            // v2.89 开始导航改成两段式入戏（对齐高德/竞品的"先看全局再落到车"）：
+            //   第一段：立刻全览整条路线（让骑手先确认方向和全程）
+            //   第二段：约 0.9 秒后用动画切进跟随视角，落点车在屏幕偏下、heading 随车头
+            // 旧版是直接瞬切到跟随视角，没有任何"全程"交代，一上来就贴着车看。
+            let coord = context.coordinator
+            coord.navIntroInProgress = true
+            if route.count > 1 {
+                var rect = MKMapRect.null
+                for c in MapGeo.toGCJ(route) {
+                    let p = MKMapPoint(c)
+                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
+                }
+                coord.setRegionProgrammatically {
+                    map.userTrackingMode = .none
+                    map.setVisibleMapRect(rect, edgePadding: viewportInsets, animated: true)
+                }
+            }
+            let flyIn = cam
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak map] in
+                defer { coord.navIntroInProgress = false }
+                guard coord.navActive, let map else { return }
+                coord.setRegionProgrammatically {
+                    map.userTrackingMode = .none
+                    map.setCamera(flyIn, animated: true)
+                }
+                // 飞入落点用的是 0.9 秒前的车位置（误差十几米）；
+                // 松手后跟随逻辑（位移 > 4m 才挪相机）会立刻把它校正到真实位置。
             }
         }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
@@ -976,6 +1001,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let loc = userLocation {
                 context.coordinator.navLastFollow = loc
             }
+            // v2.89 入戏两段式期间只更新 tick，不动相机（否则第一段的全览会被当场顶掉）
+            if !context.coordinator.navIntroInProgress {
             context.coordinator.setRegionProgrammatically {
                 // v2.49 导航态用手动跟随（车位置下移），非导航态保持系统朝向跟随
                 map.userTrackingMode = navigating ? .none : .followWithHeading
@@ -1003,6 +1030,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                     cam.pitch = 0
                     map.camera = cam
                 }
+            }
             }
         }
         // v1.81.4 导航中全览：缩放显示当前路线全程，暂停跟随（取消/固定恢复由 navigateFollowTick 接管）
@@ -1245,6 +1273,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastNavigatingState = false
         /// v2.77 "等定位就绪再对准车"的待办标志
         var pendingNavSnap = false
+        /// v2.89 开始导航的"全览 → 飞入"两段式动画进行中：
+        /// 期间 navigateFollowTick 只记账、不改相机，否则飞行视角会当场被跟随视角顶掉。
+        var navIntroInProgress = false
+        /// 当前是否仍在导航（延迟回调里用它确认用户没中途退出）
+        var navActive = false
         /// v2.25 高亮内容键（标注增删）
         var lastSearchHitKey = ""
         /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）
