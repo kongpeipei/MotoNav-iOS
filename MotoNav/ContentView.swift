@@ -3461,12 +3461,10 @@ struct ContentView: View {
                     DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.22),
                                    ) { AnyView(zoomOverlay) }
                 }
-                // v2.01 右上角比例尺（随缩放实时变化）
-                // v2.70 导航态进入近景档（12 = 转弯前后）时隐藏：
-                // 高德车道级视角里没有比例尺，这个距离下它既没参考价值又占位
-                if !(model.navigating && model.navScaleTarget <= AppModel.navScaleSteps[0]) {
-                    AnyView(scaleOverlay)
-                }
+                // v2.72 按用户要求彻底删除右上角比例尺（不再挂载）。
+                // 它此前占着右上角、还逼着导航顶部条留 92pt 让位；
+                // 距离感由顶部条的"还多久/多远"和地图本身表达，比例尺是重复信息。
+                // scaleOverlay 定义保留，需要时可再挂回。
             }
         }
     }
@@ -3655,9 +3653,8 @@ struct ContentView: View {
         // "继续导航"两个黑条同屏并存，逻辑上互相矛盾。
         if model.navigating && !showRouteOverview && !model.navUserMoved {
             AnyView(navTopHintBar)
-                // v2.56 提示卡原来几乎横跨整个屏宽，右端正好压在右上角"5 公里"比例尺上，
-                // 两个黑色元素叠在一起看不清。这里留出 92pt 让比例尺独立在右侧。
-                .padding(.trailing, 92)
+                // v2.72 比例尺已删，92pt 的让位一起撤掉：顶部条回到贴边全宽
+                .padding(.trailing, 4)
                 .frame(maxHeight: .infinity, alignment: .top)
                 // v2.50 用 safeAreaPadding：ZStack 里既有全屏地图（ignoresSafeArea）
                 // 也有安全区内容，固定 8 在"全屏坐标系"下会压到状态栏/灵动岛下面
@@ -3778,7 +3775,7 @@ struct ContentView: View {
                 .padding(.vertical, 10)
                 .background(Color.black.opacity(0.86), in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 12)   // v2.72 比例尺已删，顶部条不再让位，改为贴边全宽
             }
         }
     }
