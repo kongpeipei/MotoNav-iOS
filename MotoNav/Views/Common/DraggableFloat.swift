@@ -197,7 +197,13 @@ struct DraggableFloat<Content: View>: View {
         // v2.60 最终保险：无论上面怎么算，卡片底边一律不许越过 home indicator
         //（历史上出现过多条路径叠加后整卡掉出屏幕的情况）
         let hardMax = max(minCenter, screenH - h / 2 - 8)
-        return min(max(center, minCenter), min(maxCenter, hardMax))
+        let lo = minCenter
+        var hi = min(maxCenter, hardMax)
+        // v2.63 拖不动保护：两张卡各自按对方实测框算 avoid，边界叠起来会把
+        // [minCenter, maxCenter] 压成一条线 —— 手指拖了、pos 变了、画面纹丝不动，
+        // 表现就是"卡片不跟手上下移动"。这里保证至少留 40pt 行程。
+        if hi - lo < 40 { hi = lo + 40 }
+        return min(max(center, lo), hi)
     }
 
     /// v2.50 横向钳制：按卡片**实际宽度**保证左右不出屏。

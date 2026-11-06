@@ -3669,6 +3669,14 @@ struct ContentView: View {
     /// · 起步阶段（还没驶入主线）→ "请先去往出口"
     /// · 行驶中 → "前方xx米路口直行/右转/左转"，xx = 当前位置到该路口的距离
     ///   距离 > 60 米时只报动作不报米数（米数每秒都在变，读起来跳）
+    /// v2.63 顶部条距离文案：与播报同一套分级（>300 米不显示个位，避免读数每秒跳）
+    private func topHintDistance(_ m: Int) -> String {
+        if m >= 1000 { return String(format: "%.1f公里", Double(m) / 1000.0) }
+        if m >= 100 { return "\((m / 10) * 10)米" }
+        if m >= 60 { return "\((m / 10) * 10)米" }
+        return "\(max(1, m))米"
+    }
+
     private var navTopHintBar: some View {
         // v2.27（优化建议 #8/#9/#10）：
         //   · 数据源从 navTopHintText 换成 currentGuidanceEvent()，
@@ -3678,19 +3686,27 @@ struct ContentView: View {
         let event = model.currentGuidanceEvent()
         return Group {
             if !event.text.isEmpty {
-                HStack(spacing: 12) {
-                    // v2.56 对齐高德：高德那条提示里"28 米"是第一视觉（骑行时只需知道还多远该转），
-                    // 图标 40pt、距离字号比道路名大近一倍。旧版 19pt 图标 + 16pt 通篇一个字号，
-                    // 眼睛要扫一遍才找到数字。这里图标 19→26、主行 16→19，副行保持。
+                HStack(spacing: 10) {
                     Image(systemName: event.icon)
-                        .font(.system(size: 26, weight: .bold))
+                        .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(.white)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(event.text)
-                            .font(.system(size: 19, weight: .heavy))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                        // v2.63 主次分离（对齐高德）：把"还多远"抽出来单独放大，
+                        // 动作文字退居第二视觉。高德那条里 28 比路名大一倍，
+                        // 骑行时眼睛只扫一眼数字就知道该准备转没有。
+                        HStack(spacing: 6) {
+                            if event.distanceM > 0 {
+                                Text(topHintDistance(event.distanceM))
+                                    .font(.system(size: 27, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                    .monospacedDigit()
+                            }
+                            Text(event.action.isEmpty ? event.text : event.action)
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.95))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        }
                         // 副行：进入哪条路 + 走第几车道
                         if !event.subtitle.isEmpty || !event.laneHint.isEmpty {
                             HStack(spacing: 6) {
@@ -3720,13 +3736,24 @@ struct ContentView: View {
                             }
                         }
                     }
+                    // v2.63 顶部条右端播报开关（对齐高德）：旧版只有底部卡第二行有喇叭，
+                    // 骑行中想一键静音得先低头找底卡。这里顶部常驻一个，位置和手都够得着。
+                    Button {
+                        haptic()
+                        model.toggleVoice()
+                    } label: {
+                        Image(systemName: model.voiceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(model.voiceMuted ? Color.white.opacity(0.45) : .white)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(Color.black.opacity(0.72), in: Capsule())
+                .background(Color.black.opacity(0.86), in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
                 .padding(.horizontal, 16)
-                .allowsHitTesting(false)
             }
         }
     }
@@ -4022,9 +4049,18 @@ struct ContentView: View {
                 .background(Color.black.opacity(0.02))
             }
         }
-        .background(cardBg, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(
+        // v2.63 圆角 18 → 28（高德导航底卡是胶囊级圆角），并加一条顶部拖动指示条：
+        // 高德那条细灰线不装饰，是"这张卡能上滑展开"的提示，缺了它用户不知道能拉。
+        .background(cardBg, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(
             isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.07), lineWidth: 1))
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(isDark ? Color.white.opacity(0.28) : Color.black.opacity(0.14))
+                .frame(width: 36, height: 4)
+                .padding(.top, 6)
+                .allowsHitTesting(false)
+        }
         .shadow(color: .black.opacity(0.28), radius: 12, y: 4)
         .padding(.horizontal, 12)
     }
@@ -4679,6 +4715,12 @@ struct ContentView: View {
                 }
             }
             AnyView(searchInputRow)
+            // v2.63 高德式 6 宫格：搜索框下面一排彩色圆分类，点一下直接搜周边。
+            // 旧版只有键盘上方的横向 chips 条，一是要滚，二是颜色没分层，
+            // 骑行停在路边想找加油站要滑两下才看到。
+            if searchFocused && searchText.isEmpty && slotTarget == nil {
+                AnyView(quickCategoryGrid)
+            }
             // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
             // v1.97 常用地点设置态不弹快捷卡片（避免误点跳到导航）
             if searchFocused && searchText.isEmpty && slotTarget == nil {
@@ -4720,6 +4762,43 @@ struct ContentView: View {
         .contentShape(Rectangle())
         // v2.59 这里原来还有一条 .padding(.horizontal, searchActive ? 0 : 4)，
         // 和上面的 20 叠成 24pt，卡片比底部 tab 条窄 8pt、左边缘不齐 —— 已删。
+    }
+
+    /// v2.63 高德式 6 宫格（彩色实心圆 + 名称，一行铺满）
+    private var quickCategoryGrid: some View {
+        HStack(spacing: 0) {
+            ForEach(ServiceKind.allCases) { k in
+                Button {
+                    haptic()
+                    searchFocused = false
+                    dismissKeyboard()
+                    if model.serviceKindActive == k {
+                        model.clearServices()
+                    } else {
+                        Task { await model.loadServices(k) }
+                    }
+                } label: {
+                    VStack(spacing: 6) {
+                        ZStack {
+                            Circle()
+                                .fill(LinearGradient(colors: [k.tint.opacity(0.92), k.tint],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 46, height: 46)
+                            Image(systemName: k.icon)
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        Text(k.title)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(model.serviceKindActive == k ? k.tint : .primary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 10)
     }
 
     /// v1.99 搜索框快捷词（回家 / 去公司）
