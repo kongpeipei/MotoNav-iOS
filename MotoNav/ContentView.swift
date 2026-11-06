@@ -3577,7 +3577,8 @@ struct ContentView: View {
         let actionFontSize: CGFloat = minimal ? 18 : 14
         // v2.37 G3 速度是骑行最核心读数，层级不应低于公里/分钟：
         // 普通 17→19，极简 21→22（极简档已整体放大）
-        let speedFontSize: CGFloat = minimal ? 22 : 19
+        // v2.54 高德同款：速度是骑行首要读数，从 19/22 提到 26/28 并左移到卡内最前
+        let speedFontSize: CGFloat = minimal ? 28 : 26
         // v2.47 Q2 剩余 <1km 显示米（高德式）：800 米比 0.8 公里直观
         let remainMv = max(ns.remainM, 0)
         let kmTxt = remainMv < 1000 ? "\(remainMv)" : String(format: "%.1f", Double(remainMv) / 1000.0)
@@ -3681,6 +3682,22 @@ struct ContentView: View {
 
             // ── 第二层：下一动作 + 当前车速 ──
             HStack(spacing: 8) {
+                // v2.54 高德同款：速度读数左移放大（原在最右 19pt，和 km/h 两个小字
+                // 挤在搜索按钮边上，骑行中一眼扫不到）
+                let overSpeed = model.speedLimitKph > 0 && ns.speedKph > Double(model.speedLimitKph)
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text("\(Int(ns.speedKph.rounded()))")
+                        .font(.system(size: speedFontSize, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(overSpeed ? .red : mainFg)
+                    Text("km/h")
+                        .font(.system(size: 10))
+                        .foregroundStyle(overSpeed ? .red : dimFg)
+                }
+                Rectangle()
+                    .fill(dimFg.opacity(0.2))
+                    .frame(width: 1, height: 18)
+                    .padding(.horizontal, 2)
                 if let t = ns.nextTurn, ns.distToTurnM > 0 {
                     Image(systemName: navTurnIcon(t))
                         .font(.system(size: 19, weight: .bold))
@@ -3738,18 +3755,9 @@ struct ContentView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
-                let overSpeed = model.speedLimitKph > 0 && ns.speedKph > Double(model.speedLimitKph)
-                Text("\(Int(ns.speedKph.rounded()))")
-                    .font(.system(size: speedFontSize, weight: .bold))
-                    .monospacedDigit()
-                    .foregroundStyle(overSpeed ? .red : mainFg)
-                Text("km/h")
-                    .font(.system(size: 10))
-                    .foregroundStyle(overSpeed ? .red : dimFg)
             }
             .padding(.horizontal, 14)
-            .frame(height: 32)
+            .frame(height: 44)   // v2.54 速度 26pt 后 32pt 会裁切，抬到 44
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
             // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
