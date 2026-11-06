@@ -163,8 +163,9 @@ struct DraggableFloat<Content: View>: View {
             // 放到屏幕外 —— 用户实机里搜索卡整个沉到 tab 条以下就是这条。
             // 这种时候只认 defaultPos，至少保证卡片出现在设计位置上。
             let fallbackH: CGFloat = 64
-            let raw = bottomAnchor ? defaultPos.y * screenH - fallbackH / 2
-                                   : defaultPos.y * screenH
+            // clampedY 是实例方法，看不到 init 的 defaultPos 形参，用落盘下来的 defaultPos0
+            let raw = bottomAnchor ? defaultPos0.y * screenH - fallbackH / 2
+                                   : defaultPos0.y * screenH
             return min(screenH - fallbackH / 2, max(fallbackH / 2, raw))
         }
 
