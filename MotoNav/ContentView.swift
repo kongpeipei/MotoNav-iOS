@@ -3375,6 +3375,17 @@ struct ContentView: View {
             let cx = geo.size.width * 0.5
             let cy = geo.size.height * 0.65
             ZStack {
+                // v2.56 高德同款朝向扇形：定位点周围一个 90° 半透明扇形，
+                // 一眼看出"我正朝哪个方向看"。旧版只有四个方位字，没有任何朝向指示。
+                Path { path in
+                    path.addArc(center: CGPoint(x: cx, y: cy),
+                                radius: r * 0.84,
+                                startAngle: .degrees(-90 - Double(hdg) - 45),
+                                endAngle: .degrees(-90 - Double(hdg) + 45),
+                                clockwise: false)
+                    path.closeSubpath()
+                }
+                .fill(Color.white.opacity(0.12))
                 Circle()
                     .fill(Color.white.opacity(0.07))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.20), lineWidth: 1))
@@ -3442,57 +3453,52 @@ struct ContentView: View {
     ///   整条线因此"有起点、有终点、有当前位置"，语义完整。
     private var navProgressBar: some View {
         GeometryReader { geo in
-            // v2.56 六条优化：
-            // ① 方向修正 —— 旧版 ZStack(alignment:.top) + 绿段 height:filled，进度是从上往下长
-            //    （顶部=起点、底部=终点），人往前走绿条反而往下掉，方向跟直觉和高德都是反的。
-            //    改成 .bottom 对齐：底部=当前/起点，顶部=终点，绿段自下而上生长。
-            // ② 0% 时整条不可见 —— 旧轨道只有白 0.16，叠在浅色底图上几乎无色差，
-            //    刚出发（进度≈0）时右侧只剩一个白点，看着像"进度条丢了"。
-            //    轨道提到 0.22 并加 1pt 描边，底部再加一个起点小圆，0% 也能认出这是整条路程线。
-            // ③ 长度 0.52 → 0.60：底部导航卡已贴到屏底，下方让出空间，进度条可以更长更完整。
-            // ④ 横向 −13 → −15：5pt 条右边缘原本离屏边只剩 10.5pt，贴边更彻底、不压地图内容。
-            // ⑤ 进度变化加 0.6s easeOut：navProgress 每秒刷新一次，旧版是硬跳一格。
-            // ⑥ 纵向 0.42 → 0.44：提示卡双行时底边约 115pt，进度条顶端下移到 123pt 让出余量。
+            // v2.56 语义反转 —— 对齐高德：绿色代表「剩余路程」，不是「已走过」。
+            //
+            // 高德实机（导航刚开始）是「一整条绿 + 底部一个蓝点」：绿色是还没走的路，
+            // 蓝点是你的位置。越往前蓝点越往上爬、绿条越短，一眼看出"还剩这么长"。
+            // 上一版做成了「绿条从底部往上长 = 已走部分」，方向对了但语义反了 ——
+            // 刚出发时整条是灰的，看着像"还没开始"。
+            //
+            // 现在：绿段贴顶（高度 = h × 剩余比例），轨道灰段即已走部分，
+            // 蓝点贴在绿灰分界处自下而上移动。
             let h = geo.size.height * 0.60
             let p = max(0, min(1, model.navProgress))
-            let filled = max(7, h * p)
-            ZStack(alignment: .bottom) {
-                // 轨道（整条路程）
+            let left = h * (1 - p)          // 剩余路程（绿，贴顶）
+            let w: CGFloat = 6              // v2.56 5→6：量高德那条约 6.7pt
+            ZStack(alignment: .top) {
+                // 轨道（整条路程；已走部分就露出这层灰）
                 Capsule()
                     .fill(Color.white.opacity(0.22))
-                    .frame(width: 5, height: h)
+                    .frame(width: w, height: h)
                     .overlay(
                         Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
                     )
-                // 已走部分（自下而上生长）
+                // 剩余路程（绿，从顶端往下）
                 Capsule()
                     .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
-                    .frame(width: 5, height: filled)
-                    .animation(.easeOut(duration: 0.6), value: filled)
-                // 当前位置白点
+                    .frame(width: w, height: left)
+                    .animation(.easeOut(duration: 0.6), value: left)
+                // 当前位置：蓝圆 + 白边（高德同款，比纯白点在浅色底图上清楚得多）
                 Circle()
-                    .fill(Color.white)
-                    .frame(width: 9, height: 9)
-                    .shadow(color: .black.opacity(0.40), radius: 2, y: 1)
-                    .offset(y: -(filled - 4.5))
-                // 起点标记（贴底，0% 时也看得出路线的这头在屏幕下方）
-                Circle()
-                    .fill(Color.white.opacity(0.75))
-                    .frame(width: 6, height: 6)
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 0.5))
+                    .fill(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+                    .frame(width: 11, height: 11)
+                    .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                    .offset(y: left - 5.5)
                 // 终点（顶端）：白圆底 + 蓝色前进箭头
                 ZStack {
                     Circle()
                         .fill(Color.white.opacity(0.92))
-                        .frame(width: 14, height: 14)
+                        .frame(width: 13, height: 13)
                         .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
                     Image(systemName: "arrowtriangle.up.fill")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(.system(size: 6.5, weight: .bold))
                         .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                 }
-                .offset(y: -(h - 14))
+                .offset(y: -1)
             }
-            .frame(width: 14, height: h)
+            .frame(width: 16, height: h)
             .position(x: geo.size.width - 15, y: geo.size.height * 0.44)
         }
         .allowsHitTesting(false)
@@ -3568,13 +3574,16 @@ struct ContentView: View {
         let event = model.currentGuidanceEvent()
         return Group {
             if !event.text.isEmpty {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    // v2.56 对齐高德：高德那条提示里"28 米"是第一视觉（骑行时只需知道还多远该转），
+                    // 图标 40pt、距离字号比道路名大近一倍。旧版 19pt 图标 + 16pt 通篇一个字号，
+                    // 眼睛要扫一遍才找到数字。这里图标 19→26、主行 16→19，副行保持。
                     Image(systemName: event.icon)
-                        .font(.system(size: 19, weight: .bold))
+                        .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.white)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(event.text)
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 19, weight: .heavy))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -4588,7 +4597,9 @@ struct ContentView: View {
                     .strokeBorder(Color.black.opacity(searchActive ? 0 : 0.08), lineWidth: 1))
         .shadow(color: .black.opacity(searchActive ? 0 : 0.12), radius: searchActive ? 0 : 8,
                 y: searchActive ? 0 : 3)
-        .padding(.horizontal, searchActive ? 0 : 14)
+        // v2.56 搜索框加长：左右留白 14 → 8（卡宽 +12pt），配合输入行 52→56pt 高度，
+        // 整体比原来更长一截，跟高德首页那条搜索胶囊的比例更接近。
+        .padding(.horizontal, searchActive ? 0 : 8)
     }
 
     /// v1.99 搜索框快捷词（回家 / 去公司）
@@ -4949,7 +4960,7 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)      // v2.51 40pt 高按钮 + 6 上下 = 52，保持搜索框原高度
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 52)
+        .frame(minHeight: 56)
         // v1.63：跟随系统深浅色（浅色白底/深色深底，夜间骑行不刺眼）
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
