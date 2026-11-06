@@ -263,8 +263,10 @@ struct ContentView: View {
             } else {
                 AnyView(settingsPage)
             }
-            // v1.80 底部选项卡：仅"我的"页保留（导航主页已合并进底部主卡片，导航/我的按钮在卡片内）
-            if !model.navigating && !uiHidden && selectedTab == 1 {
+            // v2.56 底部选项卡改成常驻贴底（两个页面同一套样式）：
+            // 搜索卡不再内嵌"导航/我的"，搜索框与 tab 彻底分离；
+            // 搜索整屏态仍隐藏（高德搜索页同样没有底部 tab）。
+            if !model.navigating && !uiHidden && !searchActive {
                 AnyView(bottomTabBar)
             }
         }
@@ -833,8 +835,10 @@ struct ContentView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(height: 54)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+            // v2.56 外形改成整颗胶囊（对齐"我的"页截图：外层是一整条圆头药丸，
+            // 选中的一半在里面铺成蓝色胶囊），旧版是 22 圆角矩形，两头不是圆的
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
             .padding(.horizontal, 20)
         }
@@ -877,7 +881,9 @@ struct ContentView: View {
                 Text(explainBody)
             }
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 8)
+                // v2.56 底部常驻 tab 现在是浮在页面上的，列表末行（"到达目的地后自动记录…"）
+                // 会被它压住一半 —— 这里补足 tab 高度，让最后一行能滚到它上面
+                Color.clear.frame(height: 74)
             }
         }
     }
@@ -1594,9 +1600,12 @@ struct ContentView: View {
                     // v2.51 键盘避让交给 DraggableFloat 的 extraBottomInset：
                     // 旧版手写 .offset(y: -300) 不受钳制约束，键盘高时会把卡片整个顶出屏幕上半，
                     // 且与安全区钳制叠加（卡片顶部跑出屏幕）
+                    // v2.56 搜索卡上避让底部常驻 tab：卡片可以自由上下拖，
+                    // 但不许拖到 tab 底下（原来 tab 在卡里，没有这个约束）
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
-                                   extraBottomInset: keyboardHeight) {
+                                   extraBottomInset: keyboardHeight,
+                                   avoidBottom: 74) {
                         AnyView(bottomMainCard)
                     }
                 }
@@ -4516,10 +4525,9 @@ struct ContentView: View {
                     AnyView(onlineTipsList)
                 }
             }
-            // v2.54 搜索整屏态不显示底部"导航/我的"按钮（高德搜索页同样没有）
-            if !searchActive {
-                AnyView(tabButtonsRow)
-            }
+            // v2.56 "导航/我的"从卡片内移出（见 bottomLayerGroup 里的常驻贴底 tab）：
+            // 搜索卡只留搜索框本身，既跟高德一致，也让卡片变矮、能被自由上下拖动。
+            // 旧的 tabButtonsRow 定义保留在下方，但不再挂载。
         }
         .padding(.horizontal, 10)
         .padding(.top, 6)
