@@ -1916,10 +1916,9 @@ final class SearchHitAnnotation: NSObject, MKAnnotation {
 }
 
 /// 加油站标注（橙色"油"）
-/// v2.58 搜索目的地脉冲标注：绿圆 + 白勾 + "搜索目标"标签 + 外圈呼吸扩散环。
-/// 不用 MKMarkerAnnotationView：marker 内部渲染不可控，没法在圆底外面挂独立脉冲环。
+/// v2.58 搜索目的地标注：绿圆 + 白勾 + "搜索目标"标签。
+/// v2.89 按用户要求删除外圈脉冲环（连静态环一起），只留圆点与标签。
 final class PulseHitAnnotationView: MKAnnotationView {
-    private let ring = CAShapeLayer()
     private let dotView = UIImageView()
     private let label = UILabel()
     private static let dotSide: CGFloat = 34
@@ -1934,14 +1933,8 @@ final class PulseHitAnnotationView: MKAnnotationView {
         let dotCenterY = Self.dotSide / 2 + 2
         centerOffset = CGPoint(x: 0, y: dotCenterY - Self.canvasH / 2)
 
-        ring.fillColor = UIColor.clear.cgColor
-        ring.strokeColor = UIColor(red: 0.13, green: 0.72, blue: 0.36, alpha: 1.0).cgColor
-        ring.lineWidth = 2.5
-        ring.opacity = 0
-        layer.addSublayer(ring)
-
         // 不用 MKAnnotationView.image：一旦设了 image，MapKit 会按图片尺寸改写 frame，
-        // 108×78 的画布会被压成 34×34，脉冲环和标签就没地方放了。
+        // 108×78 的画布会被压成 34×34，标签就没地方放了。
         dotView.image = Self.makeDot()
         dotView.contentMode = .scaleAspectFit
         addSubview(dotView)
@@ -1982,9 +1975,6 @@ final class PulseHitAnnotationView: MKAnnotationView {
         super.layoutSubviews()
         let cx = bounds.midX
         let cy = Self.dotSide / 2 + 2
-        ring.frame = CGRect(x: cx - Self.dotSide / 2, y: cy - Self.dotSide / 2,
-                            width: Self.dotSide, height: Self.dotSide)
-        ring.path = UIBezierPath(ovalIn: CGRect(x: 0, y: 0, width: Self.dotSide, height: Self.dotSide)).cgPath
         dotView.frame = CGRect(x: cx - Self.dotSide / 2, y: cy - Self.dotSide / 2,
                                width: Self.dotSide, height: Self.dotSide)
         let tw = min(bounds.width, label.intrinsicContentSize.width + 10)
@@ -1998,14 +1988,9 @@ final class PulseHitAnnotationView: MKAnnotationView {
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        // 进入地图后停掉任何遗留动画（复用视图可能带着上一轮的动画进来）
-        ring.removeAllAnimations()
     }
 
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        ring.removeAllAnimations()
-    }
+    // v2.89 脉冲环删除后这里没有需要复位的状态，prepareForReuse 一并去掉
 }
 
 final class GasAnnotation: NSObject, MKAnnotation {
