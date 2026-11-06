@@ -3672,25 +3672,33 @@ struct ContentView: View {
         // 旧版直接比 distanceM，GPS 在 100 米处抖一下就变一次绿、字号跳一次，
         // 条宽也跟着变 —— 这是导航态"界面乱跳"的第二个来源。
         let urgent = model.navNearTurning
+        // v2.89 对齐高德"直行到终点"的极简形态：高德在纯直行到终点时，
+        // 顶部条只有一句"前方直行到达终点"，不放箭头、不放米数 ——
+        // 因为没有转向动作，箭头和距离都是纯噪音。转弯事件仍然保留箭头+距离。
+        let compact = event.kind == .straightToEnd
         return Group {
             if !event.text.isEmpty {
                 HStack(spacing: 10) {
-                    Image(systemName: event.icon)
-                        .font(.system(size: urgent ? 30 : 24, weight: .bold))
-                        .foregroundStyle(.white)
+                    if !compact {
+                        Image(systemName: event.icon)
+                            // v2.89 对齐高德箭头比例：高德那条里箭头约占条高一半以上
+                            .font(.system(size: urgent ? 38 : 30, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
                     VStack(alignment: .leading, spacing: 1) {
                         // v2.63 主次分离（对齐高德）：把"还多远"抽出来单独放大，
                         // 动作文字退居第二视觉。高德那条里 28 比路名大一倍，
                         // 骑行时眼睛只扫一眼数字就知道该准备转没有。
                         HStack(spacing: 6) {
-                            if event.distanceM > 0 {
+                            if event.distanceM > 0 && !compact {
                                 Text(topHintDistance(event.distanceM))
                                     .font(.system(size: urgent ? 31 : 27, weight: .heavy))
                                     .foregroundStyle(.white)
                                     .monospacedDigit()
                             }
                             Text(event.action.isEmpty ? event.text : event.action)
-                                .font(.system(size: 17, weight: .bold))
+                                // 简化形态下一整条只有这一句，字号抬到 22 才有"主视觉"
+                                .font(.system(size: compact ? 22 : 17, weight: .bold))
                                 .foregroundStyle(.white.opacity(0.95))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.7)
