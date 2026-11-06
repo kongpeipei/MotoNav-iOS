@@ -3327,8 +3327,50 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
+    /// v2.54 高德同款路程进度条：贴屏幕右边缘的竖直细线（起点在上、终点在下）
+    ///
+    /// 和 v2.22 那一版（v2.33 已删）的区别，正是它被当成"灰条纹"的原因：
+    /// - 旧版轨道 5pt + white.opacity(0.22)，叠在深色底图上呈蓝灰，整条像一道划痕；
+    ///   现在轨道压到 3pt / opacity 0.10，只有绿段经过的地方才看得出"这条线存在"。
+    /// - 旧版已走段是 max(4, h*p)，起步 27 米 / 6.8 公里 = 0.4% 时只有 4pt，
+    ///   被 5pt 轨道整个盖住 → 屏幕上只剩一条灰线，用户根本认不出这是进度条。
+    ///   现在已走段最小 6pt 且与轨道同宽，起步就是一段可见的绿线。
+    /// - 补了当前位置白点（带阴影）和终点空心圆：零进度时白点停在顶部起点，
+    ///   整条线因此"有起点、有终点、有当前位置"，语义完整。
+    private var navProgressBar: some View {
+        GeometryReader { geo in
+            let h = geo.size.height * 0.52
+            let p = max(0, min(1, model.navProgress))
+            let filled = max(6, h * p)
+            ZStack(alignment: .top) {
+                // 轨道（未走部分）
+                Capsule()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(width: 3, height: h)
+                // 已走部分
+                Capsule()
+                    .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
+                    .frame(width: 3, height: filled)
+                // 当前位置
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 7, height: 7)
+                    .shadow(color: .black.opacity(0.40), radius: 2, y: 1)
+                    .offset(y: filled - 3.5)
+                // 终点标记
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5)
+                    .frame(width: 7, height: 7)
+                    .offset(y: h - 7)
+            }
+            .frame(width: 9, height: h)
+            .position(x: geo.size.width - 11, y: geo.size.height * 0.42)
+        }
+        .allowsHitTesting(false)
+    }
+
     /// v2.25 导航浮层组（顶部提示卡 / 退出按钮 / 全览条 / 左侧竖排）
-    /// v2.33 已移除右侧竖直路程进度条（用户要求）
+    /// v2.33 曾按要求移除右侧竖直路程进度条；v2.54 按"高德同款"重做并加回
     @ViewBuilder
     private var navOverlayGroup: some View {
         // v2.54 导航态方位环（对齐高德）：定位点周围一圈极淡的环 + 东南西北四方位字
@@ -3341,6 +3383,10 @@ struct ContentView: View {
         // heading 直接用已有的 model.heading。
         if model.navigating && !showRouteOverview && !uiHidden {
             AnyView(compassRing)
+        }
+        // v2.54 高德同款路程进度条（贴右边缘竖直）：显示条件与方位环一致
+        if model.navigating && !showRouteOverview && !uiHidden {
+            AnyView(navProgressBar)
         }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
         if model.navigating && !showRouteOverview {

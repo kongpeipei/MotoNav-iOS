@@ -200,6 +200,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let startAt: Date
     }
     @Published var tripSummary: TripSummary?
+    /// v2.54 导航进度（0~1）：右侧竖直路程进度条用。
+    /// 由 updateNavProgress 在定位回调里更新，不在 body 求值期算（避免整树重算循环）。
+    @Published var navProgress: Double = 0
 
     /// 导航状态
     private var destLat = 0.0
@@ -3476,6 +3479,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // 已走过的路变灰：折线最近点索引
         let idx = nearestRouteIndex(route, loc)
         if idx != traveledIdx { traveledIdx = idx }
+        // v2.54 路程进度条：从 remainM 反推已走比例。
+        // 阈值 0.2% 防抖 —— 每 0.2% 才发布一次，避免定位帧率驱动的整树重算。
+        let total = max(1, routeDistanceM > 0 ? routeDistanceM : Int(distanceM(route.first!, route.last!)))
+        let p = max(0.0, min(1.0, 1.0 - Double(navStatusCache?.remainM ?? total) / Double(total)))
+        if abs(p - navProgress) > 0.002 { navProgress = p }
     }
 
     /// v2.22 最近折线点索引（走过的路变灰用；带缓存，增量搜索）
