@@ -36,10 +36,15 @@ on:
       - '**/*.md'
       - 'Android_MotoNav/**'
 
-# 同一分支只跑最新一次，避免重复排队
+# v2.53 同一分支仍串行（group 保留），但不再取消已在跑/排队的那一次。
+# 原因：push 与 workflow_dispatch 落在同一个 group（github.ref 相同），
+# cancel-in-progress: true 会让后触发的 run 把先触发的取消，实测出现
+# "push run 被 dispatch 取消、dispatch run 又被下一次触发取消"的连环取消，
+# 连续三次都没能真正启动。macos runner 排队本来就要几分钟，
+# 让它们各跑各的比互相取消更可靠；真要省额度，用 concurrency 之外的节流。
 concurrency:
   group: ipa-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PROJECT: MotoNav.xcodeproj
