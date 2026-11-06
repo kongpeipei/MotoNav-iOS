@@ -1991,31 +1991,20 @@ final class PulseHitAnnotationView: MKAnnotationView {
         label.frame = CGRect(x: (bounds.width - tw) / 2, y: cy + Self.dotSide / 2 + 3, width: tw, height: 17)
     }
 
-    /// 呼吸脉冲：从圆底边缘扩到 2.1 倍同时淡出，1.7s 一轮循环。
-    func startPulse() {
-        ring.removeAllAnimations()
-        let scale = CABasicAnimation(keyPath: "transform.scale")
-        scale.fromValue = 0.96
-        scale.toValue = 2.1
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.85
-        fade.toValue = 0.0
-        let group = CAAnimationGroup()
-        group.animations = [scale, fade]
-        group.duration = 1.7
-        group.repeatCount = .infinity
-        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        ring.add(group, forKey: "pulse")
-    }
+    // v2.89 按用户要求删除"呼吸脉冲"循环动画：
+    // 旧版外圈每 1.7 秒从 0.96 倍扩到 2.1 倍并淡出、无限循环，
+    // 骑行时余光里一直有个东西在闪，比静态标注更抢注意力。
+    // 现在外圈环保持静态（作为"搜索目标"的视觉强调），不再动。
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        if superview != nil { startPulse() }
+        // 进入地图后停掉任何遗留动画（复用视图可能带着上一轮的动画进来）
+        ring.removeAllAnimations()
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        startPulse()
+        ring.removeAllAnimations()
     }
 }
 
