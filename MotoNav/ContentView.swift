@@ -272,8 +272,11 @@ struct ContentView: View {
             // v2.59 导航结束时（行程卡"本次行程"在屏上）隐藏底部 tab：
             // 那一刻屏幕的焦点是行程结果，底下再挂一条导航/我的，既抢注意力
             // 又和行程卡的下沿挤在一起。关掉行程卡后 tab 自动回来。
+            // v2.60 规划页（方案卡在屏）也隐藏 tab：下卡改成贴底后，
+            // 卡片底边就在 tab 条上沿，tab 露在下面既没用又会被卡压住。
             if !model.navigating && !uiHidden && !searchActive && tapPlace == nil
-                && tipCard == nil && model.tripSummary == nil {
+                && tipCard == nil && model.tripSummary == nil
+                && model.routeChoices.isEmpty {
                 AnyView(bottomTabBar)
             }
         }
@@ -1583,23 +1586,30 @@ struct ContentView: View {
                     // 下移会累积）就能把起终点卡拖到屏幕中部，压在方案卡上 —— 两张卡叠成一片，
                     // 下面那张还从半透明里透出字。这里按方案卡高度（约 250pt + 间隙）留出避让，
                     // 顶部卡最多下拖到方案卡上沿，两张卡永远不重叠。
-                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.06),
+                    // v2.60 起终点卡改为"硬贴顶"：去掉 avoidBottom 的额外挤压，
+                    // 默认位压到 0.04（约 35pt），层级抬到 60（高于下卡的 50），
+                    // 用户实机里它长期整条不显示，先保证它在最上面稳定可见。
+                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.04),
                                    lockX: true, topLocked: true,
-                                   onFrameChange: { planTopCardFrame = $0 },
-                                   avoidBottom: 260) {
+                                   onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
                     }
+                    .zIndex(60)
                     // v2.23 底部锚定：pos.y 是卡片底边位置，卡片向上生长。
                     // 之前按中心定位（0.88），"开始导航"绿色按钮被屏幕下缘裁掉 → 点不动。
                     // v2.27：加 zIndex(50) 保证下卡永远盖在上卡之上。
                     // 上卡曾经因为内部一个 .frame(maxHeight: .infinity) 撑成巨大面板，
                     // 虽然 ZStack 顺序在下，但 .position() 的布局会让上卡的点击区域
                     // 覆盖到下卡按钮上 —— 按钮看得见却点不动。显式抬层级更稳。
+                    // v2.60 resetOnAppear：方案卡每次进规划页都回贴底位。
+                    // 它此前和地点卡同病 —— 拖过一次就被记忆在半空（用户截图里停在
+                    // 屏幕中部、把下面的路线挡掉一半），作废机制几次都没彻底解决。
                     DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
-                                   onFrameChange: { planBottomCardFrame = $0 }) { AnyView(routePlanBottomCard) }
+                                   onFrameChange: { planBottomCardFrame = $0 },
+                                   resetOnAppear: true) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
                     DraggableFloat(key: "categorybar", defaultPos: CGPoint(x: 0.5, y: 0.42)) { AnyView(categoryBar) }
@@ -2121,7 +2131,9 @@ struct ContentView: View {
         // 把上卡拉成从屏幕顶盖到下方的巨大白色面板，
         // 既挡住地图、又把下卡的"开始导航"按钮埋住导致点不动。
         // 加了这条上限，即便将来卡片内容再变多，也不会再撑爆。
-        .frame(maxHeight: UIScreen.main.bounds.height * 0.45)
+        // v2.60 加 minHeight：内容一旦因为某个子行临时为空而塌缩，整卡会变成
+        // 一条看不见的细缝（用户实机里"起终点卡整条不见"最像这个）。
+        .frame(minHeight: 96, maxHeight: UIScreen.main.bounds.height * 0.45)
     }
 
     /// v2.29 「起点不是当前位置」的明示条
