@@ -783,45 +783,6 @@ struct ContentView: View {
     }
 
 
-    /// v2.01 右上角比例尺：白底半透明胶囊 + 一段 58pt 比例尺线（数值随缩放变化）
-    private var scaleOverlay: some View {
-        VStack {
-            HStack {
-                Spacer()
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(model.scaleText)
-                        .font(.caption2.bold())
-                        .foregroundStyle(.primary)
-                    ZStack(alignment: .bottomTrailing) {
-                        // 比例尺线（固定 58pt，右侧加两个端点竖线）
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.75))
-                            .frame(width: 58, height: 2)
-                            .overlay(alignment: .leading) {
-                                Rectangle().fill(Color.primary.opacity(0.75))
-                                    .frame(width: 2, height: 7)
-                            }
-                            .overlay(alignment: .trailing) {
-                                Rectangle().fill(Color.primary.opacity(0.75))
-                                    .frame(width: 2, height: 7)
-                            }
-                    }
-                    .frame(width: 58, height: 7)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(.white.opacity(0.35), lineWidth: 0.8))
-                .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
-            }
-            Spacer()
-        }
-        .safeAreaPadding(.top, 8)   // v2.50 比例尺不压状态栏
-        .padding(.trailing, 14)
-        .allowsHitTesting(false)
-    }
-
     /// v1.65 底部选项卡：导航 / 我的（白底、缩小、选中蓝色铺满整个按钮）
     private var bottomTabBar: some View {
         VStack {
@@ -1602,7 +1563,7 @@ struct ContentView: View {
                     // 下移会累积）就能把起终点卡拖到屏幕中部，压在方案卡上 —— 两张卡叠成一片，
                     // 下面那张还从半透明里透出字。这里按方案卡高度（约 250pt + 间隙）留出避让，
                     // 顶部卡最多下拖到方案卡上沿，两张卡永远不重叠。
-                    // v2.60 起终点卡改为"硬贴顶"：去掉 avoidBottom 的额外挤压，
+                    // v2.60 起终点卡改为"硬贴顶"：不再做卡片间挤压，
                     // 默认位压到 0.04（约 35pt），层级抬到 60（高于下卡的 50），
                     // 用户实机里它长期整条不显示，先保证它在最上面稳定可见。
                     // v2.64 起终点卡：默认贴顶，全屏范围自由拖动（不再与下卡互斥）
@@ -1675,8 +1636,12 @@ struct ContentView: View {
                     // v2.60 搜索卡改"底边锚定 0.89"（778pt）：底边与卡片高度无关，
                     // 无论有没有"回家/去公司"那一行、键盘弹不弹，卡底都压在 tab 条上沿上方 9pt。
                     // 上一版的"中心定位 0.88"在卡变高时底边会跟着往下探、压到 tab 上。
-                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.89),
+                    // v2.74 按用户要求：整张卡必须常驻屏幕最下方（高德首页就是贴底），
+                    // 0.89 → 0.97（底边锚定，钳制会自动落在安全区底） + resetOnAppear
+                    // 保证每次回首页都在底部，不会记住上次被拖到半空的位置。
+                    DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
+                                   resetOnAppear: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
                                    // v2.64 去掉"不许压 tab 条"的底部避让：卡片要能拖到屏幕最下
@@ -1685,7 +1650,7 @@ struct ContentView: View {
                                    // 半屏 + 28pt，碰上卡片较高/实测高度异常时整张卡被推到底边外。
                                    // 定位点由系统跟随恒定在屏幕正中，卡片盖住它是可接受的，
                                    // 位置约束只保留"不许压 tab 条"这一条。
-                                   avoidTop: 0) {
+                                   ) {
                         AnyView(bottomMainCard)
                     }
                 }
@@ -2945,39 +2910,6 @@ struct ContentView: View {
         m >= 1000 ? String(format: "%.1f公里", Double(m) / 1000.0) : "\(m)米"
     }
 
-    /// 类别搜索结果横条（学校/医院/加油站，点击直接规划路线）
-    private var categoryBar: some View {
-        return Group {
-            if !model.categoryResults.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(model.categoryResults) { r in
-                            Button {
-                                model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
-                                model.clearCategory()
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(displayName(r.name))
-                                        .font(.footnote)
-                                        .bold()
-                                        .lineLimit(1)
-                                    Text("\(model.categoryDistance(r)) · 导航")
-                                        .font(.caption2)
-                                        .foregroundStyle(.white.opacity(0.85))
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color.accentColor.opacity(0.9), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-                .padding(.vertical, 4)
-            }
-        }
-    }
-
     /// 搜索预览"去这里" / 方案就绪后"开始导航"按钮（绿色，高德式）
     private var goHereBar: some View {
         Group {
@@ -3474,42 +3406,6 @@ struct ContentView: View {
     /// 用极淡的白色环（填充 7%、描边 20%）＋ 10pt 方位字，避免挡住路线与箭头 ——
     /// 用户在头盔镜片下看的是路，这个环只是"北在哪"的一次性参照，不该抢视觉。
     /// 圆环固定画在屏幕 0.65 高度（导航跟随态用户点所在位置）。
-    private var compassRing: some View {
-        let r: CGFloat = 74
-        let hdg = model.heading >= 0 ? model.heading : 0
-        return GeometryReader { geo in
-            let cx = geo.size.width * 0.5
-            let cy = geo.size.height * 0.65
-            ZStack {
-                // v2.56 高德同款朝向扇形：定位点周围一个 90° 半透明扇形，
-                // 一眼看出"我正朝哪个方向看"。旧版只有四个方位字，没有任何朝向指示。
-                Path { path in
-                    path.addArc(center: CGPoint(x: cx, y: cy),
-                                radius: r * 0.84,
-                                startAngle: .degrees(-90 - Double(hdg) - 45),
-                                endAngle: .degrees(-90 - Double(hdg) + 45),
-                                clockwise: false)
-                    path.closeSubpath()
-                }
-                .fill(Color.white.opacity(0.12))
-                Circle()
-                    .fill(Color.white.opacity(0.07))
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.20), lineWidth: 1))
-                    .frame(width: r * 2, height: r * 2)
-                    .position(x: cx, y: cy)
-                ForEach(0..<4, id: \.self) { i in
-                    let rad = (Double(i) * 90 - hdg) * Double.pi / 180
-                    Text(["北", "东", "南", "西"][i])
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
-                        .position(x: cx + r * 0.84 * CGFloat(sin(rad)),
-                                  y: cy - r * 0.84 * CGFloat(cos(rad)))
-                }
-            }
-        }
-        .allowsHitTesting(false)
-    }
 
     /// v2.54 高德同款速度表：导航态左上角独立圆形（白底、蓝字大数字、下方 km/h）
     ///
@@ -3557,6 +3453,12 @@ struct ContentView: View {
     ///   现在已走段最小 6pt 且与轨道同宽，起步就是一段可见的绿线。
     /// - 补了当前位置白点（带阴影）和终点空心圆：零进度时白点停在顶部起点，
     ///   整条线因此"有起点、有终点、有当前位置"，语义完整。
+    /// v2.74 导航 HUD 的统一显隐口径：原来这一串条件在 3 处各写一遍，
+    /// 以后加任何一种"临时收起 HUD"的原因都要记得改 3 个地方，漏一处就出现半截状态。
+    private var navHUDVisible: Bool {
+        model.navigating && !showRouteOverview && !uiHidden
+    }
+
     private var navProgressBar: some View {
         GeometryReader { geo in
             // v2.56 语义反转 —— 对齐高德：绿色代表「剩余路程」，不是「已走过」。
@@ -3632,20 +3534,18 @@ struct ContentView: View {
         // v2.58 浏览态（navUserMoved）整套导航 HUD 收起：只留底部卡上的"继续导航"，
         // 否则方位环/进度条/速度表会停在"车在 65% 屏高"的旧假设位置上，
         // 与真实车位置脱节，看着像几个飘着的孤儿控件。
-        // v2.65 用户要求去掉定位环：v2.54 那圈淡白环 + 东南西北方位字是**固定画在
-        // 屏高 65%** 的，车一旦不在那个假设位置（相机没对准、俯角变化），
-        // 环就和真实的蓝色箭头错开，看着像两个不相干的控件。直接不挂载。
-        // compassRing 定义保留，便于以后再按真实投影位置接回来。
-        if false, model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
-            AnyView(compassRing)
-        }
+        // v2.74 定位环（compassRing）连同定义一起删除。
+        // v2.65 已关掉挂载，但留下了 `if false, …` 和一个完整的视图定义 ——
+        // 那种写法最坑人：以后想改"导航态方位显示"，搜到 compassRing 改完，
+        // 屏幕上不会有任何变化。高德的方位环是围绕车画的，我们的是写死屏高 65%，
+        // 要重做必须走真实投影，旧代码本身没有复用价值。
         // v2.70 平移地图只暂停"跟随"，不再把 HUD 一起收走：
         // 旧版一碰地图 speed/进度条就全消失，只看一眼路线就得点「继续导航」才回来。
         // 高德导航态平移时这些常驻，速度是骑行最不该消失的信息。
-        if model.navigating && !showRouteOverview && !uiHidden {
+        if navHUDVisible {
             AnyView(navProgressBar)
         }
-        if model.navigating && !showRouteOverview && !uiHidden {
+        if navHUDVisible {
             AnyView(navSpeedGauge)
         }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
@@ -4346,99 +4246,6 @@ struct ContentView: View {
         g.impactOccurred()
     }
 
-    /// v2.28 视野档位标题（导航左侧竖排按钮）
-    private var navScaleTitle: String {
-        // v2.49 五档：25/35 近景、50 中景、70/100 远景
-        switch model.navScaleTarget {
-        case 25, 35: return "近景"
-        case 50: return "中景"
-        default: return "远景"
-        }
-    }
-
-    /// v2.28 视野档位图标
-    private var navScaleIcon: String {
-        switch model.navScaleTarget {
-        case 25, 35: return "plus.magnifyingglass"
-        case 50: return "circle.lefthalf.filled"
-        default: return "minus.magnifyingglass"
-        }
-    }
-
-    /// v1.63 导航态左侧竖排按钮（高德式）：刷新（重新规划路线）/ 极简（隐藏兴趣点）
-    private var navSideOverlay: some View {
-        VStack {
-            HStack {
-                VStack(spacing: 10) {
-                    Button {
-                        haptic()
-                        model.refreshRoute()
-                    } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.body.bold())
-                            Text("刷新")
-                                .font(.caption2.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.35), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    Button {
-                        haptic()
-                        minimalMap.toggle()
-                        model.status = minimalMap ? "极简模式：已隐藏兴趣点标注" : "极简模式：已关闭"
-                    } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "eye.slash")
-                                .font(.body.bold())
-                            Text("极简")
-                                .font(.caption2.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(minimalMap ? Color.blue : Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.35), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    // v2.28 视野档位切换（高德/百度导航标配）
-                    //
-                    // 三档：近（1cm:30m，看路口细节）/ 中（1cm:50m，默认）/ 远（1cm:200m，看前方路况）
-                    // 骑行时最常要的是"看清下一个路口"和"看清前方堵不堵"，
-                    // 这两个需求对应完全不同的视野，所以做成随时可切的一键按钮。
-                    Button {
-                        haptic()
-                        model.cycleNavScale()
-                    } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: navScaleIcon)
-                                .font(.body.bold())
-                            Text(navScaleTitle)
-                                .font(.caption2.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.leading, 10)
-                // v2.32 同款比例化：固定 200pt 在 iPhone SE(667) 会撞到底部导航卡，
-                // 在 Pro Max 则空太多；按屏高比例，位置随机型一致
-                .padding(.top, UIScreen.main.bounds.height * 0.24)
-                Spacer()
-            }
-            Spacer()
-        }
-    }
-
-
     /// 左上角指南针：圆盘四方位（东南西北）+ 红色指针指示正北（液态玻璃）
     /// v1.90 顶部居中道路名胶囊（高德式）：导航中显示当前道路名，黑色半透明底，不挡地图
     /// 道路名为空时隐藏（不再显示"导航中"占位）
@@ -4726,18 +4533,9 @@ struct ContentView: View {
     /// v1.80 首页底部主卡片：搜索框 + 导航/我的 合并为一个整体卡片
     private var bottomMainCard: some View {
         return VStack(spacing: 6) {
-            // v1.99 快捷词：未聚焦时一行"回家 / 去公司"，省一次输入
-            if !searchFocused, model.homePlace != nil || model.workPlace != nil {
-                HStack(spacing: 6) {
-                    if let h = model.homePlace {
-                        quickWordChip("回家", icon: "house.fill", name: h.name, lat: h.lat, lon: h.lon)
-                    }
-                    if let w = model.workPlace {
-                        quickWordChip("去公司", icon: "briefcase.fill", name: w.name, lat: w.lat, lon: w.lon)
-                    }
-                    Spacer(minLength: 0)
-                }
-            }
+            // v2.74 删掉这一行"回家 / 去公司"：它和聚焦后的快捷卡片行（家 / 公司 / 收藏 / ＋）
+            // 是同一批数据的两种呈现，一个在卡内一个在卡外，用户会以为进了两个不同的面板。
+            // 快捷目的地只在搜索面板里出现一次（高德也是这个做法）。
             AnyView(searchInputRow)
             // v2.63 高德式 6 宫格：搜索框下面一排彩色圆分类，点一下直接搜周边。
             // 旧版只有键盘上方的横向 chips 条，一是要滚，二是颜色没分层，
@@ -4770,16 +4568,16 @@ struct ContentView: View {
             if !searchActive {
                 // 普通态整卡是透明底（只留搜索胶囊），tab 行必须自带白底胶囊，
                 // 否则未选中的"我的"是透明按钮、文字直接压在地图上读不清。
+                // 已在整卡白底之内，tab 行不再自带胶囊（否则卡里套一层壳，边线打架），
+                // 只留一条极细分割线做层次
+                Divider().opacity(0.35)
                 AnyView(tabButtonsRow)
-                    .padding(4)
-                    .background(Color(.systemBackground), in: Capsule())
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
-                    .padding(.top, 6)
+                    .padding(.top, 2)
             }
         }
-        // v2.68 20 → 12：用户要求搜索框横向再长一点，两侧多让出 8pt
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
+        // v2.74 一张卡的内部留白：左右 10、上 10、下 8
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
         .padding(.bottom, 8)
         // v2.54 搜索整屏态：卡片退成整面白色面板（不透明、无圆角、无投影），
         // 普通态保持原来的毛玻璃浮卡
@@ -4788,8 +4586,11 @@ struct ContentView: View {
         // 跟高德首页一致；搜整屏态仍铺白面板（列表要有实底可读）。
         // v2.66 搜索整屏从"整块铺白到屏幕四边"改成顶部圆角 28 的大卡：
         // 高德搜索页是"顶部白卡 + 四角露出地图"，白色压满全屏会让人失去位置感。
-        .background(searchActive ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(Color.clear),
-                    in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        // v2.74 搜索框与 tab 合成"一张卡"：整块白底 + 圆角，不再是两个分开的白胶囊。
+        // 底色同样取 0.94（v2.73 的降重逻辑），透一点底图纹理，不硬压在地图上。
+        .background(searchActive ? AnyShapeStyle(Color(.systemBackground))
+                                 : AnyShapeStyle(Color(.systemBackground).opacity(0.94)),
+                    in: RoundedRectangle(cornerRadius: searchActive ? 28 : 26, style: .continuous))
         // 透明底上再描边/投影会在胶囊外围画出一个空矩形，一并去掉
         .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .strokeBorder(Color.black.opacity(0), lineWidth: 1))

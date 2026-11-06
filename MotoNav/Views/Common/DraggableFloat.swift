@@ -42,12 +42,6 @@ struct DraggableFloat<Content: View>: View {
     /// 而不是像旧版那样手写 `.offset(y: -300)` —— 手写偏移不受钳制约束，会把卡片顶出屏幕。
     var extraBottomInset: CGFloat = 0
     /// v2.54 底部避让：底部另有常驻卡片（规划下卡 / 行程卡）时，把它占掉的高度传进来，
-    /// 让本浮层被钳制在卡片上沿以上，避免"按钮露半个、点不到"。
-    var avoidBottom: CGFloat = 0
-    /// v2.58 顶部避让：屏幕上方有必须留白的东西（首页定位点恒在屏幕正中）时，
-    /// 传它下沿的 y，本浮层顶边不得高于它 —— 即"卡片去躲那个点"，而不是把点挪走。
-    /// 传 0 表示不限制（默认）。
-    var avoidTop: CGFloat = 0
     /// v2.60 每次出现都回默认位（不读 UserDefaults 记忆值）。
     /// 用于"选中地点后临时弹出的卡片"：这类卡没有"用户希望它记住位置"的语义，
     /// 反而一旦被拖过一次就永久停在半空（地点卡长期卡在 57% 屏高就是这个）。
@@ -79,8 +73,6 @@ struct DraggableFloat<Content: View>: View {
          onSwipeLeft: (() -> Void)? = nil,
          onFrameChange: ((CGRect) -> Void)? = nil,
          extraBottomInset: CGFloat = 0,
-         avoidBottom: CGFloat = 0,
-         avoidTop: CGFloat = 0,
          resetOnAppear: Bool = false,
          onDragEnded: ((CGFloat) -> CGFloat?)? = nil,
          @ViewBuilder content: () -> Content) {
@@ -92,8 +84,6 @@ struct DraggableFloat<Content: View>: View {
         self.onSwipeLeft = onSwipeLeft
         self.onFrameChange = onFrameChange
         self.extraBottomInset = extraBottomInset
-        self.avoidBottom = avoidBottom
-        self.avoidTop = avoidTop
         self.resetOnAppear = resetOnAppear
         self.onDragEnded = onDragEnded
         self.content = content()
