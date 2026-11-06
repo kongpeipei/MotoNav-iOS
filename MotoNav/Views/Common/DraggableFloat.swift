@@ -179,10 +179,17 @@ struct DraggableFloat<Content: View>: View {
         // 无论这个 GeometryReader 是"安全区内（返回 0）"还是"已被 ignoresSafeArea 拉到全屏
         // （返回真实 47/34）"，都不会出现双重偏移。
         let safe = geo.safeAreaInsets
-        let usableTop = safe.top + gap
+        // v2.79 用户明确要求"能拖到最上方和最下方"。
+        // 旧版 usableTop = safe.top + gap → 卡片顶边最多到 60pt（安全区顶），
+        // 视觉上永远差着状态栏一条，手指怎么推都到不了屏幕最上。
+        // 这里只留 4pt 物理边距，卡片可以一直推到屏幕边缘。
+        let usableTop: CGFloat = 4
         // 键盘占位：卡片底边不得超过键盘上沿。
         // 取 safe.bottom 与键盘高度中的较大者，避免"键盘已被系统算进安全区"时被扣两次
-        let bottomInset = max(safe.bottom, max(0, extraBottomInset))
+        // v2.79 底部同理：旧版 max(safe.bottom, keyboard) 让卡片底边停在 838pt，
+        // 离屏幕底还差 36pt，用户拖到底也觉得"没滑到最下"。
+        // 现在只有键盘弹出时才让位，其余情况允许贴到屏幕最底。
+        let bottomInset = max(0, extraBottomInset)
         // v2.64 用户明确要求：卡片必须能全屏上下跟手拖动。
         // 跨卡片避让（avoidTop / avoidBottom）一律不再参与定位 —— 它们互相喂对方的
         // 实测框，边界一叠就把可动区间压成一条线，手指拖了、pos 变了、画面不动。
@@ -193,7 +200,7 @@ struct DraggableFloat<Content: View>: View {
         let maxCenter = max(minCenter, usableBottom - h / 2)
         // v2.60 最终保险：无论上面怎么算，卡片底边一律不许越过 home indicator
         //（历史上出现过多条路径叠加后整卡掉出屏幕的情况）
-        let hardMax = max(minCenter, screenH - h / 2 - 8)
+        let hardMax = max(minCenter, screenH - h / 2 - 4)
         let lo = minCenter
         var hi = min(maxCenter, hardMax)
         // v2.63 拖不动保护：两张卡各自按对方实测框算 avoid，边界叠起来会把
@@ -239,9 +246,10 @@ struct DraggableFloat<Content: View>: View {
                     // v2.50 内容高度上限 = 安全区之间可用高度：
                     // 超高卡片（内容多的面板、极简模式大字）不再被推到屏幕外，
                     // 内部是 ScrollView 的卡片会自动变成滚动
-                    .frame(maxHeight: max(200, geo.size.height
-                                          - geo.safeAreaInsets.top
-                                          - max(geo.safeAreaInsets.bottom, max(0, extraBottomInset)) - 12))
+                    // v2.79 内容高度上限放开到整屏（旧版扣掉上下安全区，卡片永远比屏幕
+                    // 矮约 100pt，拖到顶也留着一条空档）。超高时仍由内部 ScrollView 兜底。
+                    .frame(maxHeight: max(200, geo.size.height - 8
+                                          - max(0, extraBottomInset)))
                     .offset(x: dragOffset)
                     // v2.23 实测内容尺寸：底部锚定/钳制都要用
                     .background(
@@ -294,9 +302,11 @@ struct DraggableFloat<Content: View>: View {
                             // v2.64 全屏自由拖动：0.02…0.995 覆盖整屏，不再有
                             // 「顶部锁定只能往下」「底部锚定最多上到 12%」这类半途限制。
                             // 横滑判定保留：斜着右滑时纵向那点位移不该顺带把卡拖走。
+                            // v2.79 记录范围一并放开到 0.002…0.998：旧版 0.02/0.995
+                            // 在拖到极端位置时会把 pos 截断，松手后卡片又"弹"回一点。
                             let newY = horizontalSwipe
                                 ? base.y
-                                : min(0.995, max(0.02, base.y + v.translation.height / h))
+                                : min(0.998, max(0.002, base.y + v.translation.height / h))
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
                                 y: newY)
