@@ -2232,7 +2232,17 @@ struct ContentView: View {
             routeStatusHintRow
 
             // ③ 沿路服务设施（加油/充电…）——高德放在方案区下方
+            // v2.58 右边缘渐隐：这一行是横滑列表，屏幕窄时最后一项会被硬裁半个图标
+            //（用户截图里"餐饮"只剩半个碗），看着像排版出错。垫一层 20pt 的同色渐变，
+            // 视觉上变成"还有更多，往左滑"。
             serviceChipsRow
+                .overlay(alignment: .trailing) {
+                    LinearGradient(colors: [Color(.systemBackground).opacity(0),
+                                            Color(.systemBackground)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 20)
+                        .allowsHitTesting(false)
+                }
 
             // ④ 底部工具条：省钱信息 / 更多 / 开始导航
             routePlanActionBar
@@ -2949,20 +2959,35 @@ struct ContentView: View {
 
     /// 横排方案卡（高德式并列，超过 3 条可横向滑动）
     private var routeChoiceCards: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
-                    Button {
-                        haptic()
-                        model.selectedRouteIdx = idx
-                        model.applyRouteChoice(c)
-                    } label: {
-                        routeChoiceCard(c, index: idx, selected: model.selectedRouteIdx == idx)
+        Group {
+            if model.routeChoices.count == 1, let only = model.routeChoices.first {
+                // v2.58 单方案铺满整行：旧版每张卡固定 116pt 宽，只有一条路线时
+                // 左边一小块蓝框、右边空出 2/3 的白，看着像"还有方案没加载出来"。
+                Button {
+                    haptic()
+                    model.selectedRouteIdx = 0
+                    model.applyRouteChoice(only)
+                } label: {
+                    routeChoiceCard(only, index: 0, selected: true, fill: true)
+                }
+                .buttonStyle(.plain)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(model.routeChoices.enumerated()), id: \.offset) { idx, c in
+                            Button {
+                                haptic()
+                                model.selectedRouteIdx = idx
+                                model.applyRouteChoice(c)
+                            } label: {
+                                routeChoiceCard(c, index: idx, selected: model.selectedRouteIdx == idx)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.plain)
+                    .padding(.vertical, 1)
                 }
             }
-            .padding(.vertical, 1)
         }
         .frame(height: 88)   // v2.54 100→88：方案卡瘦身，给地图多让出 12pt
     }
@@ -2986,7 +3011,7 @@ struct ContentView: View {
     ///
     /// 选中态用**高德蓝**描边（截图里选中的那张是蓝框），
     /// 不再用旧版的绿色 —— 绿色会和地图上的路线色撞色，看不出哪个被选中。
-    private func routeChoiceCard(_ c: RouteChoice, index: Int, selected: Bool) -> some View {
+    private func routeChoiceCard(_ c: RouteChoice, index: Int, selected: Bool, fill: Bool = false) -> some View {
         let sel = selected
         // v2.29 禁摩风险徽标（竞品方案卡没有这个维度，但对摩托车最关键）
         let risk = model.choiceRisk(c, index: index)
@@ -3009,10 +3034,12 @@ struct ContentView: View {
                     .lineLimit(1)
                 // 红绿灯个数（高德没给数据时不显示这一项）
                 if c.trafficLights >= 0 {
+                    // v2.58 旧版用 Image(systemName: "trafficlight")，这个符号在部分系统版本
+                    // 上没有字形，渲染成 0 宽空白 —— 用户看到的就是里程后面孤零零一个"17"。
+                    // 换成 emoji 保证一定有字形，并在数字后加单位"个"，语义不再悬空。
                     HStack(spacing: 2) {
-                        Image(systemName: "trafficlight")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("\(c.trafficLights)")
+                        Text("🚦").font(.system(size: 10))
+                        Text("\(c.trafficLights)个")
                             .font(.system(size: 12, weight: .medium))
                     }
                     .foregroundStyle(.secondary)
@@ -3037,7 +3064,7 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(width: 116, alignment: .leading)
+        .frame(minWidth: 116, maxWidth: fill ? .infinity : 116, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(sel ? AnyShapeStyle(accent.opacity(0.07)) : AnyShapeStyle(Color(.secondarySystemBackground)),
