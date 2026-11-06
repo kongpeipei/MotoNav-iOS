@@ -2064,12 +2064,12 @@ struct ContentView: View {
             Divider()
 
         }
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color(.systemBackground).opacity(0.94), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.black.opacity(0.06))
         )
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+        .shadow(color: .black.opacity(0.10), radius: 9, y: 4)
         .padding(.horizontal, 16)
     }
 
@@ -2168,7 +2168,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Color(.systemBackground).opacity(0.94), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
@@ -3879,7 +3879,9 @@ struct ContentView: View {
         // 这里跟随外观设置：浅色模式用 systemBackground（白），
         // 深色模式用固定深灰（不用纯黑，避免和地图底图糊在一起）。
         let isDark = colorScheme == .dark
-        let cardBg = isDark ? Color(white: 0.16) : Color(.systemBackground)
+        // v2.73 用户反馈"卡片比地图显眼"：底色由完全不透明降到 0.94，
+        // 让底图纹理透一点出来，卡片不再是一块硬白板
+        let cardBg = isDark ? Color(white: 0.16).opacity(0.94) : Color(.systemBackground).opacity(0.94)
         let dimFg = isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.42)
         let mainFg = isDark ? Color.white.opacity(0.95) : Color.black.opacity(0.88)
         // v2.29 骑行极简模式：字号放大（头盔视野窄，字要更大才看得清）
@@ -4083,7 +4085,7 @@ struct ContentView: View {
                 .padding(.top, 6)
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(0.28), radius: 12, y: 4)
+        .shadow(color: .black.opacity(0.16), radius: 8, y: 3)   // v2.73 0.28/12 → 0.16/8：投影轻了卡片才"浮"而不"压"
         .padding(.horizontal, 12)
     }
 
