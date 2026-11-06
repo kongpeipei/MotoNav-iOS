@@ -3780,7 +3780,6 @@ struct ContentView: View {
         let mainFg = isDark ? Color.white.opacity(0.95) : Color.black.opacity(0.88)
         // v2.29 骑行极简模式：字号放大（头盔视野窄，字要更大才看得清）
         let minimal = model.ridingMinimalUI
-        let actionFontSize: CGFloat = minimal ? 18 : 14
         // v2.37 G3 速度是骑行最核心读数，层级不应低于公里/分钟：
         // 普通 17→19，极简 21→22（极简档已整体放大）
         // v2.54 速度读数移出底部卡，改为左上角独立圆形表（高德同款，见 navSpeedGauge）
@@ -3885,38 +3884,10 @@ struct ContentView: View {
 
             Divider().padding(.horizontal, 12)
 
-            // ── 第二层：下一动作 + 当前车速 ──
-            HStack(spacing: 8) {
-                if let t = ns.nextTurn, ns.distToTurnM > 0 {
-                    Image(systemName: navTurnIcon(t))
-                        .font(.system(size: 19, weight: .bold))
-                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                        .frame(width: 26)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("\(navDist(ns.distToTurnM))\(navTurnText(t))")
-                            .font(.system(size: actionFontSize, weight: .semibold))
-                            .foregroundStyle(mainFg)
-                            .lineLimit(1)
-                        if !t.roadName.isEmpty {
-                            Text(t.roadName)
-                                .font(.system(size: 11))
-                                .foregroundStyle(dimFg)
-                                .lineLimit(1)
-                        }
-                    }
-                } else {
-                    // v2.22 去掉"继续直行"提示（无转向时这一层留空即可）
-                    EmptyView()
-                }
-                Spacer(minLength: 4)
-                // v2.85 按用户要求删掉底卡的搜索放大镜：
-                // 它的动作其实是“结束导航 → 回首页 → 聚焦搜索”，和左侧 × 退出导航
-                // 走同一个确认弹窗，视觉上该有的两个按钮反而都不在其位；
-                // 换目的地的正当入口是退出导航后在首页搜索。
-                // 同一个提交也删掉了底卡的喇叭（顶部条已有），这一层现在只剩转弯文字。
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 32)
+            // v2.86 按高德导航底卡收敛：这一层原本是"转弯图标 + 距离 + 路名"，
+            // 但同一个转弯在顶部提示条上已经完整显示过一次（图标/距离/动作/路名都有），
+            // 居中的大白卡再来一遍就是纯重复 —— 高德底卡只有一行三数字 + 左右两个按钮。
+            // 这一层删掉后底卡只剩：三数字行 + 路况条 +（极简模式外的）红绿灯/车道槽位。
 
             // ── 第三层：固定高度槽位（红绿灯 / 车道 / 空）──
             // 旧版是"有内容才插入"，高度在 0/34 之间来回变 → 整张卡片上下跳
