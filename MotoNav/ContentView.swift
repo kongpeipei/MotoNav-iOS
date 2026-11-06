@@ -3924,22 +3924,9 @@ struct ContentView: View {
                     EmptyView()
                 }
                 Spacer(minLength: 4)
-                // v2.34 E7 播报中指示：最近 2.5s 内有播报 → 喇叭亮（风噪大时也能确认播报发生）
-                // v2.39 I3 喇叭改可点按钮：导航中一键静音/恢复（高德式），静音态灰色斜杠
-                Button {
-                    haptic()
-                    model.toggleVoice()
-                } label: {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        let speaking = Date().timeIntervalSince(model.lastSpeakAt) < 2.5
-                        Image(systemName: model.voiceMuted ? "speaker.slash.fill"
-                               : (speaking ? "speaker.wave.2.fill" : "speaker.wave.2"))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(model.voiceMuted ? .gray
-                                             : (speaking ? Color(red: 0.16, green: 0.38, blue: 1.0) : dimFg))
-                    }
-                }
-                .buttonStyle(.plain)
+                // v2.84 删掉底卡上的喇叭按钮：顶部提示条右端已经有一个一模一样的
+                // 播报开关（同状态、同动作），两处并存反而让人不知道该点哪个。
+                // 播报开关统一收敛到顶部条，底卡这一层只留“换目的地”的搜索入口。
                 // v2.42 L1 导航中搜索入口移到第二层（原第一层 5 段在 iPhone SE 375pt 宽溢出，
                 // 放大镜被挤出屏外；第二层转弯文字可压缩，放得下）
                 Button {

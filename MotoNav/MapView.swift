@@ -1506,15 +1506,39 @@ struct MapViewRepresentable: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool { false }
 
+        /// v2.84 手指落下前的画面中心，用来判断这次到底"真拖动"了没有
+        var panStartCenter: CLLocationCoordinate2D?
+        var panStartSpan: MKCoordinateSpan?
+
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            panStartCenter = mapView.centerCoordinate
+            panStartSpan = mapView.region.span
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             scheduleScale(mapView)   // v2.02 地图稳定后再算比例尺（去抖，避免每帧改状态）
             // 程序 setRegion 触发时不标记用户移动
             if consumeProgrammaticMove() {
                 // 程序化移动，正常
             } else if !animated {
-                // 用户手势（拖动/旋转/缩放）触发的区域变化 → 暂停跟随与自动旋转
-                userMoved = true
+                // v2.84 旧版只要不是程序化移动就立刻 userMoved = true ——
+                // 手指在地图上碰一下、只挪几个像素，也算"浏览态"：
+                // 底卡整张消失、冒出一个"继续导航"，松手 8 秒后又自动收回去。
+                // 反复碰几下就是用户看到的"界面乱跳"。
+                // 现在要求真正移动过才进浏览态：中心移动 > 40 m，或缩放幅度 > 15%。
+                if let c0 = panStartCenter, let s0 = panStartSpan {
+                    let moved = CLLocation(latitude: c0.latitude, longitude: c0.longitude)
+                        .distance(from: CLLocation(latitude: mapView.centerCoordinate.latitude,
+                                                   longitude: mapView.centerCoordinate.longitude))
+                    let zoomed = s0.latitudeDelta > 0
+                        && abs(mapView.region.span.latitudeDelta - s0.latitudeDelta) / s0.latitudeDelta > 0.15
+                    if moved > 40 || zoomed { userMoved = true }
+                } else {
+                    userMoved = true
+                }
             }
+            panStartCenter = nil
+            panStartSpan = nil
         }
 
         // v1.69 地图加载回调（MKMapView：渲染完成 / 加载失败）
