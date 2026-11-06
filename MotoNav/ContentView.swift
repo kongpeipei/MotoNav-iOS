@@ -149,6 +149,8 @@ struct ContentView: View {
     @State private var tripCardFrame: CGRect = .zero
     /// v2.58 搜索卡实测框：卡片能自由上下拖，右侧缩放组要按它实时避让
     @State private var bottomMainCardFrame: CGRect = .zero
+    /// v2.70 浏览态自动回跟的序号（作废旧计时任务）
+    @State private var browseSeq = 0
     /// v1.87 天气动画按外观模式取色（浅色背景用深色雨丝/雪花，保证可见）
     @Environment(\.colorScheme) private var colorScheme
     /// 语音包设置页弹出（"我的"→语音播报）
@@ -378,6 +380,20 @@ struct ContentView: View {
             }
         }
         // 导航中保持屏幕常亮（骑行看导航不被锁屏；退出导航恢复）
+        // v2.70 浏览态自动回跟：手一碰地图就把跟随停了，旧版只能手动点「继续导航」。
+        // 骑行时腾手点按钮不安全，这里改成 8 秒无新操作自动回跟。
+        // browseSeq 用来作废旧任务：用户连续多次拖动时，只有最后一次的计时有效。
+        .onChange(of: model.navUserMoved) { _, moved in
+            guard moved else { return }
+            browseSeq += 1
+            let seq = browseSeq
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard seq == browseSeq, model.navUserMoved else { return }
+                model.navUserMoved = false
+                model.navigateFollowTick += 1
+            }
+        }
         .onChange(of: model.navigating) { nav in
             UIApplication.shared.isIdleTimerDisabled = nav
             if nav { uiHidden = false } // v1.66：进入导航自动退出沉浸模式，恢复导航 UI
@@ -3446,7 +3462,11 @@ struct ContentView: View {
                                    ) { AnyView(zoomOverlay) }
                 }
                 // v2.01 右上角比例尺（随缩放实时变化）
-                AnyView(scaleOverlay)
+                // v2.70 导航态进入近景档（12 = 转弯前后）时隐藏：
+                // 高德车道级视角里没有比例尺，这个距离下它既没参考价值又占位
+                if !(model.navigating && model.navScaleTarget <= AppModel.navScaleSteps[0]) {
+                    AnyView(scaleOverlay)
+                }
             }
         }
     }
@@ -3553,7 +3573,7 @@ struct ContentView: View {
             let h = geo.size.height * 0.60
             let p = max(0, min(1, model.navProgress))
             let left = h * (1 - p)          // 剩余路程（绿，贴顶）
-            let w: CGFloat = 6              // v2.56 5→6：量高德那条约 6.7pt
+            let w: CGFloat = 12             // v2.70 6→12：高德那条绿竖线在实机上是 12pt 量级，6pt 太细看不清进度
             ZStack(alignment: .top) {
                 // v2.58 白色底衬：这条竖线与主路线同为绿色、又恰好挨在右边缘，
                 // 两条绿线贴一起时用户分不清哪个是路线、哪个是进度。
@@ -3621,12 +3641,13 @@ struct ContentView: View {
         if false, model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
             AnyView(compassRing)
         }
-        // v2.54 高德同款路程进度条（贴右边缘竖直）：显示条件与方位环一致
-        if model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
+        // v2.70 平移地图只暂停"跟随"，不再把 HUD 一起收走：
+        // 旧版一碰地图 speed/进度条就全消失，只看一眼路线就得点「继续导航」才回来。
+        // 高德导航态平移时这些常驻，速度是骑行最不该消失的信息。
+        if model.navigating && !showRouteOverview && !uiHidden {
             AnyView(navProgressBar)
         }
-        // v2.54 高德同款速度表（左上角圆形，与底部卡分离）
-        if model.navigating && !showRouteOverview && !uiHidden && !model.navUserMoved {
+        if model.navigating && !showRouteOverview && !uiHidden {
             AnyView(navSpeedGauge)
         }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）

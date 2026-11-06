@@ -3679,13 +3679,24 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ///   38 → 约 760 m
     ///   50 → 约 1.0 km（快速路）
     ///   66 → 约 1.3 km（高速巡航）
-    static let navScaleSteps = [20, 28, 38, 50, 66]
+    /// v2.70 前置一档 12（约 240 m 视野）：旧版最紧一档是 400 m，
+    /// 转弯前那几十米的车道细节始终看不清，高德车道级是 ~100~200 m 量级。
+    ///   12 → 约 240 m（转弯前贴脸）
+    ///   20 → 约 400 m（停车/起步）
+    ///   28 → 约 560 m（市区骑行）
+    ///   38 → 约 760 m
+    ///   50 → 约 1.0 km（快速路）
+    ///   66 → 约 1.3 km（高速巡航）
+    static let navScaleSteps = [12, 20, 28, 38, 50, 66]
     /// 相邻档位的升级边界（km/h），与新档位一一对应
-    private static let navScaleUpBounds = [18, 28, 42, 58]
+    private static let navScaleUpBounds = [14, 18, 28, 42, 58]
     /// 切档滞回带宽（km/h）：GPS 速度在阈值附近抖动时不来回切档
-    private static let navScaleHysteresis = 3.0
+    /// v2.70 3.0 → 5.0：摩托车走走停停，3 km/h 的带太窄，起步/刹车会反复跳档
+    private static let navScaleHysteresis = 5.0
     /// 临近转向的临时近景半径（米）
     private static let navTurnZoomRadiusM = 250
+    /// v2.70 贴脸近景半径（米）：转弯前的车道级视野
+    private static let navTurnCloseRadiusM = 100
 
     /// v2.49 按速度自动选择视野档位（米/厘米）
     ///
@@ -3716,9 +3727,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 kph <= Double(AppModel.navScaleUpBounds[idx - 1]) - AppModel.navScaleHysteresis {
             idx -= 1
         }
-        // 临近转向：临时降一档看清路口
-        if navigating, (navStatusCache?.distToTurnM ?? 9_999) < AppModel.navTurnZoomRadiusM, idx > 0 {
-            idx -= 1
+        // v2.70 转弯优先：离转向越近，视野越贴脸（高德车道级就是这个逻辑）。
+        // 旧版只"降一档"，最紧仍停在 400 m，路口细节永远看不清；
+        // 而且 snap 场景下也只看速度，等于停车等灯时视野反而拉到最远。
+        if navigating {
+            let d = navStatusCache?.distToTurnM ?? 9_999
+            if d < AppModel.navTurnCloseRadiusM {
+                idx = 0                                  // < 100 m：贴脸，路口占满屏幕
+            } else if d < AppModel.navTurnZoomRadiusM {
+                idx = min(idx, 1)                        // < 250 m：逼近路口，压到第二紧
+            }
         }
         return steps[idx]
     }
