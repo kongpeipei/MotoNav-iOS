@@ -443,9 +443,11 @@ struct ContentView: View {
     private var planFitInsets: UIEdgeInsets {
         let h = UIScreen.main.bounds.height
         // 上卡：取卡片真实顶边到屏幕顶的距离（= 卡底 y），比"6% 屏高 + 估算卡高"更准
-        var top = planTopCardFrame.maxY > 0 ? planTopCardFrame.maxY + 6 : h * 0.06 + 216
+        // v2.54 兜底估值按瘦身后的卡高（上卡约 196、下卡约 246）调低；
+        // 实测帧一旦到达就以实测为准
+        var top = planTopCardFrame.maxY > 0 ? planTopCardFrame.maxY + 6 : h * 0.06 + 196
         // 下卡：屏底到卡片顶边的距离
-        var bottom = planBottomCardFrame.minY > 0 ? h - planBottomCardFrame.minY + 8 : 294
+        var bottom = planBottomCardFrame.minY > 0 ? h - planBottomCardFrame.minY + 8 : 246
         // 地图可见带至少保留屏高 22%（否则 MapKit 缩得太狠，路线细得看不清）
         let availMin = h * 0.22
         if top + bottom > h - availMin {
@@ -1997,14 +1999,15 @@ struct ContentView: View {
     ///  · 新增「出行方式」选择器行：摩托车 / 汽车 / 公交 / 偏好
     ///    摩托车是本 App 的核心场景（禁摩路段规避、红绿灯播报），放第一个
     private var routePlanTopCard: some View {
-        VStack(spacing: 10) {
+        // v2.54 上卡瘦身：行距 10→8、纵向内边距 12→10，配合"贴顶"让地图可见带更大
+        VStack(spacing: 8) {
             routePlanHeader
             // v2.29 起点被手动固定时的明示（竞品都没做好的机会点）
             originFixedNotice
             travelModeRow
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
@@ -2134,7 +2137,8 @@ struct ContentView: View {
     ///   │ [省钱信息][更多]  [      开始导航      ]   │  ← 底部工具条
     ///   └──────────────────────────────────────────┘
     private var routePlanBottomCard: some View {
-        VStack(spacing: 10) {
+        // v2.54 卡片瘦身：删掉常驻路况行后，行距与内边距各收 2pt
+        VStack(spacing: 8) {
             // ① 横滑方案卡
             routeChoiceCards
 
@@ -2148,7 +2152,7 @@ struct ContentView: View {
             routePlanActionBar
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
         .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
@@ -2163,7 +2167,19 @@ struct ContentView: View {
     /// 1. 禁摩风险（红）—— 骑行场景最要紧，宁可多绕路
     /// 2. 拥堵/缓行段（橙）—— 高德同款提示
     /// 3. 无异常时给一句"实时路况早知道"（灰）
+    /// v2.54 只在真有风险/拥堵时出现，无异常时整行不渲染。
+    ///
+    /// 用户对照高德截图指出：这条"✦ 实时路况早知道，避开拥堵路段"是常驻占位，
+    /// 每个方案都白占约 34pt，把下卡撑得臃肿、地图可见带被压窄。
+    /// 改成"有禁摩风险或有拥堵/缓行段"才提示 —— 该提示的价值就在异常时，正常时是噪声。
+    @ViewBuilder
     private var routeStatusHintRow: some View {
+        if !model.riderRisks.isEmpty || jamCount + slowCount > 0 {
+            routeStatusHintContent
+        }
+    }
+
+    private var routeStatusHintContent: some View {
         HStack(spacing: 6) {
             let blocked = model.riderRisks.first(where: { $0.kind.motoBlocked })
             let anyRisk = model.riderRisks.first
@@ -2858,7 +2874,7 @@ struct ContentView: View {
             }
             .padding(.vertical, 1)
         }
-        .frame(height: 100)
+        .frame(height: 88)   // v2.54 100→88：方案卡瘦身，给地图多让出 12pt
     }
 
     /// v1.87 用时格式化：<60秒"1分钟内"，<60分钟"x 分钟"，≥60分钟"x 小时y 分钟"（不出现"100分钟"）
@@ -2891,7 +2907,7 @@ struct ContentView: View {
         return VStack(alignment: .leading, spacing: 4) {
             // 时长（大字）
             Text(durationTxt(c.durationS))
-                .font(.system(size: 19, weight: .heavy))
+                .font(.system(size: 18, weight: .heavy))
                 .foregroundStyle(sel ? accent : .primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
@@ -2933,7 +2949,7 @@ struct ContentView: View {
         }
         .frame(width: 116, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.vertical, 9)
+        .padding(.vertical, 8)
         .background(sel ? AnyShapeStyle(accent.opacity(0.07)) : AnyShapeStyle(Color(.secondarySystemBackground)),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(

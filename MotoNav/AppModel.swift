@@ -3627,7 +3627,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         return deg < 0 ? deg + 360 : deg
     }
 
-    /// 导航视野切换：1 厘米对应多少米（25 = 最近，100 = 最远）
+    /// 导航视野切换：1 厘米对应多少米（16 = 最近，58 = 最远）
     func setNavScale(_ metersPerCm: Int) {
         guard navScaleTarget != metersPerCm else { return }
         navScaleTarget = metersPerCm
@@ -3652,14 +3652,15 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// v2.52 五档视野表（米/厘米）：22 / 30 / 42 / 58 / 80
     ///
-    /// 对照高德的结论：v2.49 这一版**整体偏大 30%~40%**。
-    /// 旧值 25/35/50/70/100 对应前方可见约 520/730/1040/1460/2080 m，
-    /// 而升级门槛只有 12/22/35/50 km/h —— 摩托车市区 30~45 km/h 就落到 50/70 档
-    /// （前方 1.0~1.5 km），高德同车速市区视距约 600~800 m。
-    /// 现整体收 12~20% 并把门槛上调（16/26/40/58），低车速时看得更近更清。
-    static let navScaleSteps = [22, 30, 42, 58, 80]
-    /// 相邻档位的升级边界（km/h）：22→30→42→58→80 分别在 16/26/40/58 以上
-    private static let navScaleUpBounds = [16, 26, 40, 58]
+    /// 对照高德的结论：v2.49 已把旧值 25/35/50/70/100 收到 22/30/42/58/80，
+    /// v2.53 真机导航仍反馈"比高德远"（用户截图里 0 km/h 时比例尺已经到 1 公里，
+    /// 高德起步态是 200~500 米级别），v2.54 再整体收一档：
+    ///   16/22/30/42/58 → 前方可见约 330/460/620/870/1200 m
+    /// 高德同车速市区视距约 600~800 m：22~34 km/h 落在 620 m（30 档），
+    /// 34~48 km/h 落在 870 m（42 档），都在高德区间内；起步/等灯用 330 m 看得最清。
+    static let navScaleSteps = [16, 22, 30, 42, 58]
+    /// 相邻档位的升级边界（km/h）：16→22→30→42→58 分别在 14/22/34/48 以上
+    private static let navScaleUpBounds = [14, 22, 34, 48]
     /// 切档滞回带宽（km/h）：GPS 速度在阈值附近抖动时不来回切档
     private static let navScaleHysteresis = 3.0
     /// 临近转向的临时近景半径（米）
@@ -3716,17 +3717,17 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// v2.52 循环切换导航视野档位（五档：22 / 30 / 42 / 58 / 80 米每厘米）
+    /// v2.54 循环切换导航视野档位（五档：16 / 22 / 30 / 42 / 58 米每厘米）
     ///
     /// 五档对应骑行时五种真实需求：
-    /// · 25/35 —— 看清下一个路口的转向细节（路口密集的老城区）
-    /// · 50 —— 默认档，兼顾路口与前方路况
-    /// · 70/100 —— 看前方几百米的排队情况（大路/高架）
+    /// · 16/22 —— 起步、等灯、老城区路口密集处，看清转向细节
+    /// · 30 —— 默认档（22~34 km/h），前方约 620 m，兼顾路口与路况
+    /// · 42/58 —— 大路/高架，看前方 870~1200 m 的排队情况
     ///
     /// 骑行中单手操作，所以只做一个循环按钮而不是分段控件：
     /// 按一次切到下一档，不用瞄准。
     func cycleNavScale() {
-        // v2.52 五档循环：22 → 30 → 42 → 58 → 80 → 22
+        // v2.54 五档循环：16 → 22 → 30 → 42 → 58 → 16
         let steps = AppModel.navScaleSteps
         let idx = steps.firstIndex(of: navScaleTarget) ?? 2
         let next = steps[(idx + 1) % steps.count]
