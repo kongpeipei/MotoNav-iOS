@@ -3650,6 +3650,25 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard navScaleTarget != metersPerCm else { return }
         navScaleTarget = metersPerCm
         navScaleTick += 1
+        // v2.88 手动改档要记时间：否则 autoNavScale 下一个定位回调就按速度把它改回去，
+        // 用户点"+"看着没反应（其实是被自动档位立刻覆盖了）
+        lastManualScaleAt = Date()
+    }
+
+    /// v2.88 导航态 +/- 按钮：在档位表里走一格
+    ///
+    /// 旧版这两个按钮直接缩放相机（以"地图中心"为锚），导航态有三个毛病：
+    ///  ① 车不在屏幕中心（在偏下 56%），以中心缩放会把车往上拽，越点越靠中间；
+    ///  ② 缩放走的是 setRegion，会触发 regionDidChange 的"非程序化"判定 →
+    ///     userMoved 被置 true → 跟随停掉、冒出"继续导航"、地图也不再随车头转；
+    ///  ③ 直接改相机距离，绕过了档位系统，下一次自动档位又把它改回去。
+    /// 现在改为只改档位，由 MapView 的 navScaleTick 分支统一重设相机：
+    /// 车保持在屏幕偏下、heading 保持车头朝上。
+    func stepNavScale(zoomIn: Bool) {
+        let steps = AppModel.navScaleSteps
+        let cur = steps.firstIndex(of: navScaleTarget) ?? (zoomIn ? steps.count - 1 : 0)
+        let next = zoomIn ? max(0, cur - 1) : min(steps.count - 1, cur + 1)
+        setNavScale(steps[next])
     }
 
     /// v2.29 自动视野档位开关（按速度切换）

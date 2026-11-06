@@ -3111,7 +3111,10 @@ struct ContentView: View {
                         haptic()
                         // v1.98 巡航跟随中先退出，否则地图会被定位点立刻拉回，看着像"按钮没反应"
                         if model.cruiseMode { model.exitCruise() }
-                        model.zoomInTick += 1
+                        // v2.88 导航态走档位而不是直接缩放相机：
+                        // 保持定位点固定在屏幕偏下、地图继续随车头旋转
+                        if model.navigating { model.stepNavScale(zoomIn: true) }
+                        else { model.zoomInTick += 1 }
                     } label: {
                         Image(systemName: "plus")
                             .font(.title3.bold())
@@ -3124,7 +3127,8 @@ struct ContentView: View {
                     Button {
                         haptic()
                         if model.cruiseMode { model.exitCruise() }
-                        model.zoomOutTick += 1
+                        if model.navigating { model.stepNavScale(zoomIn: false) }
+                        else { model.zoomOutTick += 1 }
                     } label: {
                         Image(systemName: "minus")
                             .font(.title3.bold())
