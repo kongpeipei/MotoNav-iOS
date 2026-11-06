@@ -226,7 +226,15 @@ struct DraggableFloat<Content: View>: View {
                             if dragStartPos == nil { dragStartPos = base }
                             let w = max(1, geo.size.width)
                             let h = max(1, geo.size.height)
-                            var newY = min(0.99, max(0.02, base.y + v.translation.height / h))
+                            // v2.56 横向手势不跟随纵向：
+                            // 用户想"右滑一下卡片"时手不可能完全水平，斜向位移里的那点 height
+                            // 每次都写进 pos.y，几次之后卡片就从顶部缓慢掉到屏幕中间（规划页
+                            // 起终点卡压住方案卡、两张卡叠成一片就是这么来的）。
+                            // 判定：横向位移超过纵向 2 倍 → 视为纯横向手势，纵向保持不动。
+                            let horizontalSwipe = abs(v.translation.width) > abs(v.translation.height) * 2
+                            var newY = horizontalSwipe
+                                ? base.y
+                                : min(0.99, max(0.02, base.y + v.translation.height / h))
                             if topLocked {
                                 // v2.23 顶部锁定：pos.y 是卡片**顶部**位置，
                                 // 只能往下拉，不能往上拉把顶部顶出屏幕

@@ -1565,8 +1565,13 @@ struct ContentView: View {
                     // 两张卡都可独立上下拖动；下卡左滑关闭整条路线。
                     // v2.23 上卡固定在屏幕顶部：只能下拉，不能上拉顶出屏幕；
                     // 下次启动位置不记忆，永远回到顶部。
+                    // v2.56 顶部卡下拖上限：旧版只钳到屏幕底部，用户几次斜向滑动（右滑带一点
+                    // 下移会累积）就能把起终点卡拖到屏幕中部，压在方案卡上 —— 两张卡叠成一片，
+                    // 下面那张还从半透明里透出字。这里按方案卡高度（约 250pt + 间隙）留出避让，
+                    // 顶部卡最多下拖到方案卡上沿，两张卡永远不重叠。
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.06),
                                    lockX: true, topLocked: true,
+                                   avoidBottom: 260,
                                    onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
                     }
@@ -2218,7 +2223,9 @@ struct ContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(.systemBackground).opacity(0.96), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        // v2.56 方案卡改成完全不透明：旧版是 0.96，和顶部起终点卡一旦重叠，
+        // 下层卡片的白字就从这 4% 里透出来，整片糊在一起分不清哪张是哪张
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
         .padding(.horizontal, 14)
