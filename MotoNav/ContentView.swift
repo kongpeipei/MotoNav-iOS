@@ -3609,7 +3609,10 @@ struct ContentView: View {
         // v2.76 对齐高德的"临近转弯强调"：高德在距转向 <100 米时整条提示变绿、
         // 箭头放大，是它导航态最容易认的一个行为。骑行时眼睛不敢长时间离开路面，
         // 一条绿了 = 该准备转了，不用再读数字。
-        let urgent = event.distanceM > 0 && event.distanceM < 100
+        // v2.81 改用模型里的滞回状态（<100 进入、>170 退出），
+        // 旧版直接比 distanceM，GPS 在 100 米处抖一下就变一次绿、字号跳一次，
+        // 条宽也跟着变 —— 这是导航态"界面乱跳"的第二个来源。
+        let urgent = model.navNearTurning
         return Group {
             if !event.text.isEmpty {
                 HStack(spacing: 10) {

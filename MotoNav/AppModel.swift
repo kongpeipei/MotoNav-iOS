@@ -382,6 +382,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navUserMoved = false
     /// v2.22 导航视野档位目标（比例尺 1 厘米对应的米数：50 / 500）
     @Published var navScaleTarget = 50
+    /// v2.81 转弯缩放的滞回状态：0 = 远离路口，1 = 中档（<250 m），2 = 近档（<100 m）
+    private var navNearZone = 0
+    /// v2.81 供界面用：当前是否处于"临近转弯"区间。
+    /// 顶部条的变绿强调和缩放档位必须用同一个判断，否则会出现
+    /// "条已经绿了、视野还没拉近"这种前后不一致。
+    var navNearTurning: Bool { navigating && navNearZone == 2 }
     @Published var navScaleTick = 0
     /// v2.22 已行驶折线点索引（用于"走过的路变灰"）
     @Published var traveledIdx = 0
@@ -3731,12 +3737,26 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // 旧版只"降一档"，最紧仍停在 400 m，路口细节永远看不清；
         // 而且 snap 场景下也只看速度，等于停车等灯时视野反而拉到最远。
         if navigating {
+            // v2.81 加滞回：这段原来没有滞回带，而 distToTurnM 每个 tick 都在变，
+            // GPS 在 100 m / 250 m 边界抖十来米，idx 就在 0 和 1 之间来回翻 ——
+            // 表现就是"导航态画面忽近忽远地跳"，这是乱跳的主因。
+            // 现在进入阈值小、退出阈值大：<100 进近档、要到 170 才退出；
+            // <250 进中档、要到 320 才退出。中间地带保持上一次判断。
             let d = navStatusCache?.distToTurnM ?? 9_999
             if d < AppModel.navTurnCloseRadiusM {
-                idx = 0                                  // < 100 m：贴脸，路口占满屏幕
+                navNearZone = 2
             } else if d < AppModel.navTurnZoomRadiusM {
-                idx = min(idx, 1)                        // < 250 m：逼近路口，压到第二紧
+                if navNearZone < 2 { navNearZone = 1 }
+            } else if d >= AppModel.navTurnZoomRadiusM + 70 {
+                navNearZone = 0
             }
+            switch navNearZone {
+            case 2: idx = 0                              // 贴脸，路口占满屏幕
+            case 1: idx = min(idx, 1)                    // 逼近路口，压到第二紧
+            default: break
+            }
+        } else {
+            navNearZone = 0
         }
         return steps[idx]
     }
