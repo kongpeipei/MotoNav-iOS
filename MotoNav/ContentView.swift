@@ -1589,15 +1589,10 @@ struct ContentView: View {
                     // v2.60 起终点卡改为"硬贴顶"：去掉 avoidBottom 的额外挤压，
                     // 默认位压到 0.04（约 35pt），层级抬到 60（高于下卡的 50），
                     // 用户实机里它长期整条不显示，先保证它在最上面稳定可见。
-                    // v2.62 两卡互不重叠：上卡底边不得低于下卡顶边（实测框动态换算）
-                    let screenHPlan = UIScreen.main.bounds.height
-                    let topAvoidBottom: CGFloat = planBottomCardFrame.minY > 0
-                        ? max(120, screenHPlan - planBottomCardFrame.minY + 8)
-                        : screenHPlan * 0.30
+                    // v2.64 起终点卡：默认贴顶，全屏范围自由拖动（不再与下卡互斥）
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.04),
                                    lockX: true, topLocked: true,
-                                   onFrameChange: { planTopCardFrame = $0 },
-                                   avoidBottom: topAvoidBottom) {
+                                   onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
                     }
                     .zIndex(60)
@@ -1615,8 +1610,6 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
-                                   // v2.62 上卡顶边下方 8pt 以下才允许下卡出现（实测框动态换算）
-                                   avoidTop: planTopCardFrame.maxY > 0 ? planTopCardFrame.maxY + 8 : 120,
                                    resetOnAppear: true) { AnyView(routePlanBottomCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
@@ -1647,7 +1640,7 @@ struct ContentView: View {
                                    lockX: true, bottomAnchor: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
-                                   avoidBottom: 74,
+                                   // v2.64 去掉"不许压 tab 条"的底部避让：卡片要能拖到屏幕最下
                                    // v2.62 去掉"搜索卡躲避定位点"（用户明确要求）：
                                    // 旧版为了不让卡片盖住定位蓝点，把卡片最高位置限在
                                    // 半屏 + 28pt，碰上卡片较高/实测高度异常时整张卡被推到底边外。
@@ -3425,27 +3418,9 @@ struct ContentView: View {
                     // 旧版写死 215/250 是按瘦身前的估算卡高拍的：卡片内容一变高
                     //（多方案、加禁摩提示行、途经点变多），−/3D 就重新被压住半个。
                     // 卡片占据的底部高度 = 屏幕高 − 卡片顶边 y，这个值恒等于真实占位。
-                    let avoid: CGFloat = {
-                        let h = UIScreen.main.bounds.height
-                        if model.tripSummary != nil {
-                            // 行程卡不在屏底（中心约 0.62 屏高），同样按其实测顶边算
-                            if tripCardFrame.minY > 0 { return max(0, h - tripCardFrame.minY) }
-                            return h * 0.50
-                        }
-                        if !model.routeChoices.isEmpty {
-                            if planBottomCardFrame.minY > 0 { return max(0, h - planBottomCardFrame.minY) }
-                            return 250
-                        }
-                        // v2.58 普通态：搜索卡能自由上下拖，拖到屏幕中部时会整条横穿
-                        // 右侧的定位 / + / − / 3D（用户截图里中间两个按钮被压掉一半）。
-                        // 这里按搜索卡实测顶边做避让，卡片一上移，这一列就自动缩到它上方。
-                        if bottomMainCardFrame.minY > 0 {
-                            return max(0, h - bottomMainCardFrame.minY)
-                        }
-                        return 0
-                    }()
+                    // v2.64 缩放组不再按卡片实测框避让（卡片要全屏自由拖）
                     DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.26),
-                                   avoidBottom: avoid) { AnyView(zoomOverlay) }
+                                   ) { AnyView(zoomOverlay) }
                 }
                 // v2.01 右上角比例尺（随缩放实时变化）
                 AnyView(scaleOverlay)

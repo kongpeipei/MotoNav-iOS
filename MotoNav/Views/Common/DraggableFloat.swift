@@ -186,12 +186,12 @@ struct DraggableFloat<Content: View>: View {
         // 键盘占位：卡片底边不得超过键盘上沿。
         // 取 safe.bottom 与键盘高度中的较大者，避免"键盘已被系统算进安全区"时被扣两次
         let bottomInset = max(safe.bottom, max(0, extraBottomInset))
-        // v2.54 底部常驻卡片避让（规划下卡 / 行程卡）
-        let cardAvoid = max(0, avoidBottom)
-        let usableBottom = screenH - bottomInset - gap - cardAvoid
-        // v2.58 顶部避让：顶边不得高于 avoidTop（center - h/2 >= avoidTop）
-        let keepBelow = avoidTop + h / 2
-        let minCenter = max(usableTop + h / 2, keepBelow)
+        // v2.64 用户明确要求：卡片必须能全屏上下跟手拖动。
+        // 跨卡片避让（avoidTop / avoidBottom）一律不再参与定位 —— 它们互相喂对方的
+        // 实测框，边界一叠就把可动区间压成一条线，手指拖了、pos 变了、画面不动。
+        // 这里只保留一条底线：卡片整体落在安全区以内，不被推出屏幕。
+        let usableBottom = screenH - bottomInset - gap
+        let minCenter = usableTop + h / 2
         // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
         let maxCenter = max(minCenter, usableBottom - h / 2)
         // v2.60 最终保险：无论上面怎么算，卡片底边一律不许越过 home indicator
@@ -294,18 +294,12 @@ struct DraggableFloat<Content: View>: View {
                             // 起终点卡压住方案卡、两张卡叠成一片就是这么来的）。
                             // 判定：横向位移超过纵向 2 倍 → 视为纯横向手势，纵向保持不动。
                             let horizontalSwipe = abs(v.translation.width) > abs(v.translation.height) * 2
-                            var newY = horizontalSwipe
+                            // v2.64 全屏自由拖动：0.02…0.995 覆盖整屏，不再有
+                            // 「顶部锁定只能往下」「底部锚定最多上到 12%」这类半途限制。
+                            // 横滑判定保留：斜着右滑时纵向那点位移不该顺带把卡拖走。
+                            let newY = horizontalSwipe
                                 ? base.y
-                                : min(0.99, max(0.02, base.y + v.translation.height / h))
-                            if topLocked {
-                                // v2.23 顶部锁定：pos.y 是卡片**顶部**位置，
-                                // 只能往下拉，不能往上拉把顶部顶出屏幕
-                                newY = max(defaultTopY, newY)
-                            } else if bottomAnchor {
-                                // v2.23 底部锚定：pos.y 是卡片**底边**位置，
-                                // 往上拖不能把卡片整体推出屏幕顶（留半个身位）
-                                newY = min(0.99, max(0.12, newY))
-                            }
+                                : min(0.995, max(0.02, base.y + v.translation.height / h))
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
                                 y: newY)
