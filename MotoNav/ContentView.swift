@@ -603,7 +603,12 @@ struct ContentView: View {
                 }
                 // v1.98 规划态轻点地图：退出规划回首页（清路线、恢复底部主卡），
                 // 不再弹地点卡——旧版在这里会叠一张地点介绍卡，挡住"回首页"的预期
-                if !model.routeChoices.isEmpty {
+                //
+                // v2.56 必须排除导航态：导航是从方案卡点进来的，routeChoices 一直保留
+                //（退出导航要回到预览页）。旧条件不排除导航，导致导航中点一下空白
+                // 就被当成"退出规划"→ closeRoutePlan() 清空 route，
+                // 而 navigating 还是 true，画面变成"导航卡还在、绿线没了"。
+                if !model.routeChoices.isEmpty && !model.navigating {
                     haptic()
                     closeRoutePlan()
                     model.status = "已退出路线规划"
@@ -1750,7 +1755,8 @@ struct ContentView: View {
             tipPolygon = nil
             return true
         }
-        if !model.routeChoices.isEmpty {
+        // v2.56 同 onBlankTap：导航态不清路线（routeChoices 在导航中是有意保留的）
+        if !model.routeChoices.isEmpty && !model.navigating {
             closeRoutePlan()
             clearSearchLink()
             model.status = "已退出路线规划"
@@ -3436,26 +3442,45 @@ struct ContentView: View {
     ///   整条线因此"有起点、有终点、有当前位置"，语义完整。
     private var navProgressBar: some View {
         GeometryReader { geo in
-            let h = geo.size.height * 0.52
+            // v2.56 六条优化：
+            // ① 方向修正 —— 旧版 ZStack(alignment:.top) + 绿段 height:filled，进度是从上往下长
+            //    （顶部=起点、底部=终点），人往前走绿条反而往下掉，方向跟直觉和高德都是反的。
+            //    改成 .bottom 对齐：底部=当前/起点，顶部=终点，绿段自下而上生长。
+            // ② 0% 时整条不可见 —— 旧轨道只有白 0.16，叠在浅色底图上几乎无色差，
+            //    刚出发（进度≈0）时右侧只剩一个白点，看着像"进度条丢了"。
+            //    轨道提到 0.22 并加 1pt 描边，底部再加一个起点小圆，0% 也能认出这是整条路程线。
+            // ③ 长度 0.52 → 0.60：底部导航卡已贴到屏底，下方让出空间，进度条可以更长更完整。
+            // ④ 横向 −13 → −15：5pt 条右边缘原本离屏边只剩 10.5pt，贴边更彻底、不压地图内容。
+            // ⑤ 进度变化加 0.6s easeOut：navProgress 每秒刷新一次，旧版是硬跳一格。
+            // ⑥ 纵向 0.42 → 0.44：提示卡双行时底边约 115pt，进度条顶端下移到 123pt 让出余量。
+            let h = geo.size.height * 0.60
             let p = max(0, min(1, model.navProgress))
-            let filled = max(8, h * p)
-            ZStack(alignment: .top) {
-                // v2.55 线宽 3→5：对高德导航截图逐像素量，那条绿竖线约 13px@3x≈4.3pt，
-                // 旧版 3pt 细得像一根头发，跟高德完全不是一个观感
+            let filled = max(7, h * p)
+            ZStack(alignment: .bottom) {
+                // 轨道（整条路程）
                 Capsule()
-                    .fill(Color.white.opacity(0.16))
+                    .fill(Color.white.opacity(0.22))
                     .frame(width: 5, height: h)
-                // 已走部分
+                    .overlay(
+                        Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                    )
+                // 已走部分（自下而上生长）
                 Capsule()
                     .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
                     .frame(width: 5, height: filled)
-                // 当前位置（线变粗后同步放大，否则白点会缩在线里看不见）
+                    .animation(.easeOut(duration: 0.6), value: filled)
+                // 当前位置白点
                 Circle()
                     .fill(Color.white)
                     .frame(width: 9, height: 9)
                     .shadow(color: .black.opacity(0.40), radius: 2, y: 1)
-                    .offset(y: filled - 4.5)
-                // v2.55 终点改成高德同款：不是空心圆，是白色圆底 + 蓝色前进箭头
+                    .offset(y: -(filled - 4.5))
+                // 起点标记（贴底，0% 时也看得出路线的这头在屏幕下方）
+                Circle()
+                    .fill(Color.white.opacity(0.75))
+                    .frame(width: 6, height: 6)
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 0.5))
+                // 终点（顶端）：白圆底 + 蓝色前进箭头
                 ZStack {
                     Circle()
                         .fill(Color.white.opacity(0.92))
@@ -3465,10 +3490,10 @@ struct ContentView: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                 }
-                .offset(y: h - 14)
+                .offset(y: -(h - 14))
             }
             .frame(width: 14, height: h)
-            .position(x: geo.size.width - 13, y: geo.size.height * 0.42)
+            .position(x: geo.size.width - 15, y: geo.size.height * 0.44)
         }
         .allowsHitTesting(false)
     }
