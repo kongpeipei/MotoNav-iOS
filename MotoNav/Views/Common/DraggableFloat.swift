@@ -41,6 +41,9 @@ struct DraggableFloat<Content: View>: View {
     /// v2.51 额外底部占位（键盘高度）：键盘弹起时卡片整体坐在键盘上方，
     /// 而不是像旧版那样手写 `.offset(y: -300)` —— 手写偏移不受钳制约束，会把卡片顶出屏幕。
     var extraBottomInset: CGFloat = 0
+    /// v2.54 底部避让：底部另有常驻卡片（规划下卡 / 行程卡）时，把它占掉的高度传进来，
+    /// 让本浮层被钳制在卡片上沿以上，避免"按钮露半个、点不到"。
+    var avoidBottom: CGFloat = 0
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -63,6 +66,7 @@ struct DraggableFloat<Content: View>: View {
          onSwipeLeft: (() -> Void)? = nil,
          onFrameChange: ((CGRect) -> Void)? = nil,
          extraBottomInset: CGFloat = 0,
+         avoidBottom: CGFloat = 0,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -72,6 +76,7 @@ struct DraggableFloat<Content: View>: View {
         self.onSwipeLeft = onSwipeLeft
         self.onFrameChange = onFrameChange
         self.extraBottomInset = extraBottomInset
+        self.avoidBottom = avoidBottom
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -125,7 +130,9 @@ struct DraggableFloat<Content: View>: View {
         // 键盘占位：卡片底边不得超过键盘上沿。
         // 取 safe.bottom 与键盘高度中的较大者，避免"键盘已被系统算进安全区"时被扣两次
         let bottomInset = max(safe.bottom, max(0, extraBottomInset))
-        let usableBottom = screenH - bottomInset - gap
+        // v2.54 底部常驻卡片避让（规划下卡 / 行程卡）
+        let cardAvoid = max(0, avoidBottom)
+        let usableBottom = screenH - bottomInset - gap - cardAvoid
         let minCenter = usableTop + h / 2
         // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
         let maxCenter = max(minCenter, usableBottom - h / 2)

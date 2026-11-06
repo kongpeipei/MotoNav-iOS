@@ -3278,7 +3278,15 @@ struct ContentView: View {
             //（有"视野"档位按钮就够了）。屏幕上少两块，地图信息更干净。
             if !model.ridingMinimalUI {
                 if tapPlace == nil && tipCard == nil {
-                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655)) { AnyView(zoomOverlay) }
+                    // v2.54 底部卡片避让：规划态下卡约 250pt、行程卡约 215pt，
+                    // 否则右侧 +/−/3D 会被卡片压住半个（看着在、点不到）
+                    let avoid: CGFloat = {
+                        if model.tripSummary != nil { return 215 }
+                        if !model.routeChoices.isEmpty { return 250 }
+                        return 0
+                    }()
+                    DraggableFloat(key: "zoom", defaultPos: CGPoint(x: 0.885, y: 0.655),
+                                   avoidBottom: avoid) { AnyView(zoomOverlay) }
                 }
                 // v2.01 右上角比例尺（随缩放实时变化）
                 AnyView(scaleOverlay)
@@ -3896,26 +3904,39 @@ struct ContentView: View {
     }
 
     /// v1.81.4 本次行程卡（结束导航后显示）：目的地 + 里程/用时/平均速度，字号同退出导航卡
+    /// v2.54：目的地从标题行右侧的小灰字改为独立一行（层级太弱读不出"这是去哪"）；
+    ///        第三格"公里/小时"改"平均时速"（原标签会被读成瞬时速度）；
+    ///        标题行右侧补起止时间（原卡只给里程/用时，回看时不知道是哪一段）。
     private func tripSummaryCard(_ s: AppModel.TripSummary) -> some View {
         VStack(spacing: 8) {
-            HStack {
+            HStack(spacing: 6) {
                 Image(systemName: "flag.checkered.circle.fill")
                     .foregroundStyle(.green)
                 Text("本次行程")
                     .font(.subheadline.bold())
                     .foregroundStyle(.primary)
-                Spacer()
-                Text(s.destName)
+                Spacer(minLength: 0)
+                Text(tripTimeRange(s))
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            HStack(spacing: 4) {
+                Image(systemName: "mappin.and.ellipse")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(s.destName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
+                Spacer(minLength: 0)
             }
             HStack(spacing: 0) {
                 exitStatusCell(String(format: "%.1f", Double(s.distanceM) / 1000.0), "公里")
                 exitCellDivider
                 exitStatusCell("\(s.durationS / 60)", "分钟")
                 exitCellDivider
-                exitStatusCell(String(format: "%.1f", s.avgSpeedKmh), "公里/小时")
+                exitStatusCell(String(format: "%.1f", s.avgSpeedKmh), "平均时速")
             }
             .padding(.top, 2)
         }
@@ -3924,6 +3945,20 @@ struct ContentView: View {
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
         .padding(.horizontal, 14)
+    }
+
+    /// v2.54 行程卡起止时间（09:48–09:53）。formatter 只建一次——
+    /// 这项目曾有"body 求值期反复格式化导致卡顿"的老坑（见文件头 16 行注释）。
+    private static let tripClockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private func tripTimeRange(_ s: AppModel.TripSummary) -> String {
+        let f = Self.tripClockFormatter
+        let end = s.startAt.addingTimeInterval(TimeInterval(s.durationS))
+        return "\(f.string(from: s.startAt))–\(f.string(from: end))"
     }
 
     /// 退出导航状态卡单格（大字+小标签；v1.85 字号随卡片放大，v1.87 深色模式白字，v1.90 白底卡用 forceBlack）

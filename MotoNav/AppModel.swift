@@ -196,6 +196,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let distanceM: Int
         let durationS: Int
         let avgSpeedKmh: Double
+        /// v2.54 行程卡补起止时间（原来只有里程/用时/速度，回看时不知道是哪一段）
+        let startAt: Date
     }
     @Published var tripSummary: TripSummary?
 
@@ -2792,7 +2794,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             destName: destName,
             distanceM: shownM,
             durationS: dur,
-            avgSpeedKmh: avg)
+            avgSpeedKmh: avg,
+            startAt: start)
         // v1.99 足迹存档：轨迹抽稀后写入本地（里程过短不记）
         let pts = trackPoints.count >= 2 ? trackPoints : route
         FootprintStore.shared.add(Footprint(
