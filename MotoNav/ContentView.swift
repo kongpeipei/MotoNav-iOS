@@ -3393,30 +3393,37 @@ struct ContentView: View {
         GeometryReader { geo in
             let h = geo.size.height * 0.52
             let p = max(0, min(1, model.navProgress))
-            let filled = max(6, h * p)
+            let filled = max(8, h * p)
             ZStack(alignment: .top) {
-                // 轨道（未走部分）
+                // v2.55 线宽 3→5：对高德导航截图逐像素量，那条绿竖线约 13px@3x≈4.3pt，
+                // 旧版 3pt 细得像一根头发，跟高德完全不是一个观感
                 Capsule()
-                    .fill(Color.white.opacity(0.10))
-                    .frame(width: 3, height: h)
+                    .fill(Color.white.opacity(0.16))
+                    .frame(width: 5, height: h)
                 // 已走部分
                 Capsule()
                     .fill(Color(red: 0.20, green: 0.80, blue: 0.36))
-                    .frame(width: 3, height: filled)
-                // 当前位置
+                    .frame(width: 5, height: filled)
+                // 当前位置（线变粗后同步放大，否则白点会缩在线里看不见）
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 9, height: 9)
                     .shadow(color: .black.opacity(0.40), radius: 2, y: 1)
-                    .offset(y: filled - 3.5)
-                // 终点标记
-                Circle()
-                    .strokeBorder(Color.white.opacity(0.35), lineWidth: 1.5)
-                    .frame(width: 7, height: 7)
-                    .offset(y: h - 7)
+                    .offset(y: filled - 4.5)
+                // v2.55 终点改成高德同款：不是空心圆，是白色圆底 + 蓝色前进箭头
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: 14, height: 14)
+                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                    Image(systemName: "arrowtriangle.up.fill")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                }
+                .offset(y: h - 14)
             }
-            .frame(width: 9, height: h)
-            .position(x: geo.size.width - 11, y: geo.size.height * 0.42)
+            .frame(width: 14, height: h)
+            .position(x: geo.size.width - 13, y: geo.size.height * 0.42)
         }
         .allowsHitTesting(false)
     }
