@@ -3492,6 +3492,9 @@ struct ContentView: View {
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
         if model.navigating && !showRouteOverview {
             AnyView(navTopHintBar)
+                // v2.56 提示卡原来几乎横跨整个屏宽，右端正好压在右上角"5 公里"比例尺上，
+                // 两个黑色元素叠在一起看不清。这里留出 92pt 让比例尺独立在右侧。
+                .padding(.trailing, 92)
                 .frame(maxHeight: .infinity, alignment: .top)
                 // v2.50 用 safeAreaPadding：ZStack 里既有全屏地图（ignoresSafeArea）
                 // 也有安全区内容，固定 8 在"全屏坐标系"下会压到状态栏/灵动岛下面
@@ -3501,7 +3504,12 @@ struct ContentView: View {
         // 导航中悬浮退出按钮（仅上下移动；全览时隐藏）
         if model.navigating && !showRouteOverview {
             // v2.02 贴底摆放（高德导航卡片位置）
-            DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.925), lockX: true) { AnyView(exitNavOverlay) }
+            // v2.56 导航底卡强制贴底（对齐高德导航底栏）：
+            // 卡片一旦被拖到屏幕中部，就会横切整条路线、压住右下角当前位置和 −/3D，
+            // 而且位置会记进 UserDefaults，之后每次导航都停在半空。
+            // 改成 bottomAnchor 常驻贴底，旧坐标由 DraggableFloat 的 posV 一并作废。
+            DraggableFloat(key: "exitnav2", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
+                           bottomAnchor: true) { AnyView(exitNavOverlay) }
         }
         // v1.81.4 导航全览操作条（固定全览 / 取消全览）
         if model.navigating && showRouteOverview {

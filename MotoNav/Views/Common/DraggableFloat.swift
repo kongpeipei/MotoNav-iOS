@@ -88,6 +88,7 @@ struct DraggableFloat<Content: View>: View {
         let stale = (key == "zoom" && posVersion < 2)
             || (key == "tapplace" && posVersion < 1)
             || (key == "tipcard" && posVersion < 1)
+            || (key == "exitnav2" && posVersion < 1)
         if stale { UserDefaults.standard.set(key == "zoom" ? 2 : 1, forKey: "\(key).posV") }
         let savedX = stale ? nil : x
         let savedY = stale ? nil : y
