@@ -152,9 +152,8 @@ struct DraggableFloat<Content: View>: View {
     /// v2.23 计算卡片中心的最终 y 坐标
     /// - 底部锚定：pos.y 是底边位置 → 中心 = 底边 - 半个高度
     /// - 顶部锁定：pos.y 是顶部位置 → 中心 = 顶部 + 半个高度
-    /// - 其余：pos.y 直接是中心，但会被钳制到"卡片完整可见"的范围内
+    /// - 其余：pos.y 直接是中心（v2.90 起不再钳制到"卡片完整可见"，允许拖出半屏）
     private func clampedY(_ geo: GeometryProxy) -> CGFloat {
-        let gap: CGFloat = 6
         let h = contentSize.height
         let screenH = geo.size.height
         // v2.59 兜底：内容尺寸还没测到时旧版直接返回 pos.y * screenH —— 那是"中心"语义，
@@ -180,39 +179,21 @@ struct DraggableFloat<Content: View>: View {
         } else {
             center = pos.y * screenH
         }
-        // v2.50 钳制到安全区：卡片不进状态栏/灵动岛、不压 home indicator。
-        // 用 geo.safeAreaInsets 而不是 UIKit 的窗口安全区——它和 geo 的坐标原点同源，
-        // 无论这个 GeometryReader 是"安全区内（返回 0）"还是"已被 ignoresSafeArea 拉到全屏
-        // （返回真实 47/34）"，都不会出现双重偏移。
-        let safe = geo.safeAreaInsets
-        // v2.79 用户明确要求"能拖到最上方和最下方"。
-        // 旧版 usableTop = safe.top + gap → 卡片顶边最多到 60pt（安全区顶），
-        // 视觉上永远差着状态栏一条，手指怎么推都到不了屏幕最上。
-        // 这里只留 4pt 物理边距，卡片可以一直推到屏幕边缘。
-        let usableTop: CGFloat = 4
-        // 键盘占位：卡片底边不得超过键盘上沿。
-        // 取 safe.bottom 与键盘高度中的较大者，避免"键盘已被系统算进安全区"时被扣两次
-        // v2.79 底部同理：旧版 max(safe.bottom, keyboard) 让卡片底边停在 838pt，
-        // 离屏幕底还差 36pt，用户拖到底也觉得"没滑到最下"。
-        // 现在只有键盘弹出时才让位，其余情况允许贴到屏幕最底。
-        let bottomInset = max(0, extraBottomInset)
-        // v2.64 用户明确要求：卡片必须能全屏上下跟手拖动。
-        // 跨卡片避让（avoidTop / avoidBottom）一律不再参与定位 —— 它们互相喂对方的
-        // 实测框，边界一叠就把可动区间压成一条线，手指拖了、pos 变了、画面不动。
-        // 这里只保留一条底线：卡片整体落在安全区以内，不被推出屏幕。
-        let usableBottom = screenH - bottomInset - gap
-        let minCenter = usableTop + h / 2
-        // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
-        let maxCenter = max(minCenter, usableBottom - h / 2)
-        // v2.60 最终保险：无论上面怎么算，卡片底边一律不许越过 home indicator
-        //（历史上出现过多条路径叠加后整卡掉出屏幕的情况）
-        let hardMax = max(minCenter, screenH - h / 2 - 4)
-        let lo = minCenter
-        var hi = min(maxCenter, hardMax)
-        // v2.63 拖不动保护：两张卡各自按对方实测框算 avoid，边界叠起来会把
-        // [minCenter, maxCenter] 压成一条线 —— 手指拖了、pos 变了、画面纹丝不动，
-        // 表现就是"卡片不跟手上下移动"。这里保证至少留 40pt 行程。
-        if hi - lo < 40 { hi = lo + 40 }
+        // v2.90 按用户要求**彻底删除纵向钳制**。
+        //
+        // 旧版这里是"卡片必须整体留在屏幕内"：minCenter = 4 + h/2、maxCenter = 屏高 - h/2。
+        // 卡片越高，可动区间越小 —— 当卡片高度接近屏高（搜索卡展开建议列表、规划卡带多条方案）
+        // 时 minCenter 与 maxCenter 会互相咬死，中间只剩那条 40pt 的"拖不动保护"，
+        // 手指划了半天卡片只挪几十个点，体感就是"根本不能上下移动"。
+        // 这就是用户反复提到的限制根因。
+        //
+        // 现在只保留一条底线：任何位置都至少露出 80pt，保证拖飞了还能抓回来。
+        // 允许卡片上下各有一半出屏，和系统浮窗的拖动手感一致。
+        let margin: CGFloat = 80
+        let lo = -h / 2 + margin
+        // 键盘弹起时仍然让位（否则卡片会坐到键盘下面，建议列表首选项被键盘盖住）
+        let hi = screenH - max(0, extraBottomInset) + h / 2 - margin
+        guard hi > lo else { return center }
         return min(max(center, lo), hi)
     }
 
