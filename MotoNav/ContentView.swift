@@ -85,6 +85,8 @@ struct ContentView: View {
     @State private var tapPlace: TapPlaceInfo?
     /// v1.81.2 退出导航确认态：点状态卡左侧×后切换为"退出导航/取消"两按钮
     @State private var showExitConfirm = false
+    /// v2.51 从导航底卡"搜索"进入退出确认：确认后要回到首页并聚焦搜索框
+    @State private var pendingSearchAfterExit = false
     // v1.81.4 导航全览：导航退出卡"全览"→ 缩放显示全程路线 + 固定全览/取消全览(13s倒计时) 操作条
     @State private var showRouteOverview = false
     @State private var overviewCountdown = 13
@@ -146,6 +148,12 @@ struct ContentView: View {
     @State private var showTeamRide = false
     /// v1.99 搜索结果排序（0 距离 / 1 名称）
     @State private var tipSort = 0
+    /// v2.51 键盘高度（搜索聚焦时卡片坐在键盘上方；由通知驱动，不靠手写 offset）
+    @State private var keyboardHeight: CGFloat = 0
+    /// v2.51 输入联想请求句柄（防抖 + 取消旧请求）
+    @State private var tipTask: Task<Void, Never>? = nil
+    /// v2.51 联想请求进行中（无结果占位不要误报"未找到"）
+    @State private var searchLoading = false
     /// v1.63 极简模式（导航中左侧按钮切换：隐藏兴趣点标注）
     @State private var minimalMap = false
     /// v1.66 沉浸模式：轻点地图隐藏全部 UI（只留当前定位按钮），再轻点恢复（高德同款）
@@ -384,9 +392,11 @@ struct ContentView: View {
         .onChange(of: model.navigating) { _, nv in
             if nv {
                 showExitConfirm = false
+                pendingSearchAfterExit = false   // v2.51 防残留：下次退出导航时误触发"回首页+搜索"
                 tapPlace = nil          // v1.95 进入导航时收起地点卡，避免和导航卡叠在一起
                 slotTarget = nil        // v1.97 开始导航即退出常用地点设置态
             } else {
+                pendingSearchAfterExit = false
                 endRouteOverview()
             }
         }
@@ -402,6 +412,16 @@ struct ContentView: View {
         // v2.16 同理：沉浸态下点了"搜周边"，类别结果条要能看到
         .onChange(of: model.categoryResults.isEmpty) { _, empty in
             if !empty, uiHidden { withAnimation(.easeOut(duration: 0.2)) { uiHidden = false } }
+        }
+        // v2.51 键盘高度：搜索主卡靠它坐在键盘上方
+        //（替代旧版手写 offset(-300)，那套不受浮层钳制约束，会把卡片顶出屏幕）
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let f = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let h = max(0, UIScreen.main.bounds.height - f.minY)
+            if abs(h - keyboardHeight) > 1 { keyboardHeight = h }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            if keyboardHeight != 0 { keyboardHeight = 0 }
         }
     }
 
@@ -899,9 +919,9 @@ struct ContentView: View {
                 // 收藏量多时才出搜索框，避免挤占列表
                 if model.favorites.count > 4 {
                     TextField("搜索收藏", text: $favSearch)
-                        .font(.caption)
+                        .font(.subheadline)      // v2.51 11→15
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 9)   // v2.51 高度 30→36
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .textInputAutocapitalization(.never)
                 }
@@ -1296,6 +1316,7 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.blue)
                 .frame(width: 34, height: 30)
+                .padding(5)                 // v2.51 热区 34×30 → 44×40
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
@@ -1501,12 +1522,13 @@ struct ContentView: View {
                 }
                 // 搜索主卡：地点卡/路线规划卡/行程卡出现时隐藏；仅上下移动
                 if tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty && model.tripSummary == nil {
+                    // v2.51 键盘避让交给 DraggableFloat 的 extraBottomInset：
+                    // 旧版手写 .offset(y: -300) 不受钳制约束，键盘高时会把卡片整个顶出屏幕上半，
+                    // 且与安全区钳制叠加（卡片顶部跑出屏幕）
                     DraggableFloat(key: "bottommain", defaultPos: CGPoint(x: 0.5, y: 0.97),
-                                   lockX: true, bottomAnchor: true) {
-                        // v2.42 L4 搜索聚焦时键盘弹出，整卡上移避免遮挡联想/建议列表
+                                   lockX: true, bottomAnchor: true,
+                                   extraBottomInset: keyboardHeight) {
                         AnyView(bottomMainCard)
-                            .offset(y: searchFocused ? -300 : 0)
-                            .animation(.snappy(duration: 0.25), value: searchFocused)
                     }
                 }
             } else {
@@ -1669,6 +1691,8 @@ struct ContentView: View {
 
     /// v1.96 轻点非地点区域：收起全部卡片 + 隐藏所有浮层（只留右下角定位按钮），再轻点恢复
     private func hideAllOnBlankTap() {
+        // v2.51 退出搜索时取消在途联想请求，避免旧响应回来覆盖/闪现
+        if showSuggestions || searchFocused { tipTask?.cancel() }
         haptic()
         // 编辑态（常用地点设置 / 途经点选择）：只收卡片，不进入沉浸模式
         //（v1.97 常用地点设置；v2.33 途经点选择同语义——否则编辑提示条与搜索框会一起消失）
@@ -2199,7 +2223,7 @@ struct ContentView: View {
                     .font(.headline.bold())
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 13)   // v2.51 43→约 47
                     .background(Color(red: 0.10, green: 0.42, blue: 0.92),
                                 in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -2240,6 +2264,7 @@ struct ContentView: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(width: 28, height: 28)
+                    .padding(8)                 // v2.51 热区 28 → 44
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -2353,6 +2378,7 @@ struct ContentView: View {
                         .foregroundStyle(.blue)
                         .frame(width: 32, height: 32)
                         .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .contentShape(Rectangle().inset(by: -6))   // v2.51 热区 32→44
                 }
                 .buttonStyle(.plain)
                 Button {
@@ -2364,6 +2390,7 @@ struct ContentView: View {
                         .foregroundStyle(.primary)
                         .frame(width: 32, height: 32)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .contentShape(Rectangle().inset(by: -6))   // v2.51 热区 32→44
                 }
                 .buttonStyle(.plain)
             }
@@ -2461,7 +2488,7 @@ struct ContentView: View {
                         Text("添加")
                             .font(.subheadline.bold())
                             .foregroundStyle(.white)
-                            .frame(width: 62, height: 38)
+                            .frame(width: 62, height: 44)   // v2.51 38→44
                             .background(Color.blue, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
@@ -2729,7 +2756,7 @@ struct ContentView: View {
                         .font(.headline)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+                        .padding(.vertical, 13)   // v2.51 43→约 47
                         .background(Color.green, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .padding(.horizontal)
                 }
@@ -3043,6 +3070,8 @@ struct ContentView: View {
             Button {
                 haptic()
                 model.exitCruise()
+                // v2.51 保险：巡航时若残留规划路线，先回首页（否则搜索卡不显示，按钮等于失效）
+                if !model.routeChoices.isEmpty { closeRoutePlan() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                     searchFocused = true
                     searchExpanded = false
@@ -3054,6 +3083,8 @@ struct ContentView: View {
                     .foregroundStyle(.blue)
                     .frame(width: 28, height: 28)
                     .background(Color.blue.opacity(0.1), in: Circle())
+                    .padding(6)                 // v2.51 热区 28→40（视觉不变）
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             // v2.34 E5 手动退出巡航：本次使用内不再自动进入
@@ -3278,6 +3309,17 @@ struct ContentView: View {
                             haptic()
                             showExitConfirm = false
                             model.toggleNavigation()
+                            // v2.51 从"搜索"入口进来的退出：再回首页并把搜索框叫起来
+                            //（只 toggleNavigation 会停在规划页，而规划页不显示搜索框）
+                            if pendingSearchAfterExit {
+                                pendingSearchAfterExit = false
+                                closeRoutePlan()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                    searchFocused = true
+                                    searchExpanded = false
+                                    uiHidden = false
+                                }
+                            }
                         } label: {
                             Text("退出导航")
                                 .font(.headline.bold())
@@ -3291,6 +3333,7 @@ struct ContentView: View {
                         Button {
                             haptic()
                             showExitConfirm = false
+                            pendingSearchAfterExit = false
                         } label: {
                             Text("继续导航")
                                 .font(.headline.bold())
@@ -3499,18 +3542,19 @@ struct ContentView: View {
                 // 放大镜被挤出屏外；第二层转弯文字可压缩，放得下）
                 Button {
                     haptic()
-                    model.toggleNavigation()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        searchFocused = true
-                        searchExpanded = false
-                        uiHidden = false
-                    }
+                    // v2.51 旧版直接 toggleNavigation：一按导航就没了（误触即丢导航），
+                    // 而且退出后停在规划页 —— 规划页不显示搜索框，这个"搜索"按钮实际半个失效。
+                    // 改为与"×"同一套确认：确认后结束导航 + 回首页 + 聚焦搜索。
+                    pendingSearchAfterExit = true
+                    showExitConfirm = true
                 } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(mainFg)
                         .frame(width: 34, height: 30)
                         .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .padding(5)                 // v2.51 热区 34×30 → 44×40
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 // v2.34 E8 超速视觉提示：超过设置阈值（默认 60 km/h）速度数字变红
@@ -3897,6 +3941,19 @@ struct ContentView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
+    /// v2.51 搜索框"取消"（高德同款）：清空输入、收起列表与键盘、回到首页地图
+    private func cancelSearch() {
+        searchText = ""
+        suggestions = []
+        onlineTips = []
+        searchLoading = false
+        showSuggestions = false
+        searchExpanded = false
+        searchFocused = false
+        tipTask?.cancel()
+        dismissKeyboard()
+    }
+
     /// v1.81 点"搜索"：收起键盘、展开联想地点列表（搜索框与底部按钮拉开，中间铺满），按距离近→远
     private func expandSearchResults() {
         dismissKeyboard()
@@ -3904,10 +3961,12 @@ struct ContentView: View {
         guard !q.isEmpty else { model.status = "请输入目的地"; return }
         searchExpanded = true
         showSuggestions = true
+        searchLoading = true   // v2.51 占位行显示"正在搜索…"
         Task {
             let tips = await model.amapInputTips(q)
             if searchText.trimmingCharacters(in: .whitespaces) == q {
                 onlineTips = sortedByDistance(tips)
+                searchLoading = false
             }
         }
     }
@@ -3988,10 +4047,12 @@ struct ContentView: View {
         model.clearPreview()
         searchExpanded = true
         showSuggestions = true
+        searchLoading = true   // v2.51 占位行显示"正在搜索…"
         model.status = "正在搜索「\(t.name)」周边…"
         Task {
             let around = await model.placeAround(lat: t.lat, lon: t.lon)
             onlineTips = sortedByDistance(around)
+            searchLoading = false
             if around.isEmpty { model.status = "「\(t.name)」周边暂无结果" }
         }
     }
@@ -4098,7 +4159,7 @@ struct ContentView: View {
                     Text("导航")
                         .font(.subheadline.bold())
                         .foregroundStyle(.blue)
-                        .frame(width: 76, height: 40)
+                        .frame(width: 76, height: 44)   // v2.51 40→44
                         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.blue, lineWidth: 1.5))
                 }
@@ -4115,7 +4176,7 @@ struct ContentView: View {
                     Text("路线")
                         .font(.subheadline.bold())
                         .foregroundStyle(.white)
-                        .frame(width: 76, height: 40)
+                        .frame(width: 76, height: 44)   // v2.51 40→44
                         .background(Color.blue, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -4154,8 +4215,15 @@ struct ContentView: View {
                 AnyView(suggestionsList)
             }
             // 高德 POI 联想候选（填写高德 Key 后显示，点击直接定位；v1.86 导航中不弹出避免挡导航）
-            if showSuggestions && !onlineTips.isEmpty && !model.navigating {
-                AnyView(onlineTipsList)
+            if showSuggestions && !model.navigating {
+                if onlineTips.isEmpty {
+                    // v2.51 占位：旧版列表为空就直接消失，用户分不清"没搜到"还是"还在搜"
+                    if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        AnyView(searchPlaceholderRow)
+                    }
+                } else {
+                    AnyView(onlineTipsList)
+                }
             }
             AnyView(tabButtonsRow)
         }
@@ -4182,8 +4250,8 @@ struct ContentView: View {
                 Text(title).font(.caption2)
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)     // v2.51 chip 高 25→32
             .background(Color(.secondarySystemBackground), in: Capsule())
         }
         .buttonStyle(.plain)
@@ -4194,6 +4262,10 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Button {
                 selectedTab = 0
+                searchFocused = false
+                showSuggestions = false
+                searchExpanded = false
+                dismissKeyboard()
                 haptic()
             } label: {
                 VStack(spacing: 3) {
@@ -4204,8 +4276,8 @@ struct ContentView: View {
                         .fontWeight(selectedTab == 0 ? .semibold : .regular)
                 }
                 .foregroundStyle(selectedTab == 0 ? .white : .secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, minHeight: 44)   // v2.51 两栏统一 44（旧版 43/47 不齐）
+                .padding(.vertical, 2)
                 .background(selectedTab == 0 ? Color.blue : .clear, in: Capsule())
             }
             .buttonStyle(.plain)
@@ -4213,6 +4285,11 @@ struct ContentView: View {
             Button {
                 selectedTab = 1
                 slotTarget = nil
+                // v2.51 切页复位搜索态：否则切到「我的」页键盘/联想列表仍挂在屏幕上
+                searchFocused = false
+                showSuggestions = false
+                searchExpanded = false
+                dismissKeyboard()
                 haptic()
             } label: {
                 VStack(spacing: 3) {
@@ -4264,8 +4341,8 @@ struct ContentView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)   // v2.51 chip 高 32→38
                                 .background(Color(.secondarySystemBackground), in: Capsule())
                         }
                         .buttonStyle(.plain)
@@ -4279,6 +4356,9 @@ struct ContentView: View {
             }
             .font(.caption)
             .foregroundStyle(.blue)
+            .padding(.horizontal, 8)
+            .frame(minHeight: 40)          // v2.51 热区 22×14 → 40
+            .contentShape(Rectangle())
         }
         .padding(.horizontal, 4)
     }
@@ -4383,6 +4463,39 @@ struct ContentView: View {
     }
 
     /// 搜索输入行：高德样式白底大圆角（放大镜 + 输入 + ✕ + 搜索按钮为一体）
+    /// v2.51 搜索框右侧动作按钮：聚焦态 =「取消」（高德同款），未聚焦态 =「搜索」
+    /// 单独成 View：searchInputRow 的 ViewBuilder 分支已够多，再塞 if/else 有类型推断超时风险
+    @ViewBuilder
+    private var searchActionButton: some View {
+        if searchFocused {
+            Button {
+                haptic()
+                cancelSearch()
+            } label: {
+                Text("取消")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.primary)
+                    .frame(minWidth: 44, minHeight: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button {
+                // v1.81：点搜索 → 收起键盘，展开联想地点列表（搜索框与按钮拉开，中间铺满）
+                expandSearchResults()
+            } label: {
+                Text("搜索")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 40)   // v2.51 按钮高 31→40
+                    .background(Color(red: 0.0, green: 0.75, blue: 0.95), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     private var searchInputRow: some View {
         return HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -4399,17 +4512,25 @@ struct ContentView: View {
                     showSuggestions = !newValue.trimmingCharacters(in: .whitespaces).isEmpty
                     // v1.81：输入时列表收起（小高度），点"搜索"才展开铺满
                     searchExpanded = false
-                    // 高德搜索逻辑：输入即实时返回 POI 联想候选（带坐标，点击直接定位）
                     onlineTips = []
-                    if !model.amapKey.isEmpty {
-                        let q = newValue.trimmingCharacters(in: .whitespaces)
-                        guard !q.isEmpty else { return }
-                        Task {
-                            let tips = await model.amapInputTips(q)
-                            if searchText == newValue {
-                                // v1.81：按距当前定位点 近→远 排序
-                                onlineTips = sortedByDistance(tips)
-                            }
+                    // v2.51 300ms 防抖 + 取消旧请求：旧版每敲一个字就发一次高德请求，
+                    // 快速输入/删字时并发多请求，弱网下卡顿且耗流量
+                    tipTask?.cancel()
+                    let q = newValue.trimmingCharacters(in: .whitespaces)
+                    guard !model.amapKey.isEmpty, !q.isEmpty else {
+                        searchLoading = false
+                        return
+                    }
+                    searchLoading = true
+                    tipTask = Task {
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        if Task.isCancelled { return }
+                        let tips = await model.amapInputTips(q)
+                        if Task.isCancelled { return }
+                        if searchText == newValue {
+                            // v1.81：按距当前定位点 近→远 排序
+                            onlineTips = sortedByDistance(tips)
+                            searchLoading = false
                         }
                     }
                 }
@@ -4418,38 +4539,53 @@ struct ContentView: View {
                 Button {
                     searchText = ""
                     suggestions = []
+                    onlineTips = []
+                    searchLoading = false
                     showSuggestions = false
+                    searchExpanded = false   // v2.51 清空同时复位展开高度（旧版会留 400pt 空白面板）
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.subheadline)
+                        .font(.system(size: 21))
                         .foregroundStyle(.gray)
+                        .frame(width: 40, height: 40)   // v2.51 热区 40pt（旧版图标仅 15pt，骑车点不准）
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             // v2.23 去掉麦克风图标（语音搜索未实现，占位按钮只会让人误以为可用）
-            // 搜索按钮（与输入框同一胶囊内，右侧）
-            Button {
-                // v1.81：点搜索 → 收起键盘，展开联想地点列表（搜索框与按钮拉开，中间铺满）
-                expandSearchResults()
-            } label: {
-                Text("搜索")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color(red: 0.0, green: 0.75, blue: 0.95), in: Capsule())
-            }
-            .buttonStyle(.plain)
+            searchActionButton
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)      // v2.51 40pt 高按钮 + 6 上下 = 52，保持搜索框原高度
         .frame(maxWidth: .infinity)
-        .frame(height: 52)
+        .frame(minHeight: 52)
         // v1.63：跟随系统深浅色（浅色白底/深色深底，夜间骑行不刺眼）
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+
+    /// v2.51 联想占位行：搜索中转圈 / 未找到文案
+    private var searchPlaceholderRow: some View {
+        HStack(spacing: 8) {
+            if searchLoading {
+                ProgressView().controlSize(.small)
+                Text("正在搜索…")
+            } else {
+                Image(systemName: "magnifyingglass")
+                Text("未找到「\(searchText.trimmingCharacters(in: .whitespaces))」相关地点")
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.quaternary))
+        .padding(.horizontal)
     }
 
     /// 联想下拉列表
@@ -4497,10 +4633,12 @@ struct ContentView: View {
                             tipSort = idx
                         } label: {
                             Text(idx == 0 ? "距离最近" : "名称")
-                                .font(.caption2)
+                                .font(.caption)          // v2.51 字号 11→12
                                 .foregroundStyle(tipSort == idx ? .white : .secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)   // v2.51 点击区 22→28
+                                .frame(minHeight: 28)
+                                .contentShape(Rectangle())
                                 .background(tipSort == idx ? Color.blue : Color(.secondarySystemBackground),
                                             in: Capsule())
                         }
@@ -4517,11 +4655,11 @@ struct ContentView: View {
                                 .foregroundStyle(.green)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(tip.name)
-                                    .font(.subheadline)
+                                    .font(.callout)      // v2.51 15→16，头盔里主标题要看得清
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
                                 Text(tip.sub)
-                                    .font(.caption2)
+                                    .font(.caption)      // v2.51 11→12
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -4529,7 +4667,7 @@ struct ContentView: View {
                             // v1.81：名称右侧、箭头左侧显示距当前定位点距离
                             if let d = distText(tip.lat, tip.lon) {
                                 Text(d)
-                                    .font(.caption2.bold())
+                                    .font(.caption.bold())   // v2.51 11→12
                                     .foregroundStyle(.secondary)
                                     .padding(.trailing, 6)
                             }
@@ -4550,12 +4688,13 @@ struct ContentView: View {
                                 Image(systemName: "arrow.up.right.circle")
                                     .foregroundStyle(Color(red: 0.0, green: 0.75, blue: 0.95))
                                     .font(.title3)
+                                    .frame(width: 36, height: 36)   // v2.51 热区 20→36
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .contentShape(Rectangle())
                         }
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
+                        .padding(.vertical, 10)   // v2.51 行高 32→约 48
                         .contentShape(Rectangle())
                         .onTapGesture {
                             searchFocused = false
@@ -4621,7 +4760,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 12)   // v2.51 行高 34→约 44
         .contentShape(Rectangle())
     }
 

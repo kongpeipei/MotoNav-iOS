@@ -38,6 +38,9 @@ struct DraggableFloat<Content: View>: View {
     /// v2.48 卡片屏幕框回调：规划卡把 content 在屏幕坐标系里的真实 rect 回传给地图，
     /// 路线全览按"卡片实际遮挡到哪"留白（不依赖 6%/3% 屏高比例的假设）。
     var onFrameChange: ((CGRect) -> Void)? = nil
+    /// v2.51 额外底部占位（键盘高度）：键盘弹起时卡片整体坐在键盘上方，
+    /// 而不是像旧版那样手写 `.offset(y: -300)` —— 手写偏移不受钳制约束，会把卡片顶出屏幕。
+    var extraBottomInset: CGFloat = 0
     @ViewBuilder let content: Content
     @State private var pos: CGPoint
     @State private var initialX: CGFloat
@@ -59,6 +62,7 @@ struct DraggableFloat<Content: View>: View {
          deleteLabel: String? = nil,
          onSwipeLeft: (() -> Void)? = nil,
          onFrameChange: ((CGRect) -> Void)? = nil,
+         extraBottomInset: CGFloat = 0,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -67,6 +71,7 @@ struct DraggableFloat<Content: View>: View {
         self.deleteLabel = deleteLabel
         self.onSwipeLeft = onSwipeLeft
         self.onFrameChange = onFrameChange
+        self.extraBottomInset = extraBottomInset
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -117,7 +122,10 @@ struct DraggableFloat<Content: View>: View {
         // （返回真实 47/34）"，都不会出现双重偏移。
         let safe = geo.safeAreaInsets
         let usableTop = safe.top + gap
-        let usableBottom = screenH - safe.bottom - gap
+        // 键盘占位：卡片底边不得超过键盘上沿。
+        // 取 safe.bottom 与键盘高度中的较大者，避免"键盘已被系统算进安全区"时被扣两次
+        let bottomInset = max(safe.bottom, max(0, extraBottomInset))
+        let usableBottom = screenH - bottomInset - gap
         let minCenter = usableTop + h / 2
         // 卡片比可用区还高时顶对齐（内容侧另有高度上限兜底），不把卡片推到屏幕外
         let maxCenter = max(minCenter, usableBottom - h / 2)
@@ -162,7 +170,7 @@ struct DraggableFloat<Content: View>: View {
                     // 内部是 ScrollView 的卡片会自动变成滚动
                     .frame(maxHeight: max(200, geo.size.height
                                           - geo.safeAreaInsets.top
-                                          - geo.safeAreaInsets.bottom - 12))
+                                          - max(geo.safeAreaInsets.bottom, max(0, extraBottomInset)) - 12))
                     .offset(x: dragOffset)
                     // v2.23 实测内容尺寸：底部锚定/钳制都要用
                     .background(
