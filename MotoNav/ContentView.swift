@@ -92,7 +92,6 @@ struct ContentView: View {
     /// v1.81.2 退出导航确认态：点状态卡左侧×后切换为"退出导航/取消"两按钮
     @State private var showExitConfirm = false
     /// v2.51 从导航底卡"搜索"进入退出确认：确认后要回到首页并聚焦搜索框
-    @State private var pendingSearchAfterExit = false
     // v1.81.4 导航全览：导航退出卡"全览"→ 缩放显示全程路线 + 固定全览/取消全览(13s倒计时) 操作条
     @State private var showRouteOverview = false
     @State private var overviewCountdown = 13
@@ -482,11 +481,9 @@ struct ContentView: View {
         .onChange(of: model.navigating) { _, nv in
             if nv {
                 showExitConfirm = false
-                pendingSearchAfterExit = false   // v2.51 防残留：下次退出导航时误触发"回首页+搜索"
                 tapPlace = nil          // v1.95 进入导航时收起地点卡，避免和导航卡叠在一起
                 slotTarget = nil        // v1.97 开始导航即退出常用地点设置态
             } else {
-                pendingSearchAfterExit = false
                 endRouteOverview()
                 // v2.56 导航一结束（到达 / 主动退出都一样）就收起搜索选点黑线。
                 // 这条黑线是"搜索点 → 我的位置"的直线提示，只在选点时有用；
@@ -3706,17 +3703,6 @@ struct ContentView: View {
                             haptic()
                             showExitConfirm = false
                             model.toggleNavigation()
-                            // v2.51 从"搜索"入口进来的退出：再回首页并把搜索框叫起来
-                            //（只 toggleNavigation 会停在规划页，而规划页不显示搜索框）
-                            if pendingSearchAfterExit {
-                                pendingSearchAfterExit = false
-                                closeRoutePlan()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                    searchFocused = true
-                                    searchExpanded = false
-                                    uiHidden = false
-                                }
-                            }
                         } label: {
                             Text("退出导航")
                                 .font(.headline.bold())
@@ -3730,7 +3716,6 @@ struct ContentView: View {
                         Button {
                             haptic()
                             showExitConfirm = false
-                            pendingSearchAfterExit = false
                         } label: {
                             Text("继续导航")
                                 .font(.headline.bold())
@@ -3924,28 +3909,11 @@ struct ContentView: View {
                     EmptyView()
                 }
                 Spacer(minLength: 4)
-                // v2.84 删掉底卡上的喇叭按钮：顶部提示条右端已经有一个一模一样的
-                // 播报开关（同状态、同动作），两处并存反而让人不知道该点哪个。
-                // 播报开关统一收敛到顶部条，底卡这一层只留“换目的地”的搜索入口。
-                // v2.42 L1 导航中搜索入口移到第二层（原第一层 5 段在 iPhone SE 375pt 宽溢出，
-                // 放大镜被挤出屏外；第二层转弯文字可压缩，放得下）
-                Button {
-                    haptic()
-                    // v2.51 旧版直接 toggleNavigation：一按导航就没了（误触即丢导航），
-                    // 而且退出后停在规划页 —— 规划页不显示搜索框，这个"搜索"按钮实际半个失效。
-                    // 改为与"×"同一套确认：确认后结束导航 + 回首页 + 聚焦搜索。
-                    pendingSearchAfterExit = true
-                    showExitConfirm = true
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(mainFg)
-                        .frame(width: 34, height: 30)
-                        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .padding(5)                 // v2.51 热区 34×30 → 44×40
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // v2.85 按用户要求删掉底卡的搜索放大镜：
+                // 它的动作其实是“结束导航 → 回首页 → 聚焦搜索”，和左侧 × 退出导航
+                // 走同一个确认弹窗，视觉上该有的两个按钮反而都不在其位；
+                // 换目的地的正当入口是退出导航后在首页搜索。
+                // 同一个提交也删掉了底卡的喇叭（顶部条已有），这一层现在只剩转弯文字。
             }
             .padding(.horizontal, 14)
             .frame(height: 32)
