@@ -3639,6 +3639,10 @@ struct ContentView: View {
         if navHUDVisible {
             AnyView(navSpeedGauge)
         }
+        // v2.92 导航态比例尺（高德同款，底部中间，底卡上方）
+        if navHUDVisible && !showRouteOverview && !model.navUserMoved {
+            AnyView(navScaleBar)
+        }
         // v2.92 路线上方大转向箭头（高德图三/图四样式）
         // 白色大箭头浮在路线上方，指向转向方向，比顶部条里的小箭头醒目得多
         if navHUDVisible {
@@ -3699,6 +3703,55 @@ struct ContentView: View {
         if m >= 100 { return "\((m / 10) * 10)米" }
         if m >= 60 { return "\((m / 10) * 10)米" }
         return "\(max(1, m))米"
+    }
+
+    /// v2.92 导航态比例尺（高德同款）：底部中间，底卡上方
+    private var navScaleBar: some View {
+        let scale = CGFloat(model.navScaleTarget) // 米/厘米
+        // 刻度长度：100 点（约 3.53cm）
+        let tickWidth: CGFloat = 100
+        // 1 点 = 2.54/72 cm
+        let cmPerPoint: CGFloat = 2.54 / 72.0
+        // 刻度对应的实际距离（米）
+        let rawMeters = tickWidth * cmPerPoint * scale
+
+        // 四舍五入到合适的整数值：100, 200, 500, 1000, 2000...
+        let niceMeters: Int
+        if rawMeters < 150 {
+            niceMeters = 100
+        } else if rawMeters < 350 {
+            niceMeters = 200
+        } else if rawMeters < 750 {
+            niceMeters = 500
+        } else if rawMeters < 1500 {
+            niceMeters = 1000
+        } else {
+            niceMeters = 2000
+        }
+
+        // 根据 niceMeters 反算实际刻度宽度（让刻度长度和显示距离对应）
+        let actualTickWidth = CGFloat(niceMeters) / (cmPerPoint * scale)
+
+        let text = niceMeters >= 1000 ? String(format: "%.0f公里", Double(niceMeters)/1000.0) : "\(niceMeters)米"
+
+        return VStack(spacing: 2) {
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.black.opacity(0.7))
+            // 刻度线
+            Rectangle()
+                .fill(Color.black.opacity(0.7))
+                .frame(width: min(actualTickWidth, 120), height: 2)
+            // 两端小竖线
+            HStack(spacing: min(actualTickWidth, 120) - 2) {
+                Rectangle().fill(Color.black.opacity(0.7)).frame(width: 2, height: 4)
+                Rectangle().fill(Color.black.opacity(0.7)).frame(width: 2, height: 4)
+            }
+            .offset(y: -2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 90) // 底卡上方
+        .allowsHitTesting(false)
     }
 
     /// v2.92 路线上方大转向箭头（高德图三/图四样式）
