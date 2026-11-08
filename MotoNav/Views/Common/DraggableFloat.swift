@@ -115,7 +115,9 @@ struct DraggableFloat<Content: View>: View {
         // 已经在手机上跑过旧版的设备 posV 已经是 1，再也不会进 stale。
         // 推一档才能让它们重新作废一次，并借这次真正的清值。
         let stale = (key == "zoom" && posVersion < 4)
-            || (key == "tapplace" && posVersion < 2)
+            // v2.92 地点卡同样作废旧坐标：上一轮临时加了 maxPosY: 0.67，
+            // 用户拖到 0.67 后被存下来，现在删了限制但记忆值还在。
+            || (key == "tapplace" && posVersion < 3)
             || (key == "tipcard" && posVersion < 2)
             || (key == "exitnav2" && posVersion < 3)
             || (key == "navside" && posVersion < 2)
