@@ -3769,6 +3769,8 @@ struct ContentView: View {
                     .font(.system(size: urgent ? 110 : 80, weight: .black))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                    // v2.93 转弯箭头平滑动画：接近转弯时放大过渡更自然
+                    .animation(.easeInOut(duration: 0.3), value: urgent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .offset(y: -UIScreen.main.bounds.height * 0.12)
                     .allowsHitTesting(false)
@@ -4298,6 +4300,24 @@ struct ContentView: View {
                 exitStatusCell(String(format: "%.1f", s.avgSpeedKmh), "平均时速")
             }
             .padding(.top, 2)
+            // v2.93 行程卡加"查看历史记录"入口
+            Button {
+                haptic()
+                showFootprints = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.caption)
+                    Text("查看历史记录")
+                        .font(.caption.bold())
+                }
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.1), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
         }
         .padding(14)
         .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -4964,10 +4984,7 @@ struct ContentView: View {
     /// 单独成 View：searchInputRow 的 ViewBuilder 分支已够多，再塞 if/else 有类型推断超时风险
     @ViewBuilder
     private var searchActionButton: some View {
-        // v2.54 修正：整屏搜索态必须始终给"取消"。
-        // 原来只判 searchFocused，而点"搜索"进整屏时 expandSearchResults() 会先
-        // dismissKeyboard()（focus 变 false），按钮就退回成"搜索"——再点还是"搜索"，
-        // 整屏搜索页永远退不出去（用户实机"点了没反应"的另一半就在这里）。
+        // v2.93 删除搜索框右侧"搜索"按钮（用户要求），只保留"取消"按钮
         if searchActive || searchFocused {
             Button {
                 haptic()
@@ -4980,21 +4997,8 @@ struct ContentView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-        } else {
-            Button {
-                // v1.81：点搜索 → 收起键盘，展开联想地点列表（搜索框与按钮拉开，中间铺满）
-                expandSearchResults()
-            } label: {
-                Text("搜索")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .frame(minHeight: 40)   // v2.51 按钮高 31→40
-                    .background(Color(red: 0.0, green: 0.75, blue: 0.95), in: Capsule())
-            }
-            .buttonStyle(.plain)
         }
+        // 非搜索态不显示任何按钮（搜索按钮已删除）
     }
 
     /// v2.52 搜索框右侧控件组：清空 / 麦克风 / 搜索·取消

@@ -1756,8 +1756,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // v2.54 参照高德把已走段压细压淡：12→6pt、0.55→0.42 灰、alpha 0.95→0.8。
                     // 原先与主路线同宽(12pt)的白灰在深色底图上是全屏最抢眼的一条，观感像"灰色条纹"，
                     // 高德的已走段只是很细很淡的一条，几乎不抢视线。
-                    r.strokeColor = UIColor(white: 0.42, alpha: 0.8)
-                    r.lineWidth = self.navigating ? 6 : 5
+                    // v2.93 已走路段再调淡一档：0.42→0.6 灰、0.8→0.5 alpha，更不抢眼
+                    r.strokeColor = UIColor(white: 0.6, alpha: 0.5)
+                    r.lineWidth = self.navigating ? 5 : 4
                     return r
                 }
                 if self.connectorPolylines.contains(where: { $0 === poly }) {

@@ -215,6 +215,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastTurnSpoken = -1
     /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
     private var farAnnounced: Set<Int> = []
+    // v2.93 转向播报执行档：50米执行提醒已报过的索引
+    private var closeAnnounced: Set<Int> = []
     /// v2.43 M1 已播报过"已通过路口"确认的转向序号（每个转向只确认一次）
     private var turnConfirmSet: Set<Int> = []
     /// v2.43 M2 已播报过前方拥堵提示（过段后复位，允许下次再报）
@@ -1524,7 +1526,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 if speedLimitKph > 0, currentSpeed * 3.6 > Double(speedLimitKph) + 4 {
                     if Date().timeIntervalSince(lastOverspeedSpeak) > 30 {
                         lastOverspeedSpeak = Date()
-                        speak("您已超速，当前速度\(Int(currentSpeed * 3.6))", priority: 2)
+                        // v2.93 超速提醒优化：更简洁，和高德对齐
+                        speak("您已超速，请减速", priority: 2)
                     }
                 } else {
                     lastOverspeedSpeak = Date(timeIntervalSince1970: 0)
@@ -2503,6 +2506,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeDurationS = r.durationS
                 lastTurnSpoken = -1
                 farAnnounced.removeAll()
+                closeAnnounced.removeAll()
                 // v2.46 P1 重路由后同步清空 v2.43 的转后确认/拥堵提示去重状态：
                 // 新路线转向序号与旧路线重叠时，旧去重记录会让新路线的
                 // 转弯后确认/拥堵提示静默失效
@@ -2919,7 +2923,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                                       via: self.waypointCoords)
             // v2.36 F4 重规划成功才播报；失败（无网/超时返回空）如实提示，不再"假成功"
             if let r = choices.first {
-                speak("路线已重新规划，请按新路线行驶")
+                // v2.93 偏航提示优化：更明确，和高德对齐
+            speak("偏航，正在重新规划路线，请按新路线行驶")
                 status = "路线已重新规划，请按新路线行驶"
                 route = r.points
                 route = r.points
@@ -2928,6 +2933,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 routeDurationS = r.durationS
                 lastTurnSpoken = -1
                 farAnnounced.removeAll()
+                closeAnnounced.removeAll()
                 fitTick += 1
                 // v1.99 偏航重规划后风险/路况同步刷新
                 riderRisks = RiderAnalyzer.risks(r.turns, totalM: r.distanceM)
@@ -3443,7 +3449,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let speakText = d.map { "前方\($0)\(text)\(road)" } ?? "前方\(text)\(road)"
                 speak(speakText)
                 status = "导航：\(speakText) · 余\(Int(toDest / 1000))公里"
-            } else if best < 150 {
+            } else if best < 100 {
+                // v2.93 转向播报加中间档：100米确认
                 lastTurnSpoken = idx
                 if speechMode.verbose {
                     let tail = toDest > 1000 ? "，剩余\(Int(toDest / 1000))公里" : ""
@@ -3452,6 +3459,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     speak("\(text)，距您\(Int(best))米")
                 }
                 status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
+            } else if best < 50 && !closeAnnounced.contains(idx) {
+                // v2.93 转向播报加执行档：50米执行提醒
+                closeAnnounced.insert(idx)
+                speak(text)
+                status = "导航：\(text)"
             }
         }
     }
