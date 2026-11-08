@@ -3921,40 +3921,56 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .padding(.leading, 12)
 
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    // v2.90 对齐高德：距离/时间是卡片主视觉，数字放大、单位缩小拉开层级
-                    Text(kmTxt)
-                        .font(.system(size: 32, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(mainFg)
-                    Text(kmUnit)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(dimFg)
-                }
-                .padding(.leading, 12)
+                // v2.92 平移地图时：中间内容清空，显示"继续导航"，点击回到跟随模式
+                if model.navUserMoved {
+                    Button {
+                        haptic()
+                        model.navUserMoved = false
+                        model.setNavScale(model.autoNavScaleTarget(snap: true))
+                        model.navigateFollowTick += 1
+                    } label: {
+                        Text("继续导航")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(mainFg)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        // v2.90 对齐高德：距离/时间是卡片主视觉，数字放大、单位缩小拉开层级
+                        Text(kmTxt)
+                            .font(.system(size: 32, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(mainFg)
+                        Text(kmUnit)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(dimFg)
+                    }
+                    .padding(.leading, 12)
 
-                Spacer(minLength: 6)
+                    Spacer(minLength: 6)
 
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text(minTxt)
-                        .font(.system(size: 32, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(mainFg)
-                    Text("分钟")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(dimFg)
-                }
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(minTxt)
+                            .font(.system(size: 32, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(mainFg)
+                        Text("分钟")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(dimFg)
+                    }
 
-                Spacer(minLength: 6)
+                    Spacer(minLength: 6)
 
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(arriveTxt)
-                        .font(.system(size: 19, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(mainFg)
-                    Text("预计到达")
-                        .font(.system(size: 10))
-                        .foregroundStyle(dimFg)
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(arriveTxt)
+                            .font(.system(size: 19, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(mainFg)
+                        Text("预计到达")
+                            .font(.system(size: 10))
+                            .foregroundStyle(dimFg)
+                    }
                 }
 
                 // v2.92 删除最右侧的全览按钮和换路线按钮，底卡只留：× + 距离 + 时间 + 到达时间
