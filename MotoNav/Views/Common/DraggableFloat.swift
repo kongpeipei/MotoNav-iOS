@@ -124,7 +124,10 @@ struct DraggableFloat<Content: View>: View {
             // v2.58 规划页下卡（方案卡）补作废：它的 defaultPos 从 v2.23 起就是 0.97，
             // 但作废表里一直没有这个 key —— 只要历史上有一次被拖到屏幕中部，
             // 之后每次规划都停在半空（本轮用户截图里卡在 66% 屏高就是这个）。
-            || (key == "routeplanbottom" && posVersion < 2)
+            // v2.92 规划两卡作废旧坐标：上一轮临时加了 min/maxPosY，
+            // 用户拖到边界后被存下来，现在删了限制但记忆值还在。
+            || (key == "routeplantop" && posVersion < 2)
+            || (key == "routeplanbottom" && posVersion < 3)
             // v2.59 搜索卡从"底边锚定 0.97"改成"中心定位 0.88"，语义变了，
             // 记忆里的 0.97（旧语义=底边）直接套到中心定位会把卡片整体推下去半个卡高 —— 必须作废
             || (key == "bottommain" && posVersion < 2)
