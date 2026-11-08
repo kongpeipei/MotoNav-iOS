@@ -649,19 +649,11 @@ struct ContentView: View {
                     withAnimation(.easeOut(duration: 0.2)) { uiHidden = false }
                     return
                 }
-                // v1.98 规划态轻点地图：退出规划回首页（清路线、恢复底部主卡），
-                // 不再弹地点卡——旧版在这里会叠一张地点介绍卡，挡住"回首页"的预期
-                //
-                // v2.56 必须排除导航态：导航是从方案卡点进来的，routeChoices 一直保留
-                //（退出导航要回到预览页）。旧条件不排除导航，导致导航中点一下空白
-                // 就被当成"退出规划"→ closeRoutePlan() 清空 route，
-                // 而 navigating 还是 true，画面变成"导航卡还在、绿线没了"。
-                if !model.routeChoices.isEmpty && !model.navigating {
-                    haptic()
-                    closeRoutePlan()
-                    model.status = "已退出路线规划"
-                    return
-                }
+                // v2.91 取消规划态轻点地图自动退出规划：
+                // 旧版在这里点一下空白就 closeRoutePlan() 清空路线，
+                // 用户在规划预览/导航刚结束时想调整地图视角，误触就把路线全清了。
+                // 现在规划态轻点地图只收起浮层（走下面 hideAllOnBlankTap），路线保留。
+                // 要退出规划改走"×"按钮或顶部返回。
                 // v2.02 轻点 = 收起浮层，长按 = 出地点卡（两条路径职责分开，不再互相顶替）
                 hideAllOnBlankTap()
             },
