@@ -3470,7 +3470,8 @@ struct ContentView: View {
     /// 第二层最右侧 19pt，属于"底部卡里的一条小读数"，位置和形态都不对。
     /// 位置按安全区顶 + 72 偏移，正好落在顶部提示条下沿。
     private var navSpeedGauge: some View {
-        let d: CGFloat = 68
+        // v2.92 速度表增大 1.5 倍：68→102，数字 30→45
+        let d: CGFloat = 102
         let speed = Int((model.navStatusCache?.speedKph ?? 0).rounded())
         let overSpeed = model.speedLimitKph > 0 && speed > model.speedLimitKph
         return GeometryReader { geo in
@@ -3481,21 +3482,20 @@ struct ContentView: View {
                     .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
                 VStack(spacing: -3) {
                     Text("\(speed)")
-                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .font(.system(size: 45, weight: .heavy, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(overSpeed ? Color.red
                                          : Color(red: 0.16, green: 0.38, blue: 1.0))
                     Text("km/h")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Color.black.opacity(0.55))
                 }
             }
             .frame(width: d, height: d)
-            // v2.89 改成跟着提示条实测高度走：顶部 8pt 内边距 + 提示条高 + 8pt 呼吸位。
-            // 旧版写死 88，是按"双行 76"算的 —— 单行时圆盘顶与提示卡底之间留了 24pt 空隙，
-            // 视觉上速度表偏低；双行时又只剩 4pt。现在单行上移 16pt、双行自动下移，都不压。
+            // v2.92 顶部贴在提示卡下方（6pt 间隙），不要重叠
+            // 位置：中心 = safeArea.top + 8 + 提示条高 + 6 + d/2
             .position(x: 12 + d / 2,
-                      y: geo.safeAreaInsets.top + 8 + navHintHeight + 8 + d / 2)
+                      y: geo.safeAreaInsets.top + 8 + navHintHeight + 6 + d / 2)
         }
         .allowsHitTesting(false)
     }

@@ -938,7 +938,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // 有俯角（pitch=45°）时两者不相等，而 altitudeForScale
                     // 算出来的是"中心点的地面距离"，必须用同一个量才准。
                     cam.centerCoordinateDistance = distance
-                    cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+                    // v2.92 修复：pitchDeg = 0（2D 模式）时 cam.pitch 应该是 0，不是 45
+                    // 旧版写的是 pitchDeg > 0 ? pitchDeg : 45，导致 2D 模式下俯角还是 45°，
+                    // 等于"2D 按钮只换了朝向规则、没换俯角"，名不副实。
+                    cam.pitch = CGFloat(pitchDeg)
                     // v2.49 平滑过渡：档位切换用 MapKit 动画，不再瞬跳（旧版直接赋值，画面硬切）
                     map.setCamera(cam, animated: true)
                 }
@@ -979,7 +982,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 bearingDeg: heading)
             cam.centerCoordinate = MapGeo.toGCJ(fwd)
             cam.centerCoordinateDistance = distance
-            cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+            // v2.92 修复：同上述 bug
+            cam.pitch = CGFloat(pitchDeg)
             // v2.89 开始导航改成两段式入戏（对齐高德/竞品的"先看全局再落到车"）：
             //   第一段：立刻全览整条路线（让骑手先确认方向和全程）
             //   第二段：约 0.9 秒后用动画切进跟随视角，落点车在屏幕偏下、heading 随车头
