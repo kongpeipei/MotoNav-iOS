@@ -1582,7 +1582,8 @@ struct ContentView: View {
                     // 默认位压到 0.04（约 35pt），层级抬到 60（高于下卡的 50），
                     // 用户实机里它长期整条不显示，先保证它在最上面稳定可见。
                     // v2.64 起终点卡：默认贴顶，全屏范围自由拖动（不再与下卡互斥）
-                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.10),
+                    // v2.93 上卡更贴顶：0.10 → 0.02（对齐高德截图，上卡贴在安全区下方）
+                    DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.02),
                                    lockX: true, topLocked: true,
                                    onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
