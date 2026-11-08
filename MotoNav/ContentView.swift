@@ -260,8 +260,9 @@ struct ContentView: View {
                             .frame(maxHeight: .infinity, alignment: .top)
                             .padding(.top, (model.locationDenied ? 64 : 6))
                     }
-                } else if !model.navigating {
+                } else if !model.navigating && model.tripSummary == nil {
                     // 沉浸模式：仅保留右下角当前定位按钮
+                    // v2.93 导航结束时（行程卡显示）不显示定位按钮
                     AnyView(locateButtonOnly)
                 }
                 // v2.25 抽出为子视图（见 mapTopOverlayGroup 的说明：降低 body 推断复杂度）
@@ -3439,7 +3440,8 @@ struct ContentView: View {
                 // v2.63 规划态也显示缩放组：旧条件只认"没地点卡、没提示卡"，
                 // 而选中地点进入规划后 tapPlace 仍在，整组 +/−/3D 被一起隐藏 ——
                 // 用户 v2.58 截图里"起终点卡与缩放组同时不见"就是这条。
-                if (tapPlace == nil && tipCard == nil) || !model.routeChoices.isEmpty {
+                // v2.93 导航结束时（行程卡显示）不显示右侧缩放按钮
+                if ((tapPlace == nil && tipCard == nil) || !model.routeChoices.isEmpty) && model.tripSummary == nil {
                     // v2.54 底部卡片避让：规划态下卡约 250pt、行程卡约 215pt，
                     // 否则右侧 +/−/3D 会被卡片压住半个（看着在、点不到）
                     // v2.55 避让量改成"卡片实测屏幕框"推导。
