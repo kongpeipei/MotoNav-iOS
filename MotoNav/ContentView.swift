@@ -3973,7 +3973,18 @@ struct ContentView: View {
                     }
                 }
 
-                // v2.92 删除最右侧的全览按钮和换路线按钮，底卡只留：× + 距离 + 时间 + 到达时间
+                // v2.92 恢复右侧全览按钮（只一个，不分全览+换路线两个）
+                Button {
+                    haptic()
+                    startRouteOverview()
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(mainFg)
+                        .frame(width: 44, height: 38)
+                        .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
             .padding(.trailing, 16)
             .padding(.leading, 16)
@@ -4063,38 +4074,80 @@ struct ContentView: View {
         .padding(.horizontal, 14)
     }
 
-    /// v1.81.4 全览操作条（高德同款）：固定全览 / 取消全览(倒计时)
+    /// v2.92 全览操作条（高德同款大卡片）：中间显示时间/距离/红绿灯，底部两个按钮
     private var routeOverviewBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                haptic()
-                overviewPinned = true
-            } label: {
-                Text("固定全览")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.green.opacity(overviewPinned ? 0.9 : 0.0), lineWidth: 1.5))
+        let isDark = colorScheme == .dark
+        let cardBg = isDark ? Color(white: 0.16).opacity(0.96) : Color(.systemBackground).opacity(0.96)
+        let mainFg = isDark ? Color.white.opacity(0.95) : Color.black.opacity(0.88)
+        let dimFg = isDark ? Color.white.opacity(0.62) : Color.black.opacity(0.42)
+
+        let remainM = model.navStatusCache?.remainM ?? 0
+        let remainS = model.navStatusCache?.remainS ?? 0
+        let hours = remainS / 3600
+        let minutes = (remainS % 3600) / 60
+        let timeTxt = hours > 0 ? "\(hours)小时\(minutes)分" : "\(minutes)分钟"
+        let kmTxt = remainM < 1000 ? "\(remainM)米" : String(format: "%.1f公里", Double(remainM) / 1000.0)
+
+        return VStack(spacing: 0) {
+            // 中间信息区
+            VStack(spacing: 6) {
+                Text(timeTxt)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(mainFg)
+                HStack(spacing: 12) {
+                    Text(kmTxt)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(dimFg)
+                    // 红绿灯数量（如果有）
+                    if let lights = model.routeTrafficLightCount, lights > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "trafficlight")
+                                .font(.caption2)
+                            Text("\(lights)")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .foregroundStyle(dimFg)
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            Button {
-                haptic()
-                endRouteOverview()
-            } label: {
-                Text("取消全览 (\(max(overviewCountdown, 0))s)")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity)
+
+            // 底部分隔线
+            Divider().padding(.horizontal, 0)
+
+            // 底部两个按钮
+            HStack(spacing: 0) {
+                Button {
+                    haptic()
+                    overviewPinned = true
+                } label: {
+                    Text("固定全览")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(mainFg)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                }
+                .buttonStyle(.plain)
+
+                Divider().frame(height: 52)
+
+                Button {
+                    haptic()
+                    endRouteOverview()
+                } label: {
+                    Text("取消全览 (\(max(overviewCountdown, 0))s)")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.blue)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
+        .background(cardBg, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
         .padding(.horizontal, 14)
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
     }
 
     /// v2.24 App 版本号（读 Info.plist，构建时注入 MARKETING_VERSION）
