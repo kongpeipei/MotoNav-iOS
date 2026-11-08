@@ -1584,7 +1584,6 @@ struct ContentView: View {
                     // v2.64 起终点卡：默认贴顶，全屏范围自由拖动（不再与下卡互斥）
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.10),
                                    lockX: true, topLocked: true,
-                                   minPosY: 0.10, maxPosY: 0.50,
                                    onFrameChange: { planTopCardFrame = $0 }) {
                         AnyView(routePlanTopCard)
                     }
@@ -1600,7 +1599,6 @@ struct ContentView: View {
                     // 屏幕中部、把下面的路线挡掉一半），作废机制几次都没彻底解决。
                     DraggableFloat(key: "routeplanbottom", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
-                                   minPosY: 0.50, maxPosY: 0.97,
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
@@ -1637,7 +1635,6 @@ struct ContentView: View {
                     // v2.80 按用户要求改成"记住上次拖到的位置"，不再每次回默认位。
                     DraggableFloat(key: "bottommain2", defaultPos: CGPoint(x: 0.5, y: 0.97),
                                    lockX: true, bottomAnchor: true,
-                                   minPosY: 0.20, maxPosY: 0.67,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
                                    // v2.87 这张卡内部有方格按钮排 + 建议列表（ScrollView），
@@ -1680,7 +1677,6 @@ struct ContentView: View {
             // v2.80 取消 resetOnAppear：用户要求所有卡片下次打开保持上次拖到的位置
             DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
                            bottomAnchor: true,
-                           minPosY: 0.20, maxPosY: 0.58,
                            deleteLabel: "关闭",
                            onSwipeLeft: { closeTapPlace() },
                            ) { AnyView(tapPlaceCard(tp)) }
