@@ -3785,7 +3785,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // v2.92 导航视野整体拉远：旧版 [12, 20, 28, 38, 50, 66] 低速时只有 ~360m 可见，
     // 用户反馈"看见范围太小"。对齐高德：正常行驶前方可见 1~2 公里。
     // 新表：[20, 32, 48, 68, 95, 130]（米/厘米），最低档 ~600m、最高档 ~3.9km。
-    static let navScaleSteps = [20, 32, 48, 68, 95, 130]
+    // v2.93 导航视野再拉远一档：用户反馈跟随模式地图看见范围太小
+    // 从 [20,32,48,68,95,130] 调到 [30,45,65,90,120,160]
+    static let navScaleSteps = [30, 45, 65, 90, 120, 160]
     /// 相邻档位的升级边界（km/h），与新档位一一对应
     // v2.92 升档边界随新 steps 表调整：低速起步就有足够视野，速度越快看得越远
     private static let navScaleUpBounds = [12, 20, 32, 48, 65]
