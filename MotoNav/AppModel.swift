@@ -1708,7 +1708,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     var xfApiSecret: String { UserDefaults.standard.string(forKey: "xfApiSecret") ?? Self.xfApiSecretDefault }
     /// 音色：vcn 代码（v1.80 起仅保留讯飞已授权发音人；旧 yezi 自动迁移到特色 x4_yezi）
     var xfVcn: String {
-        let v = UserDefaults.standard.string(forKey: "xfVcn") ?? "xiaorong"
+        // v2.92 默认语音改成四川话女声·叶子（用户指定）
+        let v = UserDefaults.standard.string(forKey: "xfVcn") ?? "x4_yezi"
         return v == "yezi" ? "x4_yezi" : v
     }
     /// 讯飞引擎开关（默认开；设置为 false 用系统语音）
@@ -3781,9 +3782,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     ///   38 → 约 760 m
     ///   50 → 约 1.0 km（快速路）
     ///   66 → 约 1.3 km（高速巡航）
-    static let navScaleSteps = [12, 20, 28, 38, 50, 66]
+    // v2.92 导航视野整体拉远：旧版 [12, 20, 28, 38, 50, 66] 低速时只有 ~360m 可见，
+    // 用户反馈"看见范围太小"。对齐高德：正常行驶前方可见 1~2 公里。
+    // 新表：[20, 32, 48, 68, 95, 130]（米/厘米），最低档 ~600m、最高档 ~3.9km。
+    static let navScaleSteps = [20, 32, 48, 68, 95, 130]
     /// 相邻档位的升级边界（km/h），与新档位一一对应
-    private static let navScaleUpBounds = [14, 18, 28, 42, 58]
+    // v2.92 升档边界随新 steps 表调整：低速起步就有足够视野，速度越快看得越远
+    private static let navScaleUpBounds = [12, 20, 32, 48, 65]
     /// 切档滞回带宽（km/h）：GPS 速度在阈值附近抖动时不来回切档
     /// v2.70 3.0 → 5.0：摩托车走走停停，3 km/h 的带太窄，起步/刹车会反复跳档
     private static let navScaleHysteresis = 5.0
