@@ -3859,26 +3859,6 @@ struct ContentView: View {
                     .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                     .padding(.horizontal, 12)
-                } else if model.navUserMoved {
-                    // v2.22 用户在导航中移动了地图：整张提示卡收起，
-                    // 只在底部正中留一个"继续导航"按钮（点它回到定位点并恢复视野）
-                    Button {
-                        haptic()
-                        model.navUserMoved = false
-                        // v2.49 恢复导航视野：按当前速度重新定档。
-                        // （旧版写死 500 米/厘米 = 整屏近 15km，等于把地图拉到看不见路）
-                        model.setNavScale(model.autoNavScaleTarget(snap: true))
-                        model.navigateFollowTick += 1
-                    } label: {
-                        Text("继续导航")
-                            .font(.headline.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 26)
-                            .padding(.vertical, 12)
-                            .background(Color.black.opacity(0.72), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 8)
                 } else if let ns = model.navStatusCache, ns.remainM > 0 {
                     navBottomCard(ns)
                 }
@@ -3977,35 +3957,11 @@ struct ContentView: View {
                         .foregroundStyle(dimFg)
                 }
 
-                Button {
-                    haptic()
-                    startRouteOverview()
-                } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(mainFg)
-                        .frame(width: 44, height: 38)
-                        .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                // v2.39 I2 导航中切换备选路线（高德式）：方案列表 sheet，applyRouteChoice 应用
-                if model.routeChoices.count > 1 {
-                    Button {
-                        haptic()
-                        showRouteSwap = true
-                    } label: {
-                        Image(systemName: "arrow.triangle.swap")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(mainFg)
-                            .frame(width: 44, height: 38)
-                            .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
+                // v2.92 删除最右侧的全览按钮和换路线按钮，底卡只留：× + 距离 + 时间 + 到达时间
             }
-            .padding(.trailing, 12)
-            .padding(.leading, 10)
-            .frame(height: 54)
+            .padding(.trailing, 16)
+            .padding(.leading, 16)
+            .frame(height: 60)
 
             // v2.87 路况概览条并入右侧竖进度条（见 navProgressBar）：
             // 卡片里横着一条、右边竖着一条，同一份路况画了两遍。
