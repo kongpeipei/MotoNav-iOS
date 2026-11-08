@@ -3160,52 +3160,50 @@ struct ContentView: View {
                             .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                         }
                     }
-                    Button {
-                        haptic()
-                        // v1.98 巡航跟随中先退出，否则地图会被定位点立刻拉回，看着像"按钮没反应"
-                        if model.cruiseMode { model.exitCruise() }
-                        // v2.88 导航态走档位而不是直接缩放相机：
-                        // 保持定位点固定在屏幕偏下、地图继续随车头旋转
-                        if model.navigating { model.stepNavScale(zoomIn: true) }
-                        else { model.zoomInTick += 1 }
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.title3.bold())
-                            .foregroundStyle(.primary)
-                            .frame(width: 40, height: 40)
-                            .background(Color.white, in: Circle())
-                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                    }
-                    Button {
-                        haptic()
-                        if model.cruiseMode { model.exitCruise() }
-                        if model.navigating { model.stepNavScale(zoomIn: false) }
-                        else { model.zoomOutTick += 1 }
-                    } label: {
-                        Image(systemName: "minus")
-                            .font(.title3.bold())
-                            .foregroundStyle(.primary)
-                            .frame(width: 40, height: 40)
-                            .background(Color.white, in: Circle())
-                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                    }
-                    // v2.01 3D / 2D 切换（与 +/- 同一竖列，紧挨着）
-                    Button {
-                        haptic()
-                        if model.cruiseMode { model.exitCruise() }
-                        model.togglePitch()
-                    } label: {
-                        Text(model.pitchDeg > 0 ? "2D" : "3D")
-                            .font(.system(size: 15, weight: .heavy))
-                            .foregroundStyle(model.pitchDeg > 0 ? .white : .primary)
-                            .frame(width: 44, height: 44)
-                            .background(model.pitchDeg > 0
-                                        ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                                        : AnyShapeStyle(Color.white), in: Circle())
-                            .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                            .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                    // v2.92 导航态下删除右侧 + / − / 3D 三个按钮（用户要求）
+                    // 导航态缩放由速度自动调节，不需要手动按钮
+                    if !model.navigating {
+                        Button {
+                            haptic()
+                            if model.cruiseMode { model.exitCruise() }
+                            model.zoomInTick += 1
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.title3.bold())
+                                .foregroundStyle(.primary)
+                                .frame(width: 40, height: 40)
+                                .background(Color.white, in: Circle())
+                                .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                        }
+                        Button {
+                            haptic()
+                            if model.cruiseMode { model.exitCruise() }
+                            model.zoomOutTick += 1
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.title3.bold())
+                                .foregroundStyle(.primary)
+                                .frame(width: 40, height: 40)
+                                .background(Color.white, in: Circle())
+                                .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                        }
+                        Button {
+                            haptic()
+                            if model.cruiseMode { model.exitCruise() }
+                            model.togglePitch()
+                        } label: {
+                            Text(model.pitchDeg > 0 ? "2D" : "3D")
+                                .font(.system(size: 15, weight: .heavy))
+                                .foregroundStyle(model.pitchDeg > 0 ? .white : .primary)
+                                .frame(width: 44, height: 44)
+                                .background(model.pitchDeg > 0
+                                            ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                                            : AnyShapeStyle(Color.white), in: Circle())
+                                .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
+                                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
+                        }
                     }
         }
     }
