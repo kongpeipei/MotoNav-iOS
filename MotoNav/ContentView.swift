@@ -2265,6 +2265,9 @@ struct ContentView: View {
             // ① 横滑方案卡
             routeChoiceCards
 
+            // ①.5 出发/到达时间选择（高德图二样式）
+            departureArrivalRow
+
             // ② 路况 / 风险提示条（高德："实时路况早知道，避开拥堵路段"）
             routeStatusHintRow
 
@@ -2294,6 +2297,60 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         // v2.48 高度上限：下卡内容最多占屏高一半，保证规划页始终留有看地图的可见带
         .frame(maxHeight: UIScreen.main.bounds.height * 0.5)
+    }
+
+    /// v2.92 出发/到达时间选择行（高德图二样式）
+    /// 显示当前预计的出发时间和到达时间，点击可调整出发时间。
+    private var departureArrivalRow: some View {
+        let now = Date()
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "今天 HH:mm"
+
+        let durationMinutes = Int(model.routePlan?.expectedTime ?? 0)
+        let arrivalDate = calendar.date(byAdding: .minute, value: durationMinutes, to: now) ?? now
+
+        return HStack(spacing: 8) {
+            Button {
+                // TODO: 弹出时间选择器
+            } label: {
+                HStack(spacing: 4) {
+                    Text(formatter.string(from: now))
+                        .font(.subheadline)
+                        .foregroundStyle(.blue)
+                    Image(systemName: "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            Image(systemName: "arrow.right")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button {
+                // TODO: 弹出时间选择器
+            } label: {
+                HStack(spacing: 4) {
+                    Text(formatter.string(from: arrivalDate))
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     /// v2.28 路况 / 风险提示条（高德："✦ 实时路况早知道，避开拥堵路段  更多 ›"）
@@ -2563,7 +2620,20 @@ struct ContentView: View {
             //
             // 正确做法：让按钮列按内容取高（不撑高），
             // 垂直居中交给 HStack 自身的 alignment: .center 来做。
-            VStack(spacing: 12) {
+            // v2.92 右侧按钮从竖排改成横排：交换在左、加号在右（和高德图一一致）
+            HStack(spacing: 8) {
+                Button {
+                    haptic()
+                    model.swapOriginDest()
+                } label: {
+                    Image(systemName: "arrow.triangle.swap")
+                        .font(.body.bold())
+                        .foregroundStyle(.primary)
+                        .frame(width: 32, height: 32)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .contentShape(Rectangle().inset(by: -6))
+                }
+                .buttonStyle(.plain)
                 Button {
                     haptic()
                     beginWaypointSelect()
@@ -2573,20 +2643,7 @@ struct ContentView: View {
                         .foregroundStyle(.blue)
                         .frame(width: 32, height: 32)
                         .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .contentShape(Rectangle().inset(by: -6))   // v2.51 热区 32→44
-                }
-                .buttonStyle(.plain)
-                Button {
-                    haptic()
-                    model.swapOriginDest()
-                } label: {
-                    // v2.54 上下箭头读不出"交换"，换成 swap 符号（同文件 3612 行已在用）
-                    Image(systemName: "arrow.triangle.swap")
-                        .font(.body.bold())
-                        .foregroundStyle(.primary)
-                        .frame(width: 32, height: 32)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .contentShape(Rectangle().inset(by: -6))   // v2.51 热区 32→44
+                        .contentShape(Rectangle().inset(by: -6))
                 }
                 .buttonStyle(.plain)
             }
@@ -3582,6 +3639,11 @@ struct ContentView: View {
         if navHUDVisible {
             AnyView(navSpeedGauge)
         }
+        // v2.92 路线上方大转向箭头（高德图三/图四样式）
+        // 白色大箭头浮在路线上方，指向转向方向，比顶部条里的小箭头醒目得多
+        if navHUDVisible {
+            AnyView(navBigTurnArrow)
+        }
         // v2.22 顶部路线提示卡（"请先去往出口"/"前方xx米路口直行"）
         // v2.58 浏览态同样收起：旧版只切了状态卡，结果"前方直行到达终点"和
         // "继续导航"两个黑条同屏并存，逻辑上互相矛盾。
@@ -3639,6 +3701,27 @@ struct ContentView: View {
         return "\(max(1, m))米"
     }
 
+    /// v2.92 路线上方大转向箭头（高德图三/图四样式）
+    /// 白色大箭头浮在路线上方，指向转向方向。
+    /// 距离越近箭头越大，和高德一致。
+    private var navBigTurnArrow: some View {
+        let event = model.currentGuidanceEvent()
+        let urgent = model.navNearTurning
+        let compact = event.kind == .straightToEnd
+
+        return Group {
+            if !compact && !event.icon.isEmpty {
+                Image(systemName: event.icon)
+                    .font(.system(size: urgent ? 110 : 80, weight: .black))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .offset(y: -UIScreen.main.bounds.height * 0.12)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
     private var navTopHintBar: some View {
         // v2.27（优化建议 #8/#9/#10）：
         //   · 数据源从 navTopHintText 换成 currentGuidanceEvent()，
@@ -3660,12 +3743,7 @@ struct ContentView: View {
         return Group {
             if !event.text.isEmpty {
                 HStack(spacing: 10) {
-                    if !compact {
-                        Image(systemName: event.icon)
-                            // v2.89 对齐高德箭头比例：高德那条里箭头约占条高一半以上
-                            .font(.system(size: urgent ? 38 : 30, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
+                    // v2.92 顶部条里的小箭头已移除，改成路线上方的大箭头浮层
                     VStack(alignment: .leading, spacing: 1) {
                         // v2.63 主次分离（对齐高德）：把"还多远"抽出来单独放大，
                         // 动作文字退居第二视觉。高德那条里 28 比路名大一倍，
