@@ -126,6 +126,10 @@ struct DraggableFloat<Content: View>: View {
             // v2.59 搜索卡从"底边锚定 0.97"改成"中心定位 0.88"，语义变了，
             // 记忆里的 0.97（旧语义=底边）直接套到中心定位会把卡片整体推下去半个卡高 —— 必须作废
             || (key == "bottommain" && posVersion < 2)
+            // v2.92 搜索卡（bottommain2）作废旧坐标：上一轮临时加了 maxPosY: 0.67，
+            // 用户拖到 0.67 后被存下来；现在删了限制但记忆值还在，
+            // 导致卡片重启后停在 0.67 而非默认的贴底位。
+            || (key == "bottommain2" && posVersion < 3)
         if stale {
             let v = key == "zoom" ? 4 : (key == "exitnav2" ? 3 : 2)
             UserDefaults.standard.set(v, forKey: "\(key).posV")
@@ -144,8 +148,11 @@ struct DraggableFloat<Content: View>: View {
         // 保证"下次打开软件卡片顶部仍在屏幕顶部"。
         let px = min(0.96, max(0.04, savedX ?? defaultPos.x))
         // v2.91 每张卡独立纵向范围：minPosY/maxPosY 优先，否则用全局默认
-        let yLo = minPosY ?? 0.10
-        let yHi = maxPosY ?? (bottomAnchor ? 0.97 : 0.93)
+        // v2.92 启动时的默认上限从 0.97 放开到 0.998，和拖动时的上限一致：
+        // 旧版启动时 0.97、拖动时 0.998，用户拖到 0.99 后重启会被钳回 0.97，
+        // 体感就是"拉到中间就不能下拉了"。
+        let yLo = minPosY ?? 0.002
+        let yHi = maxPosY ?? 0.998
         let py: CGFloat
         if topLocked {
             py = min(max(defaultPos.y, yLo), yHi)
@@ -381,8 +388,8 @@ struct DraggableFloat<Content: View>: View {
             .onReceive(NotificationCenter.default.publisher(for: .floatResetAll)) { _ in
                 let rx = UserDefaults.standard.object(forKey: "\(key).x") as? Double
                 let ry = UserDefaults.standard.object(forKey: "\(key).y") as? Double
-                let yLo = minPosY ?? 0.10
-                let yHi = maxPosY ?? 0.93
+                let yLo = minPosY ?? 0.002
+                let yHi = maxPosY ?? 0.998
                 let rawY = topLocked ? defaultPos0.y
                        : min(0.93, max(0.10, ry ?? defaultPos0.y))
                 pos = CGPoint(
