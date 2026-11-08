@@ -51,6 +51,11 @@ struct DraggableFloat<Content: View>: View {
     /// 用途：让"能随手拖"和"不长期互相遮挡"两个要求同时成立 ——
     /// 拖的时候两卡可以叠在一起，松手后才弹开去。
     var onDragEnded: ((CGFloat) -> CGFloat?)? = nil
+    /// v2.91 每张卡独立的纵向拖动范围（pos.y 比例）。
+    /// nil 表示沿用全局默认（0.002…0.998）。用于让搜索卡/地点卡/规划两卡
+    /// 对齐高德的"半屏抽屉"手感：上拉到顶、下拉停在指定位置，不会一路滑出屏。
+    var minPosY: CGFloat? = nil
+    var maxPosY: CGFloat? = nil
     /// v2.87 卡片顶部是否留一条"拖动热区"。
     /// 不需要它的卡片照旧整卡可拖；卡片内部有 ScrollView / 一排按钮时，
     /// 竖直手势会被子孙控件吃掉，手指落在那些区域里拖不动 —— 那时才需要这条热区。
@@ -80,6 +85,8 @@ struct DraggableFloat<Content: View>: View {
          resetOnAppear: Bool = false,
          dragHandle: Bool = false,
          onDragEnded: ((CGFloat) -> CGFloat?)? = nil,
+         minPosY: CGFloat? = nil,
+         maxPosY: CGFloat? = nil,
          @ViewBuilder content: () -> Content) {
         self.key = key
         self.lockX = lockX
@@ -92,6 +99,8 @@ struct DraggableFloat<Content: View>: View {
         self.resetOnAppear = resetOnAppear
         self.dragHandle = dragHandle
         self.onDragEnded = onDragEnded
+        self.minPosY = minPosY
+        self.maxPosY = maxPosY
         self.content = content()
         let x = UserDefaults.standard.object(forKey: "\(key).x") as? Double
         let y = UserDefaults.standard.object(forKey: "\(key).y") as? Double
@@ -134,14 +143,18 @@ struct DraggableFloat<Content: View>: View {
         // v2.23 顶部锁定：y 一律取 defaultPos.y（顶部），历史位置不再生效，
         // 保证"下次打开软件卡片顶部仍在屏幕顶部"。
         let px = min(0.96, max(0.04, savedX ?? defaultPos.x))
+        // v2.91 每张卡独立纵向范围：minPosY/maxPosY 优先，否则用全局默认
+        let yLo = minPosY ?? 0.10
+        let yHi = maxPosY ?? (bottomAnchor ? 0.97 : 0.93)
         let py: CGFloat
         if topLocked {
-            py = defaultPos.y
+            py = min(max(defaultPos.y, yLo), yHi)
         } else {
             // v2.58 底锚定卡片（地点卡 / 行程卡 / 导航底卡）放开到 0.97：
             // 旧的 0.93 上限会把"贴底"再往上拉 35pt，卡片离 home indicator 空出一截，
             // 看着不像贴底。普通卡片仍保持 0.93，避免压住底部 tab。
-            py = min(bottomAnchor ? 0.97 : 0.93, max(0.10, savedY ?? defaultPos.y))
+            let rawPy = min(bottomAnchor ? 0.97 : 0.93, max(0.10, savedY ?? defaultPos.y))
+            py = min(max(rawPy, yLo), yHi)
         }
         _pos = State(initialValue: CGPoint(x: px, y: py))
         _defaultTopY = State(initialValue: defaultPos.y)
@@ -322,9 +335,11 @@ struct DraggableFloat<Content: View>: View {
                             // 横滑判定保留：斜着右滑时纵向那点位移不该顺带把卡拖走。
                             // v2.79 记录范围一并放开到 0.002…0.998：旧版 0.02/0.995
                             // 在拖到极端位置时会把 pos 截断，松手后卡片又"弹"回一点。
-                            let newY = horizontalSwipe
+                            let rawY = horizontalSwipe
                                 ? base.y
                                 : min(0.998, max(0.002, base.y + v.translation.height / h))
+                            // v2.91 本卡的纵向范围优先（nil 时退回全局 0.002…0.998）
+                            let newY = min(max(rawY, minPosY ?? 0.002), maxPosY ?? 0.998)
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
                                 y: newY)
@@ -335,8 +350,9 @@ struct DraggableFloat<Content: View>: View {
                         dragStartPos = nil
                         // v2.66 松手吸附（不打断跟手，只在手指抬起这一下做一次归位）
                         if !deleting, let cb = onDragEnded, let snapped = cb(pos.y) {
+                            let snappedY = min(max(snapped, minPosY ?? 0.02), maxPosY ?? 0.995)
                             withAnimation(.easeOut(duration: 0.18)) {
-                                pos.y = min(0.995, max(0.02, snapped))
+                                pos.y = snappedY
                             }
                         }
                         if deleting {
@@ -365,10 +381,13 @@ struct DraggableFloat<Content: View>: View {
             .onReceive(NotificationCenter.default.publisher(for: .floatResetAll)) { _ in
                 let rx = UserDefaults.standard.object(forKey: "\(key).x") as? Double
                 let ry = UserDefaults.standard.object(forKey: "\(key).y") as? Double
+                let yLo = minPosY ?? 0.10
+                let yHi = maxPosY ?? 0.93
+                let rawY = topLocked ? defaultPos0.y
+                       : min(0.93, max(0.10, ry ?? defaultPos0.y))
                 pos = CGPoint(
                     x: min(0.96, max(0.04, rx ?? defaultPos0.x)),
-                    y: topLocked ? defaultPos0.y
-                       : min(0.93, max(0.10, ry ?? defaultPos0.y)))
+                    y: min(max(rawY, yLo), yHi))
             }
         }
     }
