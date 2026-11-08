@@ -156,8 +156,9 @@ struct DraggableFloat<Content: View>: View {
         // v2.92 启动时的默认上限从 0.97 放开到 0.998，和拖动时的上限一致：
         // 旧版启动时 0.97、拖动时 0.998，用户拖到 0.99 后重启会被钳回 0.97，
         // 体感就是"拉到中间就不能下拉了"。
-        let yLo = minPosY ?? 0.002
-        let yHi = maxPosY ?? 0.998
+        // v2.93 取消所有位置限制：拖动范围放大到 0~1（几乎整屏自由拖）
+        let yLo = minPosY ?? 0
+        let yHi = maxPosY ?? 1
         let py: CGFloat
         if topLocked {
             py = min(max(defaultPos.y, yLo), yHi)
@@ -214,7 +215,8 @@ struct DraggableFloat<Content: View>: View {
         //
         // 现在只保留一条底线：任何位置都至少露出 80pt，保证拖飞了还能抓回来。
         // 允许卡片上下各有一半出屏，和系统浮窗的拖动手感一致。
-        let margin: CGFloat = 80
+        // v2.93 取消限制：露出边从 80pt 改成 20pt（几乎可以完全拖出屏）
+        let margin: CGFloat = 20
         let lo = -h / 2 + margin
         // 键盘弹起时仍然让位（否则卡片会坐到键盘下面，建议列表首选项被键盘盖住）
         let hi = screenH - max(0, extraBottomInset) + h / 2 - margin
@@ -351,7 +353,8 @@ struct DraggableFloat<Content: View>: View {
                                 ? base.y
                                 : min(0.998, max(0.002, base.y + v.translation.height / h))
                             // v2.91 本卡的纵向范围优先（nil 时退回全局 0.002…0.998）
-                            let newY = min(max(rawY, minPosY ?? 0.002), maxPosY ?? 0.998)
+                            // v2.93 取消限制：拖动范围 0~1
+                            let newY = min(max(rawY, minPosY ?? 0), maxPosY ?? 1)
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
                                 y: newY)
