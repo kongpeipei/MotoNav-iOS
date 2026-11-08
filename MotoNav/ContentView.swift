@@ -2308,7 +2308,7 @@ struct ContentView: View {
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "今天 HH:mm"
 
-        let durationMinutes = Int(model.routePlan?.expectedTime ?? 0)
+        let durationMinutes = Int((model.routeChoices.first?.durationS ?? 0) / 60)
         let arrivalDate = calendar.date(byAdding: .minute, value: durationMinutes, to: now) ?? now
 
         return HStack(spacing: 8) {
@@ -4150,7 +4150,7 @@ struct ContentView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(dimFg)
                     // 红绿灯数量（如果有）
-                    if let lights = model.routeTrafficLightCount, lights > 0 {
+                    if let lights = model.routeChoices.first?.trafficLights, lights > 0 {
                         HStack(spacing: 3) {
                             Image(systemName: "trafficlight")
                                 .font(.caption2)
