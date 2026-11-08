@@ -3493,10 +3493,10 @@ struct ContentView: View {
                 }
             }
             .frame(width: d, height: d)
-            // v2.92 顶部贴在提示卡下方（6pt 间隙），不要重叠
-            // 位置：中心 = safeArea.top + 8 + 提示条高 + 6 + d/2
+            // v2.93 速度表再上移 14pt：间隙从 6pt 改成 -8pt（与提示卡轻微重叠，更紧凑）
+            // 位置：中心 = safeArea.top + 8 + 提示条高 - 8 + d/2
             .position(x: 12 + d / 2,
-                      y: geo.safeAreaInsets.top + 8 + navHintHeight + 6 + d / 2)
+                      y: geo.safeAreaInsets.top + 8 + navHintHeight - 8 + d / 2)
         }
         .allowsHitTesting(false)
     }
