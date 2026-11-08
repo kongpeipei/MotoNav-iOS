@@ -3543,24 +3543,13 @@ struct ContentView: View {
                         }
                     }
                 }
-                // 当前位置：蓝圆 + 白边（高德同款，比纯白点在浅色底图上清楚得多）
-                Circle()
-                    .fill(Color(red: 0.16, green: 0.38, blue: 1.0))
-                    .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
-                    .frame(width: 11, height: 11)
+                // 当前位置：蓝色向上三角形 + 白边（v2.91 从实心圆换成箭头，指向终点方向）
+                Image(systemName: "arrowtriangle.up.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                     .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-                    .offset(y: left - 5.5)
-                // 终点（顶端）：白圆底 + 蓝色前进箭头
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.92))
-                        .frame(width: 13, height: 13)
-                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                    Image(systemName: "arrowtriangle.up.fill")
-                        .font(.system(size: 6.5, weight: .bold))
-                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                }
-                .offset(y: -1)
+                    .offset(y: left - 6)
+                // v2.91 终点图标删除：绿条顶端即终点，不再叠白圆+箭头
             }
             .frame(width: 16, height: h)
             .position(x: geo.size.width - 15, y: geo.size.height * 0.44)
