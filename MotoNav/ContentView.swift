@@ -2859,10 +2859,7 @@ struct ContentView: View {
                         ForEach(model.serviceTips.prefix(6)) { tip in
                             Button {
                                 haptic()
-                                model.destName = tip.name
-                                model.destLat = tip.lat
-                                model.destLon = tip.lon
-                                model.startRoutePlanning()
+                                model.addWaypoint(name: tip.name, lat: tip.lat, lon: tip.lon)
                                 model.clearServices()
                             } label: {
                                 HStack {
