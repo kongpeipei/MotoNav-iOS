@@ -924,6 +924,30 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera = cam
             }
         }
+        // v2.87 3D 视角自动切换：缩放近→3D，缩放远→2D（尊重用户手势）
+        if (navigating || cruise), !context.coordinator.userMoved,
+           Date().timeIntervalSince(context.coordinator.lastPitchAutoSwitchAt) > 2 {
+            let alt = map.camera.altitude
+            var targetPitch: CGFloat = 0
+            if alt < 500 {
+                targetPitch = 45
+            } else if alt > 1000 {
+                targetPitch = 0
+            } else {
+                // 500~1000m 之间线性过渡
+                let ratio = (1000 - alt) / 500
+                targetPitch = CGFloat(45 * ratio)
+            }
+            // 差值大于 5 度才改，避免频繁刷新
+            if abs(map.camera.pitch - targetPitch) > 5 {
+                context.coordinator.lastPitchAutoSwitchAt = Date()
+                context.coordinator.setRegionProgrammatically {
+                    var cam = map.camera
+                    cam.pitch = targetPitch
+                    map.camera = cam
+                }
+            }
+        }
         // v1.81 地点查看：强制北向上一次（暂停朝向跟随，避免下一帧转回）
         if northUpTick != context.coordinator.lastNorthUpTick {
             context.coordinator.lastNorthUpTick = northUpTick
@@ -1298,6 +1322,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastNavScaleTick = -1
         // v2.32 MapKit 3D 俯视加固：导航态节流检查 pitch 是否被系统重置
         var lastPitchRestoreAt = Date.distantPast
+        var lastPitchAutoSwitchAt = Date.distantPast
         /// v2.22 已走过的折线索引（灰色部分）
         var traveledIdx = 0
         /// v2.22 已走过的折线（灰色层）
