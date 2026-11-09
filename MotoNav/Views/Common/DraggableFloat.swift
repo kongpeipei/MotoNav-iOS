@@ -353,7 +353,7 @@ struct DraggableFloat<Content: View>: View {
                                 : min(5.0, max(0.0, base.y + v.translation.height / h))
                             // v2.91 本卡的纵向范围优先（nil 时退回全局 0…1）
                             // v2.93 取消限制：拖动范围 0~1
-                            let newY = min(max(rawY, minPosY ?? 0), maxPosY ?? 1)
+                            let newY = min(max(rawY, minPosY ?? 0), maxPosY ?? 5.0)
                             pos = CGPoint(
                                 x: lockX ? initialX : min(0.96, max(0.04, base.x + v.translation.width / w)),
                                 y: newY)

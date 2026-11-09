@@ -97,7 +97,9 @@ struct MapViewRepresentable: UIViewRepresentable {
     // 用户明确要求"开始导航时当前定位点要在屏幕中显示"，这里把前移量收窄，
     // 车落在屏高约 56%，既在屏幕中部、前方又仍留有视野。
     // v2.94 跟随模式下定位点放屏幕正中心（苹果地图那样）：从 0.15 改成 0
-    static let navCameraForwardRatio: Double = 0.0
+    // v2.86 定位点位置：高德同款，在屏幕下方（不是正中间）
+    // 0.0 = 正中间，0.3 = 下方 30%，0.5 = 下方 50%
+    static let navCameraForwardRatio: Double = 0.3
 
     /// v2.50 围绕某点构造一个"边长 meters 见方"的地图矩形。
     ///
@@ -1613,6 +1615,28 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             scheduleScale(mapView)   // v2.02 地图稳定后再算比例尺（去抖，避免每帧改状态）
+            // v2.86 3D视角自动切换：缩放够近时自动从2D变45度3D，缩放够远时变回去
+            // 巡航和导航跟随模式下生效
+            if navActive || cruiseMode {
+                let altitude = mapView.camera.centerCoordinateDistance
+                var targetPitch: CGFloat = 45
+                if altitude > 1000 {
+                    // 视野远 → 2D（90度俯视）
+                    targetPitch = 0
+                } else if altitude < 500 {
+                    // 视野近 → 3D（45度）
+                    targetPitch = 45
+                } else {
+                    // 中间区间线性过渡
+                    let t = (1000 - altitude) / 500.0  // 0=1000m(2D), 1=500m(3D)
+                    targetPitch = CGFloat(t * 45)
+                }
+                if abs(mapView.camera.pitch - targetPitch) > 2 {
+                    var cam = mapView.camera
+                    cam.pitch = targetPitch
+                    mapView.setCamera(cam, animated: true)
+                }
+            }
             // 程序 setRegion 触发时不标记用户移动
             if consumeProgrammaticMove() {
                 // 程序化移动，正常

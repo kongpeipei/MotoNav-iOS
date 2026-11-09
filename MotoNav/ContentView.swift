@@ -3295,7 +3295,7 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 22, height: 22)
-                    .background(Color(.systemGray6), in: Circle())
+                    .background(Color.white.opacity(0.2), in: Circle())
             }
             .buttonStyle(.plain)
         }
@@ -3307,36 +3307,32 @@ struct ContentView: View {
     }
 
     private var cruiseCard: some View {
-        // v2.38 H2 速度读数四舍五入（Int 截断会少显示 1 km/h：82.9→82）
+        // v2.86 巡航模式：左边圆形速度表（导航态同款），右边圆形搜索按钮
+        let d: CGFloat = 102
         let speed = Int((model.currentSpeed * 3.6).rounded())
-        return HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Image(systemName: "location.fill")
-                        .font(.caption.bold())
-                        .foregroundStyle(.blue)
-                    Text("巡航模式")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+        return HStack(spacing: 20) {
+            // 左边：圆形速度表（和导航态同款）
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.95))
+                    .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
+                VStack(spacing: -3) {
                     Text("\(speed)")
-                        .font(.system(size: 34, weight: .heavy, design: .rounded))
-                        // v2.37 G2 深色模式黑底黑字修复：跟随外观
-                        .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+                        .font(.system(size: 45, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                     Text("km/h")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.55))
                 }
             }
+            .frame(width: d, height: d)
             Spacer()
-            // v2.34 E6 巡航中想搜索/改目的地：点放大镜直接进搜索（退出巡航并聚焦搜索框）
-            // v2.36 F3 改用 exitCruise：搜索是临时让位，不应抑制巡航自动进入
-            //（否则搜完不导航，本次会话巡航再也回不来）；只有 × 才是明确"不要巡航"
+            // 右边：圆形搜索按钮（大小同速度表）
             Button {
                 haptic()
                 model.exitCruise()
-                // v2.51 保险：巡航时若残留规划路线，先回首页（否则搜索卡不显示，按钮等于失效）
                 if !model.routeChoices.isEmpty { closeRoutePlan() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                     searchFocused = true
@@ -3344,36 +3340,22 @@ struct ContentView: View {
                     uiHidden = false
                 }
             } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.blue)
-                    .frame(width: 28, height: 28)
-                    .background(Color.blue.opacity(0.1), in: Circle())
-                    .padding(6)                 // v2.51 热区 28→40（视觉不变）
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            // v2.34 E5 手动退出巡航：本次使用内不再自动进入
-            Button {
-                haptic()
-                withAnimation(.easeOut(duration: 0.2)) { model.dismissCruiseManually() }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    .background(Color(.systemGray6), in: Circle())
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.95))
+                        .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                }
+                .frame(width: d, height: d)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.14), radius: 10, y: 3)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 20)
         .frame(maxWidth: .infinity, alignment: .top)
-        // v2.32 固定 150pt → 屏幕高度 18%：iPhone SE(667) 与 17 Pro Max(874) 上位置比例一致
-        .position(x: UIScreen.main.bounds.width / 2, y: UIScreen.main.bounds.height * 0.18)
+        .position(x: UIScreen.main.bounds.width / 2, y: 80 + d / 2)
     }
 
 
