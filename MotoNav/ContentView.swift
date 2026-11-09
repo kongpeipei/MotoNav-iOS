@@ -2555,10 +2555,10 @@ struct ContentView: View {
                 closeRoutePlan()
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(width: 28, height: 28)
-                    .padding(8)                 // v2.51 热区 28 → 44
+                    .frame(width: 16, height: 16)
+                    .padding(4)                 // v2.85 缩小一半
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -2571,7 +2571,6 @@ struct ContentView: View {
                     Text(model.originName)
                         .font(.subheadline)
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -2591,13 +2590,6 @@ struct ContentView: View {
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        // v2.27 优化建议 #17：显示「距我 1.2 km」，方便判断顺序是否合理
-                        let distText = model.waypointDistanceText(wp)
-                        if !distText.isEmpty {
-                            Text(distText)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
                         Spacer(minLength: 4)
                         // v2.85 删除上移/下移箭头和定位按钮，改为拖动排序
                         Button {
@@ -2622,7 +2614,6 @@ struct ContentView: View {
                     Text(model.destName)
                         .font(.subheadline.bold())
                         .foregroundStyle(.primary)
-                        .lineLimit(1)
                     Spacer(minLength: 4)
                     Image(systemName: "pencil")
                         .font(.caption)
