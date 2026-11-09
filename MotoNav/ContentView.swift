@@ -3335,27 +3335,22 @@ struct ContentView: View {
             }
             .frame(width: d, height: d)
             Spacer()
-            // 右边：圆形搜索按钮（大小同速度表）
+            // 右边：小静音开关（不要太大）
             Button {
                 haptic()
-                model.exitCruise()
-                if !model.routeChoices.isEmpty { closeRoutePlan() }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    searchFocused = true
-                    searchExpanded = false
-                    uiHidden = false
-                }
+                let muted = !model.voiceMuted
+                UserDefaults.standard.set(muted, forKey: "voiceMuted")
             } label: {
                 ZStack {
                     Circle()
                         .fill(Color.white.opacity(0.95))
                         .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
                         .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 32, weight: .bold))
+                    Image(systemName: model.voiceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                 }
-                .frame(width: d, height: d)
+                .frame(width: 50, height: 50)
             }
             .buttonStyle(.plain)
         }
@@ -3366,6 +3361,49 @@ struct ContentView: View {
 
 
     @ViewBuilder private var bottomLayerGroup: some View {
+        // v2.87 巡航模式底部白卡：退出 + 已巡航 + 搜索
+        if model.cruiseMode {
+            HStack(spacing: 16) {
+                // 左边：退出按钮
+                Button {
+                    haptic()
+                    model.exitCruise()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(.black.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                // 中间：巡航信息
+                Text("已巡航")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.black.opacity(0.8))
+                Spacer()
+                // 右边：搜索按钮
+                Button {
+                    haptic()
+                    model.exitCruise()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        searchFocused = true
+                        searchExpanded = false
+                        uiHidden = false
+                    }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            .background(Color.white.opacity(0.95))
+            .cornerRadius(28)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 34)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .zIndex(10)
+        }
         // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
         if !model.navigating && model.waypointCandidate != nil {
             AnyView(waypointCandidateCard)
