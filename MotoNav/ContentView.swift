@@ -4246,6 +4246,10 @@ struct ContentView: View {
         overviewTask?.cancel()
         overviewTask = nil
         model.navigateFollowTick += 1
+        // v2.94 修复：取消全览后定位点不在屏幕可见范围。
+        // 全览时相机被缩放到路线中心，单加 navigateFollowTick 有时不触发相机重置
+        // （userLocation 刚好为 nil / 时序问题），额外触发 navScaleTick 强制重新定位
+        model.navScaleTick += 1
     }
 
     /// v1.81.4 关闭本次行程卡并回到初始界面（清空路线/方案/地点卡等全部残留状态）
