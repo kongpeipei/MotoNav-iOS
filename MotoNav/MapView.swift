@@ -1463,7 +1463,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// 导航跟随触发记忆
         var lastNavFollowTick = 0
         var lastNavFollowUpdateAt = Date()
-        var navLastFollow: CLLocationCoordinate2D? = nil
         var lastOverviewTick = 0
         /// 导航中最后跟随位置（开远自动拉回）
         var navLastFollow: CLLocationCoordinate2D?
