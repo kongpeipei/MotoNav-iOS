@@ -158,7 +158,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var xfDiag = ""
     private var xfTask: URLSessionWebSocketTask?
     /// 语音播报总开关
-    var voiceMuted: Bool { UserDefaults.standard.object(forKey: "voiceMuted") as? Bool ?? false }
+    @Published var voiceMuted: Bool = UserDefaults.standard.object(forKey: "voiceMuted") as? Bool ?? false
     /// v2.34 体验审查 E7：最近一次播报时间（供导航底卡"播报中"喇叭指示，2.5s 内高亮）
     @Published private(set) var lastSpeakAt = Date.distantPast
     /// v2.36 F2 灵动岛更新节流：Live Activity 更新是 XPC 开销，5 秒一次足够锁屏读数

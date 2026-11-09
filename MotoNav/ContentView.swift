@@ -3338,8 +3338,8 @@ struct ContentView: View {
             // 右边：小静音开关（不要太大）
             Button {
                 haptic()
-                let muted = !model.voiceMuted
-                UserDefaults.standard.set(muted, forKey: "voiceMuted")
+                model.voiceMuted.toggle()
+                UserDefaults.standard.set(model.voiceMuted, forKey: "voiceMuted")
             } label: {
                 ZStack {
                     Circle()
