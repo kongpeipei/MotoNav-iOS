@@ -594,8 +594,8 @@ struct ContentView: View {
             gasTick: model.gasTick,
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
-            searchResultAnnotations: model.searchResultAnnotations,
             categoryTick: model.categoryTick,
+            searchResultAnnotations: model.searchResultAnnotations,
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
             overviewTick: model.overviewTick,
@@ -1465,7 +1465,7 @@ struct ContentView: View {
                         SearchResultAnnotation(
                             coordinate: CLLocationCoordinate2D(latitude: tip.lat, longitude: tip.lon),
                             title: tip.name,
-                            subtitle: tip.address,
+                            subtitle: tip.sub,
                             index: idx
                         )
                     }
