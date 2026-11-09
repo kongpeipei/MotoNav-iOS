@@ -109,7 +109,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     // v2.94 跟随模式下定位点放屏幕正中心（苹果地图那样）：从 0.15 改成 0
     // v2.86 定位点位置：高德同款，在屏幕下方（不是正中间）
     // 0.0 = 正中间，0.3 = 下方 30%，0.5 = 下方 50%
-    static let navCameraForwardRatio: Double = 0.3
+    static let navCameraForwardRatio: Double = 0.4
 
     /// v2.50 围绕某点构造一个"边长 meters 见方"的地图矩形。
     ///

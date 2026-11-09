@@ -5627,23 +5627,26 @@ final class VoiceSearchService: ObservableObject {
     }
 }
 
-// v2.86 首页右上角巡航按钮（白底黑字）
+// v2.87 首页巡航按钮（白底卡片，可拖动，位置持久化）
 struct CruiseButton: View {
     @ObservedObject var model: AppModel
     var body: some View {
         if !model.navigating && !model.cruiseMode {
-            Button(action: {
-                model.cruiseMode = true
-            }) {
-                Text("巡航")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(.white)
-                    .cornerRadius(20)
+            DraggableFloat(key: "cruisebutton", defaultPos: CGPoint(x: 0.85, y: 0.12)) {
+                Button(action: {
+                    model.cruiseMode = true
+                }) {
+                    Text("巡航")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(.white)
+                        .cornerRadius(24)
+                        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                }
+                .buttonStyle(.plain)
             }
-            .position(x: UIScreen.main.bounds.width - 50, y: 80)
         }
     }
 }
