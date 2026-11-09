@@ -1635,7 +1635,7 @@ struct ContentView: View {
                     // v2.74 按用户要求：整张卡必须常驻屏幕最下方（高德首页就是贴底），
                     // 0.89 → 0.97（底边锚定，钳制会自动落在安全区底）。
                     // v2.80 按用户要求改成"记住上次拖到的位置"，不再每次回默认位。
-                    DraggableFloat(key: "bottommain2", defaultPos: CGPoint(x: 0.5, y: 0.97),
+                    DraggableFloat(key: "bottommain2", defaultPos: CGPoint(x: 0.5, y: 1.0),
                                    lockX: true, bottomAnchor: true,
                                    onFrameChange: { bottomMainCardFrame = $0 },
                                    extraBottomInset: keyboardHeight,
@@ -1677,7 +1677,7 @@ struct ContentView: View {
             // 把连线和当前位置箭头都压住了。改成贴底悬浮（对齐高德地点卡），
             // 地图中上部完整露出，黑线一眼看全；左右可拖、上滑仍在。
             // v2.80 取消 resetOnAppear：用户要求所有卡片下次打开保持上次拖到的位置
-            DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 0.97), lockX: true,
+            DraggableFloat(key: "tapplace", defaultPos: CGPoint(x: 0.5, y: 1.0), lockX: true,
                            bottomAnchor: true,
                            deleteLabel: "关闭",
                            onSwipeLeft: { closeTapPlace() },

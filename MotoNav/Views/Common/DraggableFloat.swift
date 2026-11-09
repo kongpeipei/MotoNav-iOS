@@ -117,7 +117,7 @@ struct DraggableFloat<Content: View>: View {
         let stale = (key == "zoom" && posVersion < 4)
             // v2.92 地点卡同样作废旧坐标：上一轮临时加了 maxPosY: 0.67，
             // 用户拖到 0.67 后被存下来，现在删了限制但记忆值还在。
-            || (key == "tapplace" && posVersion < 3)
+            || (key == "tapplace" && posVersion < 4)
             || (key == "tipcard" && posVersion < 2)
             || (key == "exitnav2" && posVersion < 3)
             || (key == "navside" && posVersion < 2)
@@ -134,7 +134,7 @@ struct DraggableFloat<Content: View>: View {
             // v2.92 搜索卡（bottommain2）作废旧坐标：上一轮临时加了 maxPosY: 0.67，
             // 用户拖到 0.67 后被存下来；现在删了限制但记忆值还在，
             // 导致卡片重启后停在 0.67 而非默认的贴底位。
-            || (key == "bottommain2" && posVersion < 4)
+            || (key == "bottommain2" && posVersion < 5)
         if stale {
             let v = key == "zoom" ? 4 : (key == "exitnav2" ? 3 : 2)
             UserDefaults.standard.set(v, forKey: "\(key).posV")

@@ -3799,7 +3799,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 新表：[20, 32, 48, 68, 95, 130]（米/厘米），最低档 ~600m、最高档 ~3.9km。
     // v2.93 导航视野再拉远一档：用户反馈跟随模式地图看见范围太小
     // 从 [20,32,48,68,95,130] 调到 [30,45,65,90,120,160]
-    static let navScaleSteps = [30, 45, 65, 90, 120, 160]
+    // v2.94 导航视野再拉远一档：[30,45,65,90,120,160] → [40,60,85,120,160,200]
+    static let navScaleSteps = [40, 60, 85, 120, 160, 200]
     /// 相邻档位的升级边界（km/h），与新档位一一对应
     // v2.92 升档边界随新 steps 表调整：低速起步就有足够视野，速度越快看得越远
     private static let navScaleUpBounds = [12, 20, 32, 48, 65]
