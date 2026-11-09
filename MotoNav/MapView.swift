@@ -185,8 +185,6 @@ struct MapViewRepresentable: UIViewRepresentable {
     let categoryTick: Int
     /// v2.86 搜索结果标注（地图上显示所有搜索结果）
     let searchResultAnnotations: [SearchResultAnnotation]
-    /// v2.87 导航中自动显示的加油站列表
-    let gasStations: [CLLocationCoordinate2D]
     /// 导航中（3D 俯仰视角）
     let navigateFollowTick: Int
     let navigating: Bool
