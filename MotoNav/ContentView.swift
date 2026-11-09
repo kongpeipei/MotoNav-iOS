@@ -2389,7 +2389,6 @@ struct ContentView: View {
                 }
                 .presentationDetents([.height(300)])
             }
-            }
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
