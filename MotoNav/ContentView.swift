@@ -597,6 +597,7 @@ struct ContentView: View {
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
             categoryTick: model.categoryTick,
+            trafficLights: model.trafficLights,
             searchResultAnnotations: model.searchResultAnnotations,
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
