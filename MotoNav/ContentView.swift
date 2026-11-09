@@ -606,7 +606,7 @@ struct ContentView: View {
             cruiseTick: model.cruiseTick,
             zoomInTick: model.zoomInTick,
             zoomOutTick: model.zoomOutTick,
-            pitchDeg: model.pitchDeg,
+            pitchDeg: model.userPitchDeg,
             onScaleChange: { t in
                 // v2.02 写进 AppModel（@Published）而不是 View 的 @State：
                 // 地图回调在 SwiftUI 更新周期内改 @State 会触发下一轮 updateUIView → 循环卡死
@@ -3329,6 +3329,25 @@ struct ContentView: View {
                 }
             }
             .frame(width: d, height: d)
+            // 3D 切换按钮
+            Button {
+                haptic()
+                if model.userPitchDeg > 0 {
+                    model.userPitchDeg = 0
+                } else {
+                    model.userPitchDeg = 45
+                }
+            } label: {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.95))
+                        .shadow(color: .black.opacity(0.20), radius: 3, y: 1)
+                    Text("3D")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(model.userPitchDeg > 0 ? .blue : .gray)
+                }
+                .frame(width: 44, height: 44)
+            }
             Spacer()
             // 右边：小静音开关（不要太大）
             Button {

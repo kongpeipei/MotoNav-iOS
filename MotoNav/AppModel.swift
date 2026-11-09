@@ -82,6 +82,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
     @Published var cruiseMode = false
+    /// v2.87 用户自定义3D俯角（度），0=2D，45=默认3D
+    @Published var userPitchDeg: Double = 45 {
+        didSet {
+            UserDefaults.standard.set(userPitchDeg, forKey: "userPitchDeg")
+        }
+    }
     /// v2.86 首页无操作时间（10秒无操作自动进入巡航模式）
     @Published var lastUserActionTime = Date()
     @Published var cruiseTick = 0
@@ -512,6 +518,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private override init() {
         super.init()
+        userPitchDeg = UserDefaults.standard.double(forKey: "userPitchDeg")
+        if userPitchDeg == 0 { userPitchDeg = 45 }
         // v1.61：内置高德 Key 兜底（用户设置过则用用户的；否则用内置，保证搜索联想/路线规划始终可用）
         if let saved = UserDefaults.standard.string(forKey: "amapKey"), !saved.isEmpty {
             amapKey = saved
