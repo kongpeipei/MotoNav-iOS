@@ -613,6 +613,10 @@ struct ContentView: View {
                 // v2.02 长按只做一件事：出地点卡
                 showTapPlace(coord)
             },
+            // v2.86 点击搜索结果标注 → 显示地点卡（还可以点击别的标注切换）
+            onSearchResultSelect: { sra in
+                showTapPlace(sra.coordinate, seed: sra.title ?? "搜索结果")
+            },
             onPlaceSelect: { pl in
                 // v1.96 轻点地点名文字 → 直接弹地点介绍卡（原先是只设"去这里"预览，点了几乎没反应）
                 // v2.16 沉浸态下不再强制退出沉浸：卡片单独渲染，其余 UI 保持隐藏
@@ -625,10 +629,6 @@ struct ContentView: View {
             onCategorySelect: { r in
                 model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
                 model.clearCategory()
-            },
-            // v2.86 点击搜索结果标注 → 显示地点卡（还可以点击别的标注切换）
-            onSearchResultSelect: { sra in
-                showTapPlace(sra.coordinate, seed: sra.title ?? "搜索结果")
             },
             onMapTap: { coord in
                 // v1.96 轻点地图：
