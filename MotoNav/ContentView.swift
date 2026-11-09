@@ -3328,8 +3328,6 @@ struct ContentView: View {
                 }
             }
             .frame(width: d, height: d)
-            // 3D 长按滑条按钮（平时按钮，按住变滑条调角度）
-            ThreeDPitchSlider(model: model)
             Spacer()
             // 右边：小静音开关（不要太大）
             Button {
@@ -5661,83 +5659,3 @@ struct CruiseButton: View {
     }
 }
 
-// v2.87 3D俯角长按滑条：平时圆形按钮，按住变成竖滑条调角度（20°~90°），松手恢复按钮
-struct ThreeDPitchSlider: View {
-    @ObservedObject var model: AppModel
-    @State private var isEditing = false
-    @State private var dragStartY: CGFloat = 0
-    @State private var dragStartPitch: Double = 0
-    
-    var body: some View {
-        if isEditing {
-            // 编辑态：竖滑条
-            VStack(spacing: 8) {
-                Text("\(Int(model.userPitchDeg))°")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(.blue)
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 6, height: 120)
-                    .overlay(
-                        // 滑块
-                        Circle()
-                            .fill(Color.blue)
-                            .frame(width: 20, height: 20)
-                            .offset(y: CGFloat(1 - (model.userPitchDeg - 20) / 70) * 120 - 60)
-                    )
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                if dragStartY == 0 {
-                                    dragStartY = value.location.y
-                                    dragStartPitch = model.userPitchDeg
-                                }
-                                let deltaY = dragStartY - value.location.y
-                                let deltaPitch = Double(deltaY / 120) * 70
-                                model.userPitchDeg = min(90, max(20, dragStartPitch + deltaPitch))
-                            }
-                            .onEnded { _ in
-                                dragStartY = 0
-                                dragStartPitch = 0
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    isEditing = false
-                                }
-                            }
-                    )
-            }
-            .transition(.scale.combined(with: .opacity))
-        } else {
-            // 平时态：圆形按钮
-            Button {
-                // 点击切换2D/3D
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                if model.userPitchDeg > 0 {
-                    model.userPitchDeg = 0
-                } else {
-                    model.userPitchDeg = 45
-                }
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.95))
-                        .shadow(color: .black.opacity(0.20), radius: 3, y: 1)
-                    Text("3D")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(model.userPitchDeg > 0 ? .blue : .gray)
-                }
-                .frame(width: 44, height: 44)
-            }
-            // 长按进入编辑态
-            .onLongPressGesture(minimumDuration: 0.3) {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                if model.userPitchDeg == 0 {
-                    model.userPitchDeg = 45
-                }
-                withAnimation(.easeIn(duration: 0.2)) {
-                    isEditing = true
-                }
-            }
-            .transition(.scale.combined(with: .opacity))
-        }
-    }
-}
