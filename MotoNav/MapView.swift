@@ -1795,9 +1795,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // 旧版是深蓝 + 虚线，看着像施工绕行或禁行路段，两条备选并排时
                     // 蓝虚线比绿主路线还抢眼，主次完全颠倒。
                     // 高德的做法正好相反：备选只是一条淡淡的灰线，靠"主路线是彩色的"来区分。
+                    // v2.85 备选路线改成浅天蓝
                     r.strokeColor = self.navigating
-                        ? UIColor(white: 0.78, alpha: 0.85)
-                        : UIColor(white: 0.56, alpha: 0.85)
+                        ? UIColor(red: 0.7, green: 0.88, blue: 1.0, alpha: 0.7)
+                        : UIColor(red: 0.53, green: 0.81, blue: 0.98, alpha: 0.85)
                     r.lineWidth = 3.5
                     r.lineDashPattern = nil
                 } else {

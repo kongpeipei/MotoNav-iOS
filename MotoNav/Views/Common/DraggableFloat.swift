@@ -136,7 +136,8 @@ struct DraggableFloat<Content: View>: View {
             // 导致卡片重启后停在 0.67 而非默认的贴底位。
             || (key == "bottommain2" && posVersion < 6)
         if stale {
-            let v = key == "zoom" ? 4 : (key == "exitnav2" ? 3 : 2)
+            // v2.85 作废后 posVersion 直接设到 6，只作废一次旧坐标，之后用户拖到哪里就保持哪里
+            let v = 6
             UserDefaults.standard.set(v, forKey: "\(key).posV")
             // v2.59 真正把旧坐标清掉。旧版这里只推进了版本号，UserDefaults 里的 y 原样留着：
             // 作废只在"当次显示"生效（用 defaultPos），下一次进页面 posVersion 已经是 1、
@@ -163,10 +164,8 @@ struct DraggableFloat<Content: View>: View {
         if topLocked {
             py = min(max(defaultPos.y, yLo), yHi)
         } else {
-            // v2.58 底锚定卡片（地点卡 / 行程卡 / 导航底卡）放开到 0.97：
-            // 旧的 0.93 上限会把"贴底"再往上拉 35pt，卡片离 home indicator 空出一截，
-            // 看着不像贴底。普通卡片仍保持 0.93，避免压住底部 tab。
-            let rawPy = min(bottomAnchor ? 0.97 : 0.93, max(0.10, savedY ?? defaultPos.y))
+            // v2.85 初始化钳制和拖动时一致：0~1，不再有 0.10~0.97 的限制
+            let rawPy = savedY ?? defaultPos.y
             py = min(max(rawPy, yLo), yHi)
         }
         _pos = State(initialValue: CGPoint(x: px, y: py))

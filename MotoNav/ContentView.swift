@@ -160,6 +160,11 @@ struct ContentView: View {
     @State private var showVoiceSettings = false
     /// v1.99 足迹 / 离线地图 / 组队 面板
     @State private var showFootprints = false
+    // v2.85 出发/到达时间选择
+    @State private var departureDate = Date()
+    @State private var arrivalDate = Date().addingTimeInterval(1800) // 默认30分钟后
+    @State private var showDeparturePicker = false
+    @State private var showArrivalPicker = false
     @State private var showTeamRide = false
     /// v1.99 搜索结果排序（0 距离 / 1 名称）
     @State private var tipSort = 0
@@ -1797,11 +1802,7 @@ struct ContentView: View {
         }
         // v2.58 行程卡显示期间（导航已结束）任何返回动作都应退回首页：
         // 旧版这里缺分支，会落进下面的"退出规划"，只清了路线规划卡，
-        // 行程卡还挂在屏幕上 —— 点地图/滑返都没有"回到首页"的效果。
-        if model.tripSummary != nil {
-            dismissTripAndReset()
-            return true
-        }
+        // v2.85 导航结束时点击地图不清空路线，改为行程卡上的退出按钮
         // v2.56 同 onBlankTap：导航态不清路线（routeChoices 在导航中是有意保留的）
         if !model.routeChoices.isEmpty && !model.navigating {
             closeRoutePlan()
@@ -1854,7 +1855,10 @@ struct ContentView: View {
         tipAoiName = nil
         tipPolygon = nil
         searchFocused = false
-        withAnimation(.easeOut(duration: 0.2)) { uiHidden = true }
+        // v2.85 导航中不允许进入沉浸模式
+        if !model.navigating && !model.cruiseMode {
+            withAnimation(.easeOut(duration: 0.2)) { uiHidden = true }
+        }
     }
 
 
@@ -2304,21 +2308,19 @@ struct ContentView: View {
     /// v2.92 出发/到达时间选择行（高德图二样式）
     /// 显示当前预计的出发时间和到达时间，点击可调整出发时间。
     private var departureArrivalRow: some View {
-        let now = Date()
         let calendar = Calendar.current
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "今天 HH:mm"
 
         let durationMinutes = Int((model.routeChoices.first?.durationS ?? 0) / 60)
-        let arrivalDate = calendar.date(byAdding: .minute, value: durationMinutes, to: now) ?? now
 
         return HStack(spacing: 8) {
             Button {
-                // TODO: 弹出时间选择器
+                showDeparturePicker = true
             } label: {
                 HStack(spacing: 4) {
-                    Text(formatter.string(from: now))
+                    Text(formatter.string(from: departureDate))
                         .font(.subheadline)
                         .foregroundStyle(.blue)
                     Image(systemName: "chevron.down")
@@ -2330,13 +2332,31 @@ struct ContentView: View {
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             .buttonStyle(.plain)
+            .sheet(isPresented: $showDeparturePicker) {
+                NavigationStack {
+                    DatePicker("出发时间", selection: $departureDate, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.wheel)
+                        .onChange(of: departureDate) { _, newDate in
+                            // 出发时间变了，自动算到达时间
+                            arrivalDate = calendar.date(byAdding: .minute, value: durationMinutes, to: newDate) ?? newDate
+                        }
+                        .navigationTitle("选择出发时间")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("完成") { showDeparturePicker = false }
+                            }
+                        }
+                }
+                .presentationDetents([.height(300)])
+            }
 
             Image(systemName: "arrow.right")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Button {
-                // TODO: 弹出时间选择器
+                showArrivalPicker = true
             } label: {
                 HStack(spacing: 4) {
                     Text(formatter.string(from: arrivalDate))
@@ -2349,6 +2369,26 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showArrivalPicker) {
+                NavigationStack {
+                    DatePicker("到达时间", selection: $arrivalDate, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.wheel)
+                        .onChange(of: arrivalDate) { _, newDate in
+                            // 到达时间变了，自动算出发时间
+                            departureDate = calendar.date(byAdding: .minute, value: -durationMinutes, to: newDate) ?? newDate
+                        }
+                        .navigationTitle("选择到达时间")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("完成") { showArrivalPicker = false }
+                            }
+                        }
+                }
+                .presentationDetents([.height(300)])
+            }
             }
             .buttonStyle(.plain)
         }
@@ -2624,16 +2664,17 @@ struct ContentView: View {
             // 垂直居中交给 HStack 自身的 alignment: .center 来做。
             // v2.92 右侧按钮从竖排改成横排：交换在左、加号在右（和高德图一一致）
             HStack(spacing: 8) {
+                // v2.85 交换按钮改成高德同款：上下双向箭头 + 圆形
                 Button {
                     haptic()
                     model.swapOriginDest()
                 } label: {
-                    Image(systemName: "arrow.triangle.swap")
-                        .font(.body.bold())
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 32, height: 32)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .contentShape(Rectangle().inset(by: -6))
+                        .background(Color(.secondarySystemBackground), in: Circle())
+                        .contentShape(Circle().inset(by: -6))
                 }
                 .buttonStyle(.plain)
                 Button {
@@ -3498,7 +3539,8 @@ struct ContentView: View {
             // v2.93 速度表再上移 14pt：间隙从 6pt 改成 -8pt（与提示卡轻微重叠，更紧凑）
             // 位置：中心 = safeArea.top + 8 + 提示条高 - 8 + d/2
             .position(x: 12 + d / 2,
-                      y: geo.safeAreaInsets.top + 8 + navHintHeight - 8 + d / 2)
+                      // v2.85 速度表再上移 19pt（约 0.5 厘米，苹果17）
+                      y: geo.safeAreaInsets.top + 8 + navHintHeight - 8 + d / 2 - 19)
         }
         .allowsHitTesting(false)
     }
@@ -4309,24 +4351,43 @@ struct ContentView: View {
                 exitStatusCell(String(format: "%.1f", s.avgSpeedKmh), "平均时速")
             }
             .padding(.top, 2)
-            // v2.93 行程卡加"查看历史记录"入口
-            Button {
-                haptic()
-                showFootprints = true
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.caption)
-                    Text("查看历史记录")
-                        .font(.caption.bold())
+            HStack(spacing: 12) {
+                // v2.85 行程卡左下方加退出按钮
+                Button {
+                    haptic()
+                    dismissTripAndReset()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                        Text("退出")
+                            .font(.caption.bold())
+                    }
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.1), in: Capsule())
                 }
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1), in: Capsule())
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+                // v2.93 行程卡加"查看历史记录"入口
+                Button {
+                    haptic()
+                    showFootprints = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.caption)
+                        Text("查看历史记录")
+                            .font(.caption.bold())
+                    }
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.1), in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity)
         }
         .padding(14)
         .background(Color(.systemBackground).opacity(0.97), in: RoundedRectangle(cornerRadius: 18, style: .continuous))

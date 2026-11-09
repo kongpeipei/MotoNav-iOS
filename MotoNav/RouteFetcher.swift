@@ -162,7 +162,13 @@ enum RouteFetcher {
     ) async -> [RouteChoice] {
         var result: [RouteChoice] = []
         if !amapKey.isEmpty {
-            result = await fetchAmapDriving(from: start, to: end, key: amapKey, via: via)
+            // v2.85 优先用摩托车专属路径规划
+            let motoResult = await fetchAmapMotorcycle(from: start, to: end, key: amapKey)
+            if !motoResult.isEmpty {
+                result = motoResult
+            } else {
+                result = await fetchAmapDriving(from: start, to: end, key: amapKey, via: via)
+            }
         }
         // 高德不可用（无 Key / 配额用尽 / 网络异常）时兜底 OSRM
         if result.isEmpty {
@@ -385,6 +391,29 @@ enum RouteFetcher {
                 .distance(from: CLLocation(latitude: q.latitude, longitude: q.longitude))
         }
         return sum / Double(n) < 70
+    }
+
+    /// v2.85 高德摩托车专属路径规划
+    private static func fetchAmapMotorcycle(
+        from start: CLLocationCoordinate2D,
+        to end: CLLocationCoordinate2D,
+        key: String
+    ) async -> [RouteChoice] {
+        let (glat1, glon1) = CoordConv.wgs2gcj(start.latitude, start.longitude)
+        let (glat2, glon2) = CoordConv.wgs2gcj(end.latitude, end.longitude)
+        let origin = String(format: "%.6f,%.6f", glon1, glat1)
+        let destination = String(format: "%.6f,%.6f", glon2, glat2)
+        // 高德 v4 摩托车路径规划
+        let urlStr = "https://restapi.amap.com/v4/direction/motorcycle?key=\(key)&origin=\(origin)&destination=\(destination)&extension=all&strategy=0"
+        guard let url = URL(string: urlStr) else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = obj["data"] as? [String: Any],
+              let route = dataObj["route"] as? [String: Any],
+              let paths = route["paths"] as? [[String: Any]] else { return [] }
+        return paths.compactMap { parseAmapPath($0, label: "推荐") }
     }
 
     /// 单个 strategy 请求（返回该策略下所有候选 path）
