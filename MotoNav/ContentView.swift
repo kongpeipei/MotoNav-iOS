@@ -1294,6 +1294,14 @@ struct ContentView: View {
             .onTapGesture { handleVersionTap() }
             // v2.26 按要求删除「关于」分区底部的高德搜索 Key 选项
             // （Key 的设置入口保留在上面的「搜索设置」分区里，不再在页尾重复出现）
+            
+            // v2.88 测试导航按钮
+            Button {
+                model.startTestNavigation()
+            } label: {
+                Label("测试导航", systemImage: "ladybug")
+                    .foregroundStyle(.blue)
+            }
         }
     }
 
