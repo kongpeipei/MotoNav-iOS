@@ -455,6 +455,23 @@ struct ContentView: View {
             }
         }
         // v2.23 全局边缘滑动返回：手指从屏幕左/右边缘往中间滑 → 返回上一级
+        // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
+        if !model.navigating && !model.cruiseMode {
+            Button(action: {
+                model.cruiseMode = true
+                haptic()
+            }) {
+                Text("巡航")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.white)
+                    .cornerRadius(20)
+                    .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+            }
+            .position(x: UIScreen.main.bounds.width - 50, y: 80)
+        }
         // 放在最外层 ZStack 上（覆盖地图），用 simultaneousGesture 避免抢地图自身手势；
         // 地图区域内的横向拖动（平移）依然可用 —— 只有起手点在边缘 40pt 内才触发。
         .simultaneousGesture(

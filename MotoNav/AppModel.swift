@@ -82,6 +82,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
     @Published var cruiseMode = false
+    /// v2.86 首页无操作时间（10秒无操作自动进入巡航模式）
+    @Published var lastUserActionTime = Date()
     @Published var cruiseTick = 0
     private var cruiseBase: CLLocationCoordinate2D?
     /// v1.90 省电模式（电量≤20% 或系统低电量模式自动开启：降定位频率）
@@ -1553,7 +1555,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 巡航模式（v1.84）
 
-    /// 非导航状态下自动检测：定位点累计移动 ≥300 米进入巡航模式（地图缩放合理位置 + 定位点跟随）
+    /// 非导航状态下自动检测：首页无操作 ≥10 秒进入巡航模式（地图缩放合理位置 + 定位点跟随）
     func updateCruise(at coord: CLLocationCoordinate2D) {
         guard !navigating else {
             if cruiseMode { exitCruise() }
@@ -1561,14 +1563,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         if cruiseAutoBlocked {
             cruiseBase = nil
-        } else if let base = cruiseBase {
-            if !cruiseMode && distanceM(coord, base) >= 300 {
-                cruiseMode = true
-                cruiseTick += 1
-                cruiseBase = nil
-            }
-        } else {
-            cruiseBase = coord
+        } else if !cruiseMode && Date().timeIntervalSince(lastUserActionTime) >= 10 {
+            // 首页无操作10秒自动进入巡航模式
+            cruiseMode = true
+            cruiseTick += 1
+            cruiseBase = nil
         }
         if cruiseMode {
             cruiseTick += 1 // 驱动地图跟随定位点（MapView 内做 GPS 抖动节流）
