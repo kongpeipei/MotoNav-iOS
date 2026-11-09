@@ -82,12 +82,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
     @Published var cruiseMode = false
-    /// v2.87 巡航累计距离（米）
-    @Published var cruiseDistanceM: Double = 0
-    /// v2.87 巡航开始时间
-    @Published var cruiseStartTime = Date()
-    /// v2.87 巡航上一次位置（用于累计距离）
-    private var lastCruiseLocation: CLLocationCoordinate2D?
     /// v2.86 首页无操作时间（10秒无操作自动进入巡航模式）
     @Published var lastUserActionTime = Date()
     @Published var cruiseTick = 0
@@ -125,6 +119,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 明日天气（最高/最低）
     @Published var tomorrowText: String?
     /// 搜索预览点（绿色高亮，等待"去这里"）
+    @Published var searchPreview: CLLocationCoordinate2D?
+    @Published var searchPreviewName = ""
     /// v2.86 搜索结果标注（地图上显示所有搜索结果）
     @Published var searchResultAnnotations: [SearchResultAnnotation] = []
     /// 市区加油站坐标
@@ -150,7 +146,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let sub: String
         let lat: Double
         let lon: Double
-        var distanceM: Double = 0  // v2.87 距离（米）
         var id: String { "\(name)#\(lat)#\(lon)" }
     }
 
@@ -406,14 +401,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navScaleTick = 0
     /// v2.22 已行驶折线点索引（用于"走过的路变灰"）
     @Published var traveledIdx = 0
-    /// v2.87 到达前提醒：是否已经播报过"即将到达终点"
-    private var arrivalReminded = false
-    /// v2.87 路口自动缩放：下一个路口的索引（在 route 数组里）
-    private var nextJunctionIdx = -1
-    /// v2.87 路口自动缩放：当前是否已经拉近视野
-    private var junctionZoomedIn = false
-    /// v2.87 上次搜索加油站的时间
-    private var lastGasSearchTime = Date.distantPast
     /// v2.22 顶部路线提示（高德式："请先去往出口" / "前方xx米路口直行"）
     @Published var navTopHint = ""
     @Published var navTopHintIcon = "straight.up"
@@ -774,11 +761,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let dist = p["distance"] as? String ?? ""
                 var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
                 if !dist.isEmpty { sub += " · 距此\(Int(Double(dist) ?? 0))米" }
-                let dm = Double(dist) ?? 0
-                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon, distanceM: dm))
+                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
             }
-            // v2.87 按距离排序，最近的排前面
-            out.sort { $0.distanceM < $1.distanceM }
             return out
         } catch {
             return []
@@ -1079,6 +1063,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     func onlineSearch(_ name: String) {
         // 本地地标词典优先（离线可用，网络不可达也能定位）
         if let lm = matchLandmark(name) {
+            setPreview(lm.name, lat: lm.lat, lon: lm.lon)
             status = "已定位「\(lm.name)」（坐标为估算，可长按点位拖动校准），点「去这里」规划路线"
             return
         }
@@ -1107,6 +1092,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 }
             }
             if let c = found {
+                setPreview(foundName, lat: c.latitude, lon: c.longitude)
                 status = "已定位到「\(foundName)」（坐标为估算，请实地校准），点「去这里」规划路线"
             } else {
                 status = "「\(name)」暂未收录，请从微信/高德复制位置（或 纬度,经度）粘贴到搜索框"
@@ -1145,6 +1131,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
         guard lat != 0, lon != 0 else { return }
+        setPreview(name, lat: lat, lon: lon)
         status = "已从链接定位到「\(name)」，点「去这里」规划路线"
     }
 
@@ -1153,6 +1140,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard let s = UIPasteboard.general.string,
               let c = parseExternalLocation(s) else { return }
         let name = s.components(separatedBy: "\n").first.map { String($0.prefix(24)) } ?? "剪贴板位置"
+        setPreview(name, lat: c.latitude, lon: c.longitude)
         status = "检测到剪贴板位置「\(name)」，点「去这里」规划路线"
     }
 
@@ -1421,6 +1409,18 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
+    // MARK: - 搜索预览（绿色高亮 + 去这里）
+
+    func setPreview(_ name: String, lat: Double, lon: Double) {
+        searchPreviewName = name
+        searchPreview = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    func clearPreview() {
+        searchPreview = nil
+        searchPreviewName = ""
+    }
+
     // MARK: - 权限与定位
 
     @objc func authorizeAndStart() {
@@ -1555,7 +1555,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 巡航模式（v1.84）
 
-    /// 非导航状态下自动检测：位移超过50米进入巡航模式（平时不动只有点击按钮才触发）
+    /// 非导航状态下自动检测：首页无操作 ≥10 秒进入巡航模式（地图缩放合理位置 + 定位点跟随）
     func updateCruise(at coord: CLLocationCoordinate2D) {
         guard !navigating else {
             if cruiseMode { exitCruise() }
@@ -1563,25 +1563,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         if cruiseAutoBlocked {
             cruiseBase = nil
-        } else if !cruiseMode {
-            // v2.87 巡航触发从时间改成位移：移动超过50米自动进入巡航
-            if cruiseBase == nil {
-                cruiseBase = coord  // 记录初始位置
-            } else if let base = cruiseBase, distanceM(coord, base) >= 50 {
-                // 位移超过50米，自动进入巡航
-                cruiseMode = true
-                cruiseDistanceM = 0
-                cruiseStartTime = Date()
-                cruiseTick += 1
-                cruiseBase = nil
-            }
+        } else if !cruiseMode && Date().timeIntervalSince(lastUserActionTime) >= 10 {
+            // 首页无操作10秒自动进入巡航模式
+            cruiseMode = true
+            cruiseTick += 1
+            cruiseBase = nil
         }
         if cruiseMode {
-            // v2.87 累计巡航距离
-            if let last = lastCruiseLocation {
-                cruiseDistanceM += distanceM(last, coord)
-            }
-            lastCruiseLocation = coord
             cruiseTick += 1 // 驱动地图跟随定位点（MapView 内做 GPS 抖动节流）
         }
     }
@@ -2776,7 +2764,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             pitchDeg = 0          // v2.01 退出导航回 2D 平视
             navigateFollowTick += 1
             navUserMoved = false
-            arrivalReminded = false  // v2.87 重置到达提醒标记
             // v2.34 退出导航保留路线推荐卡（高德式：回到路线预览页，起终点/换路线仍可操作）；
             // 轻点卡片外任意处或左滑仍可关闭回首页（closeRoutePlan）
             selectedRouteIdx = 0
@@ -2939,9 +2926,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             let d = distToSegment(coord, route[i], route[i + 1])
             if d < minD { minD = d }
         }
-        // v2.87 偏航重算：定位点不在路线上就自动重算（阈值20米，连续1次）
-        offRouteCount = (minD > 20) ? offRouteCount + 1 : 0
-        guard offRouteCount >= 1, Date().timeIntervalSince(lastReroute) > 25 else { return }
+        offRouteCount = (minD > 80) ? offRouteCount + 1 : 0
+        guard offRouteCount >= 3, Date().timeIntervalSince(lastReroute) > 25 else { return }
         offRouteCount = 0
         lastReroute = Date()
         guard let start = currentLocation else { return }
@@ -3470,17 +3456,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v2.27（优化建议 #10）：远提示改用 GuidanceEvent 的距离分级，
             // 与顶部提示卡共用同一套取整规则 —— 以前这里报"前方 137 米"、
             // 卡片显示"前方 140 米"，同一件事两个数字。现在两者完全一致。
-            // v2.87 调整播报阈值，提前播报（原来900/100/50太小）
-            if speechMode.farPrompt && best < 500 && !farAnnounced.contains(idx) {
-                // 远提示：500米就报
+            if speechMode.farPrompt && best < 900 && !farAnnounced.contains(idx) {
                 farAnnounced.insert(idx)
                 let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
+                // 用事件里的分级距离（>300 米不报米数）
                 let d = GuidanceEventBuilder.formatDistance(Int(best))
                 let speakText = d.map { "前方\($0)\(text)\(road)" } ?? "前方\(text)\(road)"
                 speak(speakText)
                 status = "导航：\(speakText) · 余\(Int(toDest / 1000))公里"
-            } else if best < 200 {
-                // 近提示：200米确认
+            } else if best < 100 {
+                // v2.93 转向播报加中间档：100米确认
                 lastTurnSpoken = idx
                 if speechMode.verbose {
                     let tail = toDest > 1000 ? "，剩余\(Int(toDest / 1000))公里" : ""
@@ -3489,8 +3474,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     speak("\(text)，距您\(Int(best))米")
                 }
                 status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
-            } else if best < 100 && !closeAnnounced.contains(idx) {
-                // 执行提醒：100米执行
+            } else if best < 50 && !closeAnnounced.contains(idx) {
+                // v2.93 转向播报加执行档：50米执行提醒
                 closeAnnounced.insert(idx)
                 speak(text)
                 status = "导航：\(text)"
@@ -3597,69 +3582,12 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         // 已走过的路变灰：折线最近点索引
         let idx = nearestRouteIndex(route, loc)
         if idx != traveledIdx { traveledIdx = idx }
-        // v2.87 到达前提醒：剩余距离<=500米时播报一次"即将到达终点"
-        if navigating, let remainM = navStatusCache?.remainM, remainM <= 500, !arrivalReminded {
-            arrivalReminded = true
-            speak("即将到达终点")
-        }
         // v2.54 路程进度条：从 remainM 反推已走比例。
         // 阈值 0.2% 防抖 —— 每 0.2% 才发布一次，避免定位帧率驱动的整树重算。
         let total = max(1, routeDistanceM > 0 ? routeDistanceM
                         : (route.count >= 2 ? Int(distanceM(route.first!, route.last!)) : 1))
         let p = max(0.0, min(1.0, 1.0 - Double(navStatusCache?.remainM ?? total) / Double(total)))
         if abs(p - navProgress) > 0.002 { navProgress = p }
-
-        // v2.87 导航中自动搜索前方加油站（每隔30秒一次）
-        if navigating, Date().timeIntervalSince(lastGasSearchTime) > 30,
-           let loc = currentLocation {
-            lastGasSearchTime = Date()
-            Task {
-                let tips = await amapKeywordSearch("加油站", lat: loc.latitude, lon: loc.longitude, radius: 5000)
-                DispatchQueue.main.async {
-                    self.gasStations = tips.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
-                }
-            }
-        }
-        // v2.87 路口自动缩放：接近路口时拉近视野，通过路口后拉远
-        if navigating, route.count > 10, !navUserMoved {
-            // 从当前位置往后找下一个转弯点（路口）
-            let lookAhead = min(route.count - 1, traveledIdx + 50)
-            var nextTurnIdx = -1
-            for i in (traveledIdx + 5)..<lookAhead {
-                // 计算相邻两段的夹角
-                let a = route[i-1], b = route[i], c = route[i+1]
-                let angle1 = atan2(b.latitude - a.latitude, b.longitude - a.longitude)
-                let angle2 = atan2(c.latitude - b.latitude, c.longitude - b.longitude)
-                var diff = abs(angle2 - angle1) * 180 / .pi
-                if diff > 180 { diff = 360 - diff }
-                if diff > 45 {  // v2.87 转弯角度 >45度才算路口（30度太小）
-                    nextTurnIdx = i
-                    break
-                }
-            }
-            if nextTurnIdx > 0 {
-                // 计算到下一个路口的距离
-                let distToJunction = distanceM(route[traveledIdx], route[nextTurnIdx])
-                // 接近路口（<300m）→ 拉近视野
-                if distToJunction < 300, !junctionZoomedIn {
-                    junctionZoomedIn = true
-                    // 拉近一档：navScaleSteps 里往小的方向走一格
-                    if let idx = Self.navScaleSteps.firstIndex(of: navScaleTarget), idx > 0 {
-                        navScaleTarget = Self.navScaleSteps[idx - 1]
-                        navScaleTick += 1
-                    }
-                }
-                // 通过路口后 → 拉远视野
-                if nextTurnIdx < traveledIdx + 10, junctionZoomedIn {
-                    junctionZoomedIn = false
-                    // 拉远一档：navScaleSteps 里往大的方向走一格
-                    if let idx = Self.navScaleSteps.firstIndex(of: navScaleTarget), idx < Self.navScaleSteps.count - 1 {
-                        navScaleTarget = Self.navScaleSteps[idx + 1]
-                        navScaleTick += 1
-                    }
-                }
-            }
-        }
     }
 
     /// v2.22 最近折线点索引（走过的路变灰用；带缓存，增量搜索）

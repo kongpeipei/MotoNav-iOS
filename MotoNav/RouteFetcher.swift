@@ -404,8 +404,7 @@ enum RouteFetcher {
         let origin = String(format: "%.6f,%.6f", glon1, glat1)
         let destination = String(format: "%.6f,%.6f", glon2, glat2)
         // 高德 v4 摩托车路径规划
-        // v2.87 试试加 show_fields=cameras 看返不返回电子眼数据
-        let urlStr = "https://restapi.amap.com/v4/direction/motorcycle?key=\(key)&origin=\(origin)&destination=\(destination)&extension=all&strategy=0&show_fields=cost,navi,polyline,cameras"
+        let urlStr = "https://restapi.amap.com/v4/direction/motorcycle?key=\(key)&origin=\(origin)&destination=\(destination)&extension=all&strategy=0"
         guard let url = URL(string: urlStr) else { return [] }
         var req = URLRequest(url: url)
         req.timeoutInterval = 12

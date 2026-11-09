@@ -203,10 +203,8 @@ struct ContentView: View {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
                 AnyView(mapLayer)
-                // v2.87 巡航按钮只和搜索框卡片同时出现，搜索框不出现，巡航按钮不出现
-                if !searchActive && tapPlace == nil && tipCard == nil && model.routeChoices.isEmpty && model.tripSummary == nil {
-                    CruiseButton(model: model)
-                }
+                // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
+                CruiseButton(model: model)
                 // v2.78 左上角品牌水印（"机车地图"）。
                 // 放在地图层正上方、其余浮层之下：卡片和提示条照常盖住它，
                 // 不会在导航态顶部条里插一行字；搜索整屏态直接不显示（那块被白色页面盖住）。
@@ -435,6 +433,14 @@ struct ContentView: View {
         }
         // v1.81.4：行程总结改为底部行程卡（结束导航后显示，非弹窗）
         // 预览点变化（含在线搜索兜底）→ 同步"导航去此处"按钮
+        .onChange(of: model.searchPreview) { p in
+            if let p = p {
+                goHereLabel = "导航去此处"
+                goHereName = model.searchPreviewName
+                goHereLat = p.latitude
+                goHereLon = p.longitude
+            }
+        }
         // v2.12 外观三段式：自动跟随系统 / 强制浅色 / 强制深色
         // 放在根视图上，sheet、设置页、地图底图（MapView 读同一个 colorScheme）一起生效
         .preferredColorScheme((AppearanceMode(rawValue: appearanceMode) ?? .auto).colorScheme)
@@ -585,13 +591,13 @@ struct ContentView: View {
             fitTick: model.fitTick,
             viewportInsets: mapViewportInsets,
             heading: model.heading,
+            preview: model.searchPreview,
             gasStations: model.gasStations,
             gasTick: model.gasTick,
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
             categoryTick: model.categoryTick,
             searchResultAnnotations: model.searchResultAnnotations,
-            gasStations: model.gasStations,
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
             overviewTick: model.overviewTick,
@@ -1443,6 +1449,7 @@ struct ContentView: View {
         tapPlace = nil
         tipCard = nil
         closeRoutePlan()
+        model.clearPreview()
         onlineTips = []
         let cur = model.commonPlace(for: slot)
         searchText = cur.map { displayName($0.name) } ?? ""
@@ -1749,6 +1756,7 @@ struct ContentView: View {
     private func showTapPlace(_ coord: CLLocationCoordinate2D, seed known: String? = nil) {
         haptic()
         searchFocused = false      // 收起键盘，避免挡住地点卡
+        model.clearPreview()       // 清掉搜索预览点，只留当前这张卡的选点
         let lat = coord.latitude
         let lon = coord.longitude
         let seed = (known?.isEmpty == false ? known! : placeNameNear(coord))
@@ -2011,7 +2019,8 @@ struct ContentView: View {
                     let lat = p.lat
                     let lon = p.lon
                     closeTapPlace()
-                                model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: false)
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: name, lat: lat, lon: lon, autoStart: false)
                 } label: {
                     Text("路线")
                         .font(.subheadline.bold())
@@ -2028,7 +2037,8 @@ struct ContentView: View {
                     let lat = p.lat
                     let lon = p.lon
                     closeTapPlace()
-                                // v2.23 直接进导航，不经过路线规划界面
+                    model.clearPreview()
+                    // v2.23 直接进导航，不经过路线规划界面
                     model.navigateDirect(to: name, lat: lat, lon: lon)
                 } label: {
                     HStack(spacing: 6) {
@@ -2849,11 +2859,7 @@ struct ContentView: View {
                         ForEach(model.serviceTips.prefix(6)) { tip in
                             Button {
                                 haptic()
-                                // v2.87 点搜索结果直接设为目的地，进入路线规划
-                                model.destLat = tip.lat
-                                model.destLon = tip.lon
-                                model.destName = tip.name
-                                model.tipCard = true
+                                model.addWaypoint(name: tip.name, lat: tip.lat, lon: tip.lon)
                                 model.clearServices()
                             } label: {
                                 HStack(spacing: 6) {
@@ -2867,10 +2873,6 @@ struct ContentView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     Spacer()
-                                    // v2.87 显示距离
-                                    Text(tip.distanceM < 1000 ? "\(Int(tip.distanceM))米" : String(format: "%.1f公里", tip.distanceM / 1000))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
                                 }
                                 .padding(.vertical, 5)
                                 .contentShape(Rectangle())
@@ -3311,7 +3313,7 @@ struct ContentView: View {
     }
 
     private var cruiseCard: some View {
-        // v2.87 巡航模式：左边圆形速度表，右边小静音开关
+        // v2.86 巡航模式：左边圆形速度表（导航态同款），右边圆形搜索按钮
         let d: CGFloat = 102
         let speed = Int((model.currentSpeed * 3.6).rounded())
         return HStack(spacing: 20) {
@@ -3333,21 +3335,27 @@ struct ContentView: View {
             }
             .frame(width: d, height: d)
             Spacer()
-            // 右边：小静音开关（不要太大）
+            // 右边：圆形搜索按钮（大小同速度表）
             Button {
                 haptic()
-                model.voiceOn.toggle()
+                model.exitCruise()
+                if !model.routeChoices.isEmpty { closeRoutePlan() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    searchFocused = true
+                    searchExpanded = false
+                    uiHidden = false
+                }
             } label: {
                 ZStack {
                     Circle()
                         .fill(Color.white.opacity(0.95))
                         .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1))
                         .shadow(color: .black.opacity(0.20), radius: 5, y: 2)
-                    Image(systemName: model.voiceOn ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                        .font(.system(size: 20, weight: .bold))
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 32, weight: .bold))
                         .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
                 }
-                .frame(width: 50, height: 50)
+                .frame(width: d, height: d)
             }
             .buttonStyle(.plain)
         }
@@ -3358,58 +3366,6 @@ struct ContentView: View {
 
 
     @ViewBuilder private var bottomLayerGroup: some View {
-        // v2.87 巡航模式底部白卡：已巡航 xx米 xx分钟 + 搜索按钮
-        if model.cruiseMode {
-            HStack(spacing: 16) {
-                // 左边：退出按钮
-                Button {
-                    haptic()
-                    model.exitCruise()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                // 中间：巡航信息（已巡航 xx米 xx分钟）
-                let dist = Int(model.cruiseDistanceM)
-                let time = Int(Date().timeIntervalSince(model.cruiseStartTime))
-                let distStr = dist < 1000 ? "\(dist)米" : String(format: "%.1f公里", Double(dist)/1000.0)
-                let timeStr = time < 60 ? "\(time)秒" : "\(time/60)分钟"
-                HStack(spacing: 8) {
-                    Text("已巡航")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(.black.opacity(0.8))
-                    Text("\(distStr) \(timeStr)")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.black.opacity(0.5))
-                }
-                Spacer()
-                // 右边：搜索按钮
-                Button {
-                    haptic()
-                    model.exitCruise()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        searchFocused = true
-                        searchExpanded = false
-                        uiHidden = false
-                    }
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
-            .background(Color.white.opacity(0.95))
-            .cornerRadius(28)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 34)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .zIndex(10)
-        }
         // v2.23 候选途经点对比卡（点 ➕ 选点后出现，右侧「添加」确认）
         if !model.navigating && model.waypointCandidate != nil {
             AnyView(waypointCandidateCard)
@@ -4583,6 +4539,7 @@ struct ContentView: View {
         tipRoad = nil
         tipAoiName = nil
         tipPolygon = nil
+        model.clearPreview()
         searchExpanded = true
         showSuggestions = true
         searchLoading = true   // v2.51 占位行显示"正在搜索…"
@@ -4690,7 +4647,8 @@ struct ContentView: View {
                     tipRoad = nil
                     tipAoiName = nil
                     tipPolygon = nil
-                                // v2.23 直接进导航，不经过路线规划界面
+                    model.clearPreview()
+                    // v2.23 直接进导航，不经过路线规划界面
                     model.navigateDirect(to: t.name, lat: t.lat, lon: t.lon)
                 } label: {
                     Text("导航")
@@ -4707,7 +4665,8 @@ struct ContentView: View {
                     tipRoad = nil
                     tipAoiName = nil
                     tipPolygon = nil
-                                model.fetchRouteChoices(to: t.name, lat: t.lat, lon: t.lon)
+                    model.clearPreview()
+                    model.fetchRouteChoices(to: t.name, lat: t.lat, lon: t.lon)
                 } label: {
                     Text("路线")
                         .font(.subheadline.bold())
@@ -5444,6 +5403,7 @@ struct ContentView: View {
         if parts.count == 2, let lat = Double(parts[0]), let lon = Double(parts[1]),
            (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
             model.addHistory("坐标目的地 \(lat),\(lon)")
+            model.setPreview("坐标目的地 \(lat),\(lon)", lat: lat, lon: lon)
             goHereLabel = "去这里：坐标目的地"
             goHereName = "坐标目的地"
             goHereLat = lat; goHereLon = lon
@@ -5455,6 +5415,7 @@ struct ContentView: View {
             showSuggestions = false
             dismissKeyboard()
             model.addHistory(lm.name)
+            model.setPreview(lm.name, lat: lm.lat, lon: lm.lon)
             goHereLabel = "去这里：\(displayName(lm.name))"
             goHereName = lm.name
             goHereLat = lm.lat; goHereLon = lm.lon
@@ -5466,7 +5427,8 @@ struct ContentView: View {
             model.status = "正在查询「\(q)」位置…"
             Task {
                 if let c = await model.findHefeiCoordinate(q, fuzzy: false) {
-                            goHereLabel = "去这里：\(displayName(q))"
+                    model.setPreview(q, lat: c.latitude, lon: c.longitude)
+                    goHereLabel = "去这里：\(displayName(q))"
                     goHereName = q
                     goHereLat = c.latitude; goHereLon = c.longitude
                     model.status = "已定位到「\(q)」，点「去这里」规划路线"
