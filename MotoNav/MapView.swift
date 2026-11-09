@@ -644,24 +644,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(a)
             }
         }
-        // v2.87 加油站标注更新
-        var gasHasher = Hasher()
-        gasHasher.combine(gasStations.count)
-        for c in gasStations { gasHasher.combine(c.latitude); gasHasher.combine(c.longitude) }
-        let gasKey = gasHasher.finalize()
-        if gasKey != context.coordinator.lastGasKey {
-            context.coordinator.lastGasKey = gasKey
-            // 先删掉旧的加油站标注
-            for a in map.annotations {
-                if a is GasAnnotation { map.removeAnnotation(a) }
-            }
-            // 再加新的
-            for c in gasStations {
-                let id = "\(c.latitude),\(c.longitude)"
-                let anno = GasAnnotation(id: id, coordinate: c)
-                map.addAnnotation(anno)
-            }
-        }
         // v2.02 折线只在"真的变了"时重建
         // 旧实现每次 updateUIView 都 removeOverlays + 重建全部 MKPolyline，而 updateUIView 每秒
         // 会被定位/状态更新触发多次（一次导航卡刷新就可能几十次）→ 折线反复消失重现（雪花闪烁）
