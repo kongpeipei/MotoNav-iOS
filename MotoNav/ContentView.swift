@@ -1793,6 +1793,11 @@ struct ContentView: View {
             closeTapPlace()
             return true
         }
+        // v2.85 地点卡显示时，点击地图只隐藏地点卡，不清除路线
+        if tapPlace != nil {
+            tapPlace = nil
+            return true
+        }
         if tipCard != nil {
             tipCard = nil
             tipRoad = nil
@@ -1800,9 +1805,11 @@ struct ContentView: View {
             tipPolygon = nil
             return true
         }
-        // v2.58 行程卡显示期间（导航已结束）任何返回动作都应退回首页：
-        // 旧版这里缺分支，会落进下面的"退出规划"，只清了路线规划卡，
-        // v2.85 导航结束时点击地图不清空路线，改为行程卡上的退出按钮
+        // v2.85 导航结束后（行程卡显示），点击地图不做任何操作，
+        // 只有行程卡上的退出按钮可以回到首页
+        if model.tripSummary != nil {
+            return true
+        }
         // v2.56 同 onBlankTap：导航态不清路线（routeChoices 在导航中是有意保留的）
         if !model.routeChoices.isEmpty && !model.navigating {
             closeRoutePlan()
@@ -2557,6 +2564,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 7) {
+                // v2.85 起终点输入框用浅灰色细线描画
                 // 出发点（绿点）
                 HStack(spacing: 7) {
                     Circle().fill(Color.green).frame(width: 9, height: 9)
@@ -2565,6 +2573,10 @@ struct ContentView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color(.secondarySystemBackground).opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5))
                 // 途经 1、2、3…（橙点 + 序号徽标 + 点击定位 + x 删除）
                 ForEach(Array(model.waypoints.enumerated()), id: \.element.id) { i, wp in
                     HStack(spacing: 7) {
@@ -2587,36 +2599,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 4)
-                        // v2.27 优化建议 #15：上移/下移调序
-                        // （iOS 上长按拖动排序成本高且易与卡片拖动手势冲突，按钮更稳）
-                        Button {
-                            haptic()
-                            model.moveWaypoint(wp, offset: -1)
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.caption.bold())
-                                .foregroundStyle(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        Button {
-                            haptic()
-                            model.moveWaypoint(wp, offset: 1)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.caption.bold())
-                                .foregroundStyle(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        // 点击途经点 → 地图定位到该点
-                        Button {
-                            haptic()
-                            model.focusWaypoint(wp)
-                        } label: {
-                            Image(systemName: "scope")
-                                .font(.footnote)
-                                .foregroundStyle(.blue)
-                        }
-                        .buttonStyle(.plain)
+                        // v2.85 删除上移/下移箭头和定位按钮，改为拖动排序
                         Button {
                             haptic()
                             model.removeWaypoint(wp)
@@ -3480,8 +3463,8 @@ struct ContentView: View {
                 // v2.63 规划态也显示缩放组：旧条件只认"没地点卡、没提示卡"，
                 // 而选中地点进入规划后 tapPlace 仍在，整组 +/−/3D 被一起隐藏 ——
                 // 用户 v2.58 截图里"起终点卡与缩放组同时不见"就是这条。
-                // v2.93 导航结束时（行程卡显示）不显示右侧缩放按钮
-                if ((tapPlace == nil && tipCard == nil) || !model.routeChoices.isEmpty) && model.tripSummary == nil {
+                // v2.85 规划界面不显示右侧四个按钮（+ / − / 定位 / 3D）
+                if model.navigating && model.tripSummary == nil {
                     // v2.54 底部卡片避让：规划态下卡约 250pt、行程卡约 215pt，
                     // 否则右侧 +/−/3D 会被卡片压住半个（看着在、点不到）
                     // v2.55 避让量改成"卡片实测屏幕框"推导。

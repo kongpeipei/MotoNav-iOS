@@ -398,7 +398,7 @@ struct DraggableFloat<Content: View>: View {
                 let yLo = minPosY ?? 0.0
                 let yHi = maxPosY ?? 1.0
                 let rawY = topLocked ? defaultPos0.y
-                       : min(0.93, max(0.10, ry ?? defaultPos0.y))
+                       : min(1.0, max(0.0, ry ?? defaultPos0.y))
                 pos = CGPoint(
                     x: min(0.96, max(0.04, rx ?? defaultPos0.x)),
                     y: min(max(rawY, yLo), yHi))
