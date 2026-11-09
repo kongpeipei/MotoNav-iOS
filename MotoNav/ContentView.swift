@@ -4157,10 +4157,15 @@ struct ContentView: View {
                     // 红绿灯数量（如果有）
                     if let lights = model.routeChoices.first?.trafficLights, lights > 0 {
                         HStack(spacing: 3) {
-                            Image(systemName: "trafficlight")
-                                .font(.caption2)
                             Text("\(lights)")
                                 .font(.system(size: 15, weight: .semibold))
+                            // v2.94 自定义红绿灯小图标（三个小圆点：红黄绿），
+                            // 不依赖系统 SF Symbols（trafficlight 在部分 iOS 版本无字形）
+                            VStack(spacing: 1.5) {
+                                Circle().fill(.red).frame(width: 4, height: 4)
+                                Circle().fill(.yellow).frame(width: 4, height: 4)
+                                Circle().fill(.green).frame(width: 4, height: 4)
+                            }
                         }
                         .foregroundStyle(dimFg)
                     }
