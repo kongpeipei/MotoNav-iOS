@@ -1614,7 +1614,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         let diff = abs(target - heading)
         let delta = min(diff, 360 - diff)
-        guard delta >= (fast ? 5 : 4) else { return }
+        // GPS方向抖动大，死区5°；罗盘死区4°
+        guard delta >= (moving ? 5 : 4) else { return }
         heading = target
     }
 
