@@ -86,6 +86,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var cruiseDistanceM: Double = 0
     /// v2.87 巡航开始时间
     @Published var cruiseStartTime = Date()
+    /// v2.87 巡航上一次位置（用于累计距离）
+    private var lastCruiseLocation: CLLocationCoordinate2D?
     /// v2.86 首页无操作时间（10秒无操作自动进入巡航模式）
     @Published var lastUserActionTime = Date()
     @Published var cruiseTick = 0
@@ -1578,9 +1580,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         if cruiseMode {
             // v2.87 累计巡航距离
-            if let last = lastLocation {
+            if let last = lastCruiseLocation {
                 cruiseDistanceM += distanceM(last, coord)
             }
+            lastCruiseLocation = coord
             cruiseTick += 1 // 驱动地图跟随定位点（MapView 内做 GPS 抖动节流）
         }
     }

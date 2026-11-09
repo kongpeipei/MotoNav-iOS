@@ -1914,6 +1914,32 @@ struct MapViewRepresentable: UIViewRepresentable {
             return MKOverlayRenderer(overlay: overlay)
         }
     }
+
+    /// v2.87 生成车道箭头图标（白色实心小箭头）
+    static func makeLaneArrow() -> UIImage {
+        let size: CGFloat = 24
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { ctx in
+            let c = ctx.cgContext
+            let cx = size / 2
+            let arrow = UIBezierPath()
+            arrow.move(to: CGPoint(x: cx, y: 2))
+            arrow.addLine(to: CGPoint(x: cx - 7, y: 16))
+            arrow.addLine(to: CGPoint(x: cx - 2, y: 16))
+            arrow.addLine(to: CGPoint(x: cx - 2, y: 22))
+            arrow.addLine(to: CGPoint(x: cx + 2, y: 22))
+            arrow.addLine(to: CGPoint(x: cx + 2, y: 16))
+            arrow.addLine(to: CGPoint(x: cx + 7, y: 16))
+            arrow.close()
+            c.setFillColor(UIColor.white.cgColor)
+            c.addPath(arrow.cgPath)
+            c.fillPath()
+            c.setLineWidth(1)
+            c.setStrokeColor(UIColor.black.cgColor)
+            c.addPath(arrow.cgPath)
+            c.strokePath()
+        }
+    }
 }
 
 /// v1.99 组队队友标注（地图上的"骑手点"）
@@ -2218,35 +2244,6 @@ final class LaneArrowAnnotation: NSObject, MKAnnotation {
         super.init()
     }
 }
-
-    /// v2.87 生成车道箭头图标（白色实心小箭头）
-    static func makeLaneArrow() -> UIImage {
-        let size: CGFloat = 24
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
-        return renderer.image { ctx in
-            let c = ctx.cgContext
-            let cx = size / 2
-            // 小白色箭头：尖端朝上
-            let arrow = UIBezierPath()
-            arrow.move(to: CGPoint(x: cx, y: 2))
-            arrow.addLine(to: CGPoint(x: cx - 7, y: 16))
-            arrow.addLine(to: CGPoint(x: cx - 2, y: 16))
-            arrow.addLine(to: CGPoint(x: cx - 2, y: 22))
-            arrow.addLine(to: CGPoint(x: cx + 2, y: 22))
-            arrow.addLine(to: CGPoint(x: cx + 2, y: 16))
-            arrow.addLine(to: CGPoint(x: cx + 7, y: 16))
-            arrow.close()
-            // 白色填充
-            c.setFillColor(UIColor.white.cgColor)
-            c.addPath(arrow.cgPath)
-            c.fillPath()
-            // 黑色细描边
-            c.setLineWidth(1)
-            c.setStrokeColor(UIColor.black.cgColor)
-            c.addPath(arrow.cgPath)
-            c.strokePath()
-        }
-    }
 
 /// v2.87 加油站标注
 final class GasStationAnnotation: NSObject, MKAnnotation {
