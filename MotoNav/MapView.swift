@@ -924,8 +924,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera = cam
             }
         }
-        // v2.87 3D 视角自动切换：缩放近→3D，缩放远→2D（尊重用户手势）
-        if (navigating || cruise), !context.coordinator.userMoved,
+        // v2.87 3D 视角自动切换：只在巡航态自动切换，导航态保持 3D（尊重用户手势）
+        if cruise, !navigating, !context.coordinator.userMoved,
            Date().timeIntervalSince(context.coordinator.lastPitchAutoSwitchAt) > 2 {
             let alt = map.camera.altitude
             var targetPitch: CGFloat = 0

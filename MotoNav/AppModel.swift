@@ -218,6 +218,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     var destName = ""
     @Published var routeTurns: [RouteTurn] = []
     private var lastTurnSpoken = -1
+    /// v2.87 路口自动缩放：是否已经拉近了
+    private var junctionZoomedIn = false
+    private var junctionZoomedInTurn = -1
     /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
     private var farAnnounced: Set<Int> = []
     // v2.93 转向播报执行档：50米执行提醒已报过的索引
@@ -3450,6 +3453,16 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         if idx >= 0 {
             let t = routeTurns[idx]
             let text = turnText(t)
+            // v2.87 路口自动缩放：接近路口<200m拉近，通过后拉远
+            if best < 200 && !junctionZoomedIn {
+                junctionZoomedIn = true
+                junctionZoomedInTurn = idx
+                zoomInOneStep()
+            } else if best > 300 && junctionZoomedIn && junctionZoomedInTurn == idx {
+                junctionZoomedIn = false
+                junctionZoomedInTurn = -1
+                zoomOutOneStep()
+            }
             // 高德式两段播报：远提示（800 米级，含路名）→ 近提示（150 米内）
             // v1.99 播报分级：简洁只报近点；标准/详细保留 800 米远提示，详细再加剩余里程
             //
