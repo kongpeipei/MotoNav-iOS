@@ -2548,10 +2548,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                    label: c.label, traffic: c.traffic,
                                    trafficLights: c.trafficLights)
             }
-            routeChoices = list
-            selectedRouteIdx = 0
-            applyRouteChoice(list[0], name: name)
-            status = "路线已恢复，请选择方案或开始导航"
+            // v2.94 修复：切回主线程再更新 UI 状态
+            DispatchQueue.main.async {
+                self.routeChoices = list
+                self.selectedRouteIdx = 0
+                self.applyRouteChoice(list[0], name: name)
+                self.status = "路线已恢复，请选择方案或开始导航"
+            }
         }
     }
 
@@ -2628,7 +2631,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.status = self.routeSummary(name, distanceM: best.distanceM,
                                             durationS: best.durationS)
             // 直接进导航（导航跟随会接管相机，不做路线全览）
-            self.toggleNavigation()
+            // v2.94 修复：异步回调里直接改 @Published 状态有时 UI 不刷新（"有时候进不去导航"），
+            // 必须切回主线程再更新 UI 状态
+            DispatchQueue.main.async {
+                self.toggleNavigation()
+            }
         }
     }
 
@@ -2671,9 +2678,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                                        label: c.label, traffic: c.traffic,
                                    trafficLights: c.trafficLights)
                 }
-                routeChoices = list
-                selectedRouteIdx = 0
-                applyRouteChoice(list[0], name: name)
+                // v2.94 修复：异步回调里直接改 routeChoices 有时 UI 不刷新（"有时候进不去规划页"），
+                // 切回主线程再更新 UI 状态
+                DispatchQueue.main.async {
+                    self.routeChoices = list
+                    self.selectedRouteIdx = 0
+                    self.applyRouteChoice(list[0], name: name)
+                }
                 // v1.81 直达导航：方案就绪后自动进入导航
                 if autoStart {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
