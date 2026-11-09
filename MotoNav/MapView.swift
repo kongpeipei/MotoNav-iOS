@@ -194,8 +194,6 @@ struct MapViewRepresentable: UIViewRepresentable {
     let categoryResults: [AppModel.CategoryResult]
     /// 类别结果刷新计数
     let categoryTick: Int
-    /// v2.87 路口红绿灯标注
-    let trafficLights: [TrafficLight]
     /// v2.86 搜索结果标注（地图上显示所有搜索结果）
     let searchResultAnnotations: [SearchResultAnnotation]
     /// 导航中（3D 俯仰视角）
@@ -646,22 +644,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(a)
             }
         }
-        // v2.87 红绿灯标注更新
-        var tlHasher = Hasher()
-        tlHasher.combine(trafficLights.count)
-        for tl in trafficLights { tlHasher.combine(tl.coordinate.latitude) }
-        let tlKey = tlHasher.finalize()
-        if tlKey != context.coordinator.lastTrafficLightKey {
-            context.coordinator.lastTrafficLightKey = tlKey
-            // 先删掉旧的
-            for a in map.annotations {
-                if a is TrafficLight { map.removeAnnotation(a) }
-            }
-            // 再加新的
-            for tl in trafficLights {
-                map.addAnnotation(tl)
-            }
-        }
+        // v2.87 暂时删掉红绿灯标注功能（TrafficLight不是MKAnnotation，后续再加）
         // v2.02 折线只在"真的变了"时重建
         // 旧实现每次 updateUIView 都 removeOverlays + 重建全部 MKPolyline，而 updateUIView 每秒
         // 会被定位/状态更新触发多次（一次导航卡刷新就可能几十次）→ 折线反复消失重现（雪花闪烁）
@@ -1426,7 +1409,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPlaceKey: Int?
         var lastCatKey: Int?
         var lastSearchResultKey = 0
-        var lastTrafficLightKey = 0
         var lastEndKey = ""
         /// v2.14 首屏加载完成只上报一次（详见 mapViewDidFinishRenderingMap）
         var loadReadyReported = false
@@ -1752,20 +1734,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            // v2.87 红绿灯标注
-            if let tl = annotation as? TrafficLight {
-                let id = "trafficLight"
-                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
-                if v == nil {
-                    v = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
-                }
-                v?.annotation = annotation
-                v?.canShowCallout = false
-                v?.markerTintColor = .darkGray
-                v?.glyphText = "🚦"
-                v?.displayPriority = .defaultLow
-                return v
-            }
             // v2.87 车道箭头标注
             if let lane = annotation as? LaneArrowAnnotation {
                 let id = "laneArrow"
