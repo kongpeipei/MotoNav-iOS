@@ -829,7 +829,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 一旦在导航中执行，相机就停在浏览态 —— 车被顶到屏幕上方、
             // 下方全是身后的路，顶部提示还会被换成"继续导航"。
             if !navigating, focusTick > 0, let fc = focusCoord {
-                context.coordinator.userMoved = true
+                context.coordinator.userMoved = true; lastUserMovedTime = Date(); context.coordinator.lastUserMovedTime = Date()
                 let from = searchLinkFrom
                 let dest = MapGeo.toGCJ(fc)
                 context.coordinator.setRegionProgrammatically {
@@ -911,6 +911,14 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera.heading = applied
             }
         }
+        // v2.87 用户平移地图后 3 秒自动回跟随模式
+        if navigating, context.coordinator.userMoved,
+           Date().timeIntervalSince(context.coordinator.lastUserMovedTime) > 3 {
+            context.coordinator.userMoved = false
+            context.coordinator.setRegionProgrammatically {
+                // 恢复跟随
+            }
+        }
         // v2.32 MapKit 3D 俯视加固：部分机型在 followWithHeading 下会把 pitch 重置回 0
         // （MapKit known issue：3D 相机由系统接管）。导航态每 ≥3 秒检测一次，
         // 俯角被吞（<30°）就恢复 45°；不打断手势、不每次刷新。
@@ -952,7 +960,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         if northUpTick != context.coordinator.lastNorthUpTick {
             context.coordinator.lastNorthUpTick = northUpTick
             if northUpTick > 0 {
-                context.coordinator.userMoved = true
+                context.coordinator.userMoved = true; lastUserMovedTime = Date(); context.coordinator.lastUserMovedTime = Date()
                 map.camera.heading = 0
             }
         }
@@ -1100,7 +1108,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         if overviewTick != context.coordinator.lastOverviewTick {
             context.coordinator.lastOverviewTick = overviewTick
             if overviewTick > 0, route.count > 1 {
-                context.coordinator.userMoved = true
+                context.coordinator.userMoved = true; lastUserMovedTime = Date(); context.coordinator.lastUserMovedTime = Date()
                 var rect = MKMapRect.null
                 for c in MapGeo.toGCJ(route) {
                     let p = MKMapPoint(c)
@@ -1396,6 +1404,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastTeamKey = ""
         /// 用户手动移动/旋转地图（暂停跟随与自动旋转，点定位按钮恢复）
         var userMoved = false
+        /// v2.87 用户最后一次手动移图的时间，3秒后自动回跟随
+        var lastUserMovedTime = Date.distantPast
         /// 导航跟随触发记忆
         var lastNavFollowTick = 0
         var lastOverviewTick = 0
@@ -1413,7 +1423,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// （比如 `map.userTrackingMode = .followWithHeading` 和 `map.camera = cam`），
         /// MapKit 是否把它们合并成一个事务并不确定 ——
         /// 不合并时，第二个 regionDidChange 回调撞上 Bool 已被消费的状态，
-        /// 走进 `else if !animated` 分支 → **误判成"用户手动移了地图"**（userMoved = true）。
+        /// 走进 `else if !animated` 分支 → **误判成"用户手动移了地图"**（userMoved = true; lastUserMovedTime = Date()）。
         ///
         /// 后果：导航卡片整张塌掉，只剩一个"继续导航"按钮
         /// （ContentView 的 navUserMoved 分支），用户看到的就是"点了开始导航卡住了"。
@@ -1463,7 +1473,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if map.userTrackingMode != .none {
                 map.setUserTrackingMode(.none, animated: false)
             }
-            userMoved = true
+            userMoved = true; lastUserMovedTime = Date()
             setRegionProgrammatically {
                 var cam = map.camera
                 // 相机高度：点 + 用当前值，点 - 用当前值；factor < 1 = 放大
@@ -1646,7 +1656,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if consumeProgrammaticMove() {
                 // 程序化移动，正常
             } else if !animated {
-                // v2.84 旧版只要不是程序化移动就立刻 userMoved = true ——
+                // v2.84 旧版只要不是程序化移动就立刻 userMoved = true; lastUserMovedTime = Date() ——
                 // 手指在地图上碰一下、只挪几个像素，也算"浏览态"：
                 // 底卡整张消失、冒出一个"继续导航"，松手 8 秒后又自动收回去。
                 // 反复碰几下就是用户看到的"界面乱跳"。
@@ -1657,9 +1667,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                                                    longitude: mapView.centerCoordinate.longitude))
                     let zoomed = s0.latitudeDelta > 0
                         && abs(mapView.region.span.latitudeDelta - s0.latitudeDelta) / s0.latitudeDelta > 0.15
-                    if moved > 40 || zoomed { userMoved = true }
+                    if moved > 40 || zoomed { userMoved = true; lastUserMovedTime = Date() }
                 } else {
-                    userMoved = true
+                    userMoved = true; lastUserMovedTime = Date()
                 }
             }
             panStartCenter = nil
