@@ -2580,12 +2580,6 @@ struct ContentView: View {
                 ForEach(Array(model.waypoints.enumerated()), id: \.element.id) { i, wp in
                     HStack(spacing: 7) {
                         Circle().fill(Color.orange).frame(width: 9, height: 9)
-                        // 序号徽标（高德式）
-                        Text("\(i + 1)")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 15, height: 15)
-                            .background(Color.orange, in: Circle())
                         Text(wp.name)
                             .font(.subheadline)
                             .foregroundStyle(.primary)

@@ -218,7 +218,7 @@ struct DraggableFloat<Content: View>: View {
         let margin: CGFloat = 0
         let lo = -h / 2 + margin
         // 键盘弹起时仍然让位（否则卡片会坐到键盘下面，建议列表首选项被键盘盖住）
-        let hi = screenH - max(0, extraBottomInset) + h / 2 - margin
+        let hi = screenH * 2 - max(0, extraBottomInset) + h / 2 - margin
         guard hi > lo else { return center }
         return min(max(center, lo), hi)
     }
@@ -306,7 +306,7 @@ struct DraggableFloat<Content: View>: View {
                                     if dragStartPos == nil { dragStartPos = base }
                                     let sh = max(1, geo.size.height)
                                     pos = CGPoint(x: base.x,
-                                                  y: min(1.0, max(0.0,
+                                                  y: min(2.0, max(0.0,
                                                        base.y + v.translation.height / sh)))
                                 }
                                 .onEnded { _ in
@@ -350,7 +350,7 @@ struct DraggableFloat<Content: View>: View {
                             // 在拖到极端位置时会把 pos 截断，松手后卡片又"弹"回一点。
                             let rawY = horizontalSwipe
                                 ? base.y
-                                : min(1.0, max(0.0, base.y + v.translation.height / h))
+                                : min(2.0, max(0.0, base.y + v.translation.height / h))
                             // v2.91 本卡的纵向范围优先（nil 时退回全局 0…1）
                             // v2.93 取消限制：拖动范围 0~1
                             let newY = min(max(rawY, minPosY ?? 0), maxPosY ?? 1)
