@@ -3370,10 +3370,21 @@ struct ContentView: View {
                         .foregroundStyle(.black.opacity(0.7))
                 }
                 .buttonStyle(.plain)
-                // 中间：巡航信息
-                Text("已巡航")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.black.opacity(0.8))
+                // 中间：巡航信息（时间 + 路程）
+                if let startTime = model.cruiseStartTime {
+                    let duration = Int(Date().timeIntervalSince(startTime))
+                    let hour = duration / 3600
+                    let minute = (duration % 3600) / 60
+                    let distanceKm = model.cruiseTotalDistance / 1000
+                    HStack(spacing: 12) {
+                        Text(hour > 0 ? "\(hour)小时\(minute)分" : "\(minute)分钟")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.black.opacity(0.8))
+                        Text(String(format: "%.1f公里", distanceKm))
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.black.opacity(0.6))
+                    }
+                }
                 Spacer()
                 // 右边：搜索按钮
                 Button {
@@ -5632,6 +5643,8 @@ struct CruiseButton: View {
             DraggableFloat(key: "cruisebutton", defaultPos: CGPoint(x: 0.85, y: 0.12)) {
                 Button(action: {
                     model.cruiseMode = true
+                    model.cruiseStartTime = Date()
+                    model.cruiseTotalDistance = 0
                 }) {
                     Text("巡航")
                         .font(.system(size: 14, weight: .medium))

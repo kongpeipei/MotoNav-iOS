@@ -1207,7 +1207,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let last = context.coordinator.cruiseLastLoc
                 if last == nil ||
                     CLLocation(latitude: loc.latitude, longitude: loc.longitude)
-                        .distance(from: CLLocation(latitude: last!.latitude, longitude: last!.longitude)) > 25 {
+                        .distance(from: CLLocation(latitude: last!.latitude, longitude: last!.longitude)) > 5 {
                     context.coordinator.cruiseLastLoc = loc
                     context.coordinator.setRegionProgrammatically {
                         // v2.53 巡航前视偏移：车不再钉在正中，前移 20% 当前视距（导航为 35%）

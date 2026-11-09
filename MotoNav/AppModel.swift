@@ -82,6 +82,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var navigateFollowTick = 0
     /// v1.84 巡航模式（非导航下累计位移 ≥300m 自动进入；定位点跟随 + 顶部巡航卡片）
     @Published var cruiseMode = false
+    /// v2.88 巡航统计：开始时间 + 总路程
+    @Published var cruiseStartTime: Date? = nil
+    @Published var cruiseTotalDistance: Double = 0
     /// v2.87 用户自定义3D俯角（度），0=2D，45=默认3D
     @Published var userPitchDeg: Double = 45 {
         didSet {
@@ -1582,6 +1585,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             cruiseMode = true
             cruiseTick += 1
             cruiseBase = nil
+            // v2.88 设置巡航开始时间
+            cruiseStartTime = Date()
+            cruiseTotalDistance = 0
+            // v2.88 巡航模式屏幕常亮
+            UIApplication.shared.isIdleTimerDisabled = true
         }
         if cruiseMode {
             cruiseTick += 1 // 驱动地图跟随定位点（MapView 内做 GPS 抖动节流）
@@ -1593,6 +1601,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         cruiseMode = false
         cruiseBase = nil
         cruiseTick += 1
+        // v2.88 清零巡航统计
+        cruiseStartTime = nil
+        cruiseTotalDistance = 0
+        // v2.88 退出巡航恢复自动息屏（如果不是导航中）
+        if !navigating {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 
     /// v2.34 体验审查 E5：手动退出巡航 → 本次会话内不再自动进入（避免反复打扰）。
