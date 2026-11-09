@@ -594,6 +594,7 @@ struct ContentView: View {
             gasTick: model.gasTick,
             placeLabels: model.placeLabels,
             categoryResults: model.categoryResults,
+            searchResultAnnotations: model.searchResultAnnotations,
             categoryTick: model.categoryTick,
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
@@ -624,6 +625,10 @@ struct ContentView: View {
             onCategorySelect: { r in
                 model.planRoute(to: r.name, lat: r.lat, lon: r.lon)
                 model.clearCategory()
+            },
+            // v2.86 点击搜索结果标注 → 显示地点卡（还可以点击别的标注切换）
+            onSearchResultSelect: { sra in
+                showTapPlace(sra.coordinate, seed: sra.title ?? "搜索结果")
             },
             onMapTap: { coord in
                 // v1.96 轻点地图：
@@ -1455,6 +1460,15 @@ struct ContentView: View {
                 let tips = await model.amapInputTips(q)
                 if searchText.trimmingCharacters(in: .whitespaces) == q {
                     onlineTips = sortedByDistance(tips)
+                    // v2.86 在地图上显示所有搜索结果标注
+                    model.searchResultAnnotations = onlineTips.enumerated().map { idx, tip in
+                        SearchResultAnnotation(
+                            coordinate: CLLocationCoordinate2D(latitude: tip.lat, longitude: tip.lon),
+                            title: tip.name,
+                            subtitle: tip.address,
+                            index: idx
+                        )
+                    }
                 }
             }
         }
@@ -1667,7 +1681,8 @@ struct ContentView: View {
                     // 报的是同一件事（下一步怎么转、多远），却悬在屏幕中段，
                     // 正好横在中轴线把整条路线切成两截。高德的路口放大图只出现在屏幕上部，
                     // 这里跟着上移，中下部留给路线和定位箭头。
-                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.20)) { AnyView(turnAheadCard) }
+                    // v2.86 删除转弯箭头卡片，改为路线上显示白色大箭头
+                    // DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.20)) { AnyView(turnAheadCard) }
                 }
             }
         }

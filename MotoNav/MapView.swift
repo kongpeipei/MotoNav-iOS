@@ -182,6 +182,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     let categoryResults: [AppModel.CategoryResult]
     /// 类别结果刷新计数
     let categoryTick: Int
+    /// v2.86 搜索结果标注（地图上显示所有搜索结果）
+    let searchResultAnnotations: [SearchResultAnnotation]
     /// 导航中（3D 俯仰视角）
     let navigateFollowTick: Int
     let navigating: Bool
@@ -198,6 +200,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// v2.01 比例尺回调（缩放时把"58pt 代表多少米"回传给 SwiftUI 右上角比例尺）
     var onScaleChange: ((String) -> Void)?
     var onLongPress: ((CLLocationCoordinate2D) -> Void)?
+    /// v2.86 点击搜索结果标注回调
+    var onSearchResultSelect: ((SearchResultAnnotation) -> Void)?
     var onPlaceSelect: ((PlaceLabel) -> Void)?
     var onPlaceLongPress: ((PlaceLabel) -> Void)?
     var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
@@ -369,11 +373,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             navCfg.pointOfInterestFilter = MapViewRepresentable.navPOIFilter
             map.preferredConfiguration = navCfg
         }
-        // v2.53 导航态锁旋转/倾斜手势：高德导航松手即回车头朝上，
-        // 本版直接禁掉手势 —— 双指一转会把 userMoved 置真，跟随永久停住、只能点定位救
-        let gestureLocked = navigating
-        if map.isRotateEnabled == gestureLocked { map.isRotateEnabled = !gestureLocked }
-        if map.isPitchEnabled == gestureLocked { map.isPitchEnabled = !gestureLocked }
+        // v2.86 导航态下允许旋转和倾斜手势，用户可以手动转动地图
+        // （旧版直接禁掉手势，导致导航态下无法转动地图）
+        map.isRotateEnabled = true
+        map.isPitchEnabled = true
         context.coordinator.onMapLoad = onMapLoad
         // 定位按钮：跟随手机朝向模式（地图自动旋转 + 回中，不重置缩放级别）
         if locateTick != context.coordinator.lastLocateTick {
@@ -610,6 +613,22 @@ struct MapViewRepresentable: UIViewRepresentable {
                     map.addAnnotation(na)
                     existing[r.id] = na
                 }
+            }
+        }
+        // v2.86 搜索结果标注（地图上显示所有搜索结果）
+        var srHasher = Hasher()
+        srHasher.combine(searchResultAnnotations.count)
+        for a in searchResultAnnotations { srHasher.combine(a.coordinate.latitude) }
+        let srKey = srHasher.finalize()
+        if srKey != context.coordinator.lastSearchResultKey {
+            context.coordinator.lastSearchResultKey = srKey
+            // 先删掉旧的
+            for a in map.annotations {
+                if a is SearchResultAnnotation { map.removeAnnotation(a) }
+            }
+            // 再加新的
+            for a in searchResultAnnotations {
+                map.addAnnotation(a)
             }
         }
         // v2.02 折线只在"真的变了"时重建
@@ -950,6 +969,22 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
+        // v2.86 导航态：手指缩放地图查看路线时自动变2D，速度起来时自动变3D
+        if navigating {
+            var targetPitch: CGFloat = CGFloat(pitchDeg)
+            if context.coordinator.userMoved {
+                // 用户手动移图/缩放 → 自动切2D
+                targetPitch = 0
+            } else if context.coordinator.navActive, userLocation != nil {
+                // 跟随中且速度起来 → 自动切3D
+                targetPitch = 45
+            }
+            if abs(map.camera.pitch - targetPitch) > 1 {
+                var cam = map.camera
+                cam.pitch = targetPitch
+                map.setCamera(cam, animated: true)
+            }
+        }
         // v2.65 导航首帧定点：进入导航那一刻必须把相机放到车上。
         // 旧版只靠 navigateFollowTick 变化 + 4m 位移阈值触发，若 tick 没变或定位还没回调，
         // 相机就停在规划页那个"全程全览"的位置 —— 视野几公里宽，车缩成看不见的点。
@@ -1118,8 +1153,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.setRegionProgrammatically {
                     var cam = map.camera
                     cam.centerCoordinate = MapGeo.toGCJ(loc)
-                    cam.altitude = 2000
-                    cam.pitch = 0
+                    // v2.86 巡航模式视野改小，匹配截图里比例尺250米的大小
+                    cam.altitude = 800
+                    cam.pitch = 30    // 巡航模式也带一点3D视角，更像高德
                     map.camera = cam
                 }
             }
@@ -1325,6 +1361,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastGasKey: Int?
         var lastPlaceKey: Int?
         var lastCatKey: Int?
+        var lastSearchResultKey = 0
         var lastEndKey = ""
         /// v2.14 首屏加载完成只上报一次（详见 mapViewDidFinishRenderingMap）
         var loadReadyReported = false
@@ -1619,10 +1656,27 @@ struct MapViewRepresentable: UIViewRepresentable {
             } else if let ca = view.annotation as? CategoryAnnotation {
                 mapView.deselectAnnotation(view.annotation, animated: false)
                 onCategorySelect?(ca.result)
+            } else if let sra = view.annotation as? SearchResultAnnotation {
+                mapView.deselectAnnotation(view.annotation, animated: false)
+                onSearchResultSelect?(sra)
             }
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // v2.86 搜索结果标注
+            if annotation is SearchResultAnnotation {
+                let id = "searchResult"
+                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                if v == nil {
+                    v = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+                }
+                v?.annotation = annotation
+                v?.canShowCallout = false
+                v?.markerTintColor = .systemBlue
+                v?.glyphText = String(describing: (annotation as! SearchResultAnnotation).index + 1)
+                v?.displayPriority = .required
+                return v
+            }
             // 当前位置：缩小版指南针图标（玻璃圆底 + 红色指北针）
             if annotation is MKUserLocation {
                 // v2.62 导航态换蓝色箭头：旧的指南针图标在 3D 灰楼块上几乎看不见，
@@ -1649,18 +1703,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return v
             }
             if let re = annotation as? RouteEndAnnotation {
-                // v2.22 起终点入口箭头：白色圆形 + 左转/直行/右转箭头（高德式）
-                if re.kind.hasPrefix("arrow_") {
-                    let id = "routeArrow"
-                    let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
-                        ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
-                    v.annotation = re
-                    v.canShowCallout = false
-                    v.markerTintColor = .white
-                    v.glyphImage = UIImage(systemName: arrowGlyph(for: re.kind))
-                    v.displayPriority = .required
-                    return v
-                }
+                // v2.86 删除起终点入口箭头，改为路线上显示白色大箭头
                 let id = "routeEnd"
                 let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
                     ?? MKMarkerAnnotationView(annotation: re, reuseIdentifier: id)
@@ -2127,5 +2170,6 @@ extension MapViewRepresentable {
         }
     }
 }
+
 
 

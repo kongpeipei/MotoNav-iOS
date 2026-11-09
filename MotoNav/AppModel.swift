@@ -118,6 +118,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 搜索预览点（绿色高亮，等待"去这里"）
     @Published var searchPreview: CLLocationCoordinate2D?
     @Published var searchPreviewName = ""
+    /// v2.86 搜索结果标注（地图上显示所有搜索结果）
+    @Published var searchResultAnnotations: [SearchResultAnnotation] = []
     /// 市区加油站坐标
     @Published var gasStations: [CLLocationCoordinate2D] = []
     /// 加油站全览请求计数
@@ -1601,9 +1603,10 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// GPS course 是瞬时方向、抖动比罗盘大，所以死区放宽到 5°（罗盘仍是 4°）。
     private func applyFusedHeading() {
         guard navigating else { return }
-        let fast = currentSpeed > 2.8       // 2.8 m/s ≈ 10 km/h
+        // v2.86 速度不为0时用GPS行进方向，速度为0时才用指南针
+        let moving = currentSpeed > 0.5    // 0.5 m/s ≈ 1.8 km/h，稍微动一下就算移动
         let target: Double
-        if fast, let g = gpsHeading {
+        if moving, let g = gpsHeading {
             target = g
         } else {
             target = compass.angle
@@ -4034,5 +4037,19 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 结果"急左转"和"向左急转"两种说法并存）。
     func turnText(_ t: RouteTurn) -> String {
         GuidanceEventBuilder.actionText(t)
+    }
+}
+
+// v2.86 搜索结果标注
+class SearchResultAnnotation: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    let title: String?
+    let subtitle: String?
+    let index: Int
+    init(coordinate: CLLocationCoordinate2D, title: String, subtitle: String, index: Int) {
+        self.coordinate = coordinate
+        self.title = title
+        self.subtitle = subtitle
+        self.index = index
     }
 }
