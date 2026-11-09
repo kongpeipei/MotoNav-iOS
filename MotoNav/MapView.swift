@@ -1132,6 +1132,32 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             }
         }
+        // v2.88 导航态实时跟随：用户没有手动移图时，每隔2秒更新一次相机跟随定位点
+        if navigating, !context.coordinator.userMoved,
+           Date().timeIntervalSince(context.coordinator.lastNavFollowUpdateAt) > 2,
+           let loc = userLocation {
+            context.coordinator.lastNavFollowUpdateAt = Date()
+            // 只有定位点移动超过10米才更新，避免GPS抖动
+            if context.coordinator.navLastFollow == nil ||
+                CLLocation(latitude: loc.latitude, longitude: loc.longitude)
+                    .distance(from: CLLocation(latitude: context.coordinator.navLastFollow!.latitude,
+                                              longitude: context.coordinator.navLastFollow!.longitude)) > 10 {
+                context.coordinator.navLastFollow = loc
+                let screenH = map.bounds.height
+                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: screenH)
+                context.coordinator.setRegionProgrammatically {
+                    var cam = map.camera
+                    cam.centerCoordinate = MapGeo.toGCJ(
+                        MapViewRepresentable.forwardCoordinate(
+                            loc,
+                            meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                            bearingDeg: heading))
+                    cam.centerCoordinateDistance = distance
+                    cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+                    map.setCamera(cam, animated: true)
+                }
+            }
+        }
         // v1.81.4 导航中全览：缩放显示当前路线全程，暂停跟随（取消/固定恢复由 navigateFollowTick 接管）
         if overviewTick != context.coordinator.lastOverviewTick {
             context.coordinator.lastOverviewTick = overviewTick
@@ -1436,6 +1462,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastUserMovedTime = Date.distantPast
         /// 导航跟随触发记忆
         var lastNavFollowTick = 0
+        var lastNavFollowUpdateAt = Date()
+        var navLastFollow: CLLocationCoordinate2D? = nil
         var lastOverviewTick = 0
         /// 导航中最后跟随位置（开远自动拉回）
         var navLastFollow: CLLocationCoordinate2D?
