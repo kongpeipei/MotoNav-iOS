@@ -366,7 +366,7 @@ struct ContentView: View {
         .onAppear {
             model.authorizeAndStart()
             model.fetchPlaceLabels()
-            model.checkClipboard()
+            // v2.85 取消自动检查剪贴板，避免每次打开 App 都弹出"搜索目标"
             // v1.85 指南针/GPS 默认位置上移到最高处：仅一次重置旧拖动记忆（之后用户拖动仍会持久化）
             if !UserDefaults.standard.bool(forKey: "uiPosV185Applied") {
                 for k in ["compass.x", "compass.y", "zoom.x", "zoom.y"] {
@@ -405,7 +405,7 @@ struct ContentView: View {
         // 切回前台时再检查剪贴板（微信复制位置 → 打开摩卫士自动识别）
         .onChange(of: scenePhase) { phase in
             if phase == .active {
-                model.checkClipboard()
+                // v2.85 取消切回前台时自动检查剪贴板
             } else if phase == .background {
                 // v2.31 底图已换 MapKit 原生，不再需要手动瓦片缓存清理
             }
