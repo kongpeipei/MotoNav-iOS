@@ -1003,6 +1003,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.pendingNavSnap = navigating
         }
         context.coordinator.navActive = navigating
+        context.coordinator.cruise = cruise
         if context.coordinator.pendingNavSnap, navigating, let loc = userLocation {
             context.coordinator.pendingNavSnap = false
             let sh = map.bounds.height > 200 ? map.bounds.height : UIScreen.main.bounds.height
@@ -1340,6 +1341,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var navIntroInProgress = false
         /// 当前是否仍在导航（延迟回调里用它确认用户没中途退出）
         var navActive = false
+        var cruise = false
         /// v2.25 高亮内容键（标注增删）
         var lastSearchHitKey = ""
         /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）
