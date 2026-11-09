@@ -1632,8 +1632,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         route = testRoute
         destName = "测试目的地"
-        destLat = destLat
-        destLon = destLon
         // 开始导航
         navigating = true
         heading = compass.angle
