@@ -203,6 +203,8 @@ struct ContentView: View {
             // v1.64：底部选项卡分离——0=导航主页（地图+搜索框），1=我的（独立菜单页），切换时选项卡常驻底部
             if selectedTab == 0 {
                 AnyView(mapLayer)
+                // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
+                CruiseButton(model: model)
                 // v2.78 左上角品牌水印（"机车地图"）。
                 // 放在地图层正上方、其余浮层之下：卡片和提示条照常盖住它，
                 // 不会在导航态顶部条里插一行字；搜索整屏态直接不显示（那块被白色页面盖住）。
@@ -455,8 +457,6 @@ struct ContentView: View {
             }
         }
         // v2.23 全局边缘滑动返回：手指从屏幕左/右边缘往中间滑 → 返回上一级
-        // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
-        CruiseButton(model: model)
         // 放在最外层 ZStack 上（覆盖地图），用 simultaneousGesture 避免抢地图自身手势；
         // 地图区域内的横向拖动（平移）依然可用 —— 只有起手点在边缘 40pt 内才触发。
         .simultaneousGesture(
