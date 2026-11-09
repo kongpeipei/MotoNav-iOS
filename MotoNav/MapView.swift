@@ -27,6 +27,26 @@ enum MapGeo {
     }
 }
 
+/// v2.87 车道箭头标注
+final class LaneArrowAnnotation: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    let heading: CLLocationDegrees
+    init(coordinate: CLLocationCoordinate2D, heading: CLLocationDegrees) {
+        self.coordinate = coordinate
+        self.heading = heading
+    }
+}
+
+/// v2.87 加油站标注
+final class GasAnnotation: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    let wgsKey: String
+    init(coordinate: CLLocationCoordinate2D) {
+        self.coordinate = coordinate
+        self.wgsKey = "\(coordinate.latitude),\(coordinate.longitude)"
+    }
+}
+
 /// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
     /// v2.28 「1 厘米 = N 米」→ 相机到地图中心的地面距离（米）
@@ -632,6 +652,24 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 再加新的
             for a in searchResultAnnotations {
                 map.addAnnotation(a)
+            }
+        }
+        // v2.87 加油站标注更新
+        var gasHasher = Hasher()
+        gasHasher.combine(gasStations.count)
+        for c in gasStations { gasHasher.combine(c.latitude); gasHasher.combine(c.longitude) }
+        let gasKey = gasHasher.finalize()
+        if gasKey != context.coordinator.lastGasKey {
+            context.coordinator.lastGasKey = gasKey
+            // 先删掉旧的加油站标注
+            for a in map.annotations {
+                if a is GasAnnotation { map.removeAnnotation(a) }
+            }
+            // 再加新的
+            for c in gasStations {
+                let gcj = CoordConv.wgs2gcj(c.latitude, c.longitude)
+                let anno = GasAnnotation(coordinate: gcj)
+                map.addAnnotation(anno)
             }
         }
         // v2.02 折线只在"真的变了"时重建
@@ -1381,6 +1419,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPlaceKey: Int?
         var lastCatKey: Int?
         var lastSearchResultKey = 0
+        var lastGasKey = 0
         var lastEndKey = ""
         /// v2.14 首屏加载完成只上报一次（详见 mapViewDidFinishRenderingMap）
         var loadReadyReported = false
@@ -1706,6 +1745,33 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // v2.87 车道箭头标注
+            if let lane = annotation as? LaneArrowAnnotation {
+                let id = "laneArrow"
+                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                if v == nil {
+                    v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
+                }
+                v?.annotation = annotation
+                v?.canShowCallout = false
+                v?.image = UIImage(systemName: "arrow.up")?.withTintColor(.white, renderingMode: .alwaysOriginal)
+                v?.transform = CGAffineTransform(rotationAngle: CGFloat(lane.heading * .pi / 180))
+                return v
+            }
+            // v2.87 加油站标注
+            if annotation is GasAnnotation {
+                let id = "gas"
+                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
+                if v == nil {
+                    v = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+                }
+                v?.annotation = annotation
+                v?.canShowCallout = false
+                v?.markerTintColor = .systemGreen
+                v?.glyphText = "⛽"
+                v?.displayPriority = .defaultLow
+                return v
+            }
             // v2.86 搜索结果标注
             if annotation is SearchResultAnnotation {
                 let id = "searchResult"

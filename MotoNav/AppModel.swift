@@ -221,6 +221,9 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.87 路口自动缩放：是否已经拉近了
     private var junctionZoomedIn = false
     private var junctionZoomedInTurn = -1
+    /// v2.87 导航中自动显示前方加油站
+    @Published var gasStations: [CLLocationCoordinate2D] = []
+    private var lastGasSearchTime = Date.distantPast
     /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
     private var farAnnounced: Set<Int> = []
     // v2.93 转向播报执行档：50米执行提醒已报过的索引
@@ -3365,6 +3368,13 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         serviceKindActive = nil
     }
 
+    /// v2.87 搜索附近加油站
+    private func searchGasStationsNear(_ coord: CLLocationCoordinate2D) {
+        Task {
+            let tips = await amapKeywordSearch("加油站", lat: coord.latitude, lon: coord.longitude, radius: 5000)
+            gasStations = tips.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+        }
+    }
     /// 高德关键词周边搜索（返回按距离升序）
     func amapKeywordSearch(_ keyword: String, lat: Double, lon: Double, radius: Int = 8000,
                            distanceNote: Bool = true) async -> [AmapTip] {
@@ -3435,6 +3445,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             finishTrip()
             endLiveActivity()
             return
+        }
+        // v2.87 每隔30秒搜索5公里内加油站
+        if navigating, Date().timeIntervalSince(lastGasSearchTime) > 30 {
+            lastGasSearchTime = Date()
+            searchGasStationsNear(coord)
         }
         // 接近终点播报（高德式：剩余500米提示即将到达）
         if toDest < 500 && !arriveAnnounced {
