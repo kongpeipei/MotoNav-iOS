@@ -3457,11 +3457,11 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             if best < 200 && !junctionZoomedIn {
                 junctionZoomedIn = true
                 junctionZoomedInTurn = idx
-                zoomInOneStep()
+                stepNavScale(zoomIn: true)
             } else if best > 300 && junctionZoomedIn && junctionZoomedInTurn == idx {
                 junctionZoomedIn = false
                 junctionZoomedInTurn = -1
-                zoomOutOneStep()
+                stepNavScale(zoomIn: false)
             }
             // 高德式两段播报：远提示（800 米级，含路名）→ 近提示（150 米内）
             // v1.99 播报分级：简洁只报近点；标准/详细保留 800 米远提示，详细再加剩余里程
