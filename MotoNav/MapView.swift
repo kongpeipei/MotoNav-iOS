@@ -351,6 +351,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.onPlaceSelect = onPlaceSelect
         context.coordinator.onPlaceLongPress = onPlaceLongPress
         context.coordinator.onCategorySelect = onCategorySelect
+        context.coordinator.onSearchResultSelect = onSearchResultSelect
         context.coordinator.onMapTap = onMapTap
         context.coordinator.onRouteChoiceTap = onRouteChoiceTap
         context.coordinator.onScaleChange = onScaleChange
@@ -1229,6 +1230,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onPlaceSelect: ((PlaceLabel) -> Void)?
         var onPlaceLongPress: ((PlaceLabel) -> Void)?
         var onCategorySelect: ((AppModel.CategoryResult) -> Void)?
+        var onSearchResultSelect: ((SearchResultAnnotation) -> Void)?
         var onMapTap: ((CLLocationCoordinate2D) -> Void)?
         /// v2.01 比例尺文本回调
         var onScaleChange: ((String) -> Void)?
@@ -1352,6 +1354,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onUserMovedChanged: ((Bool) -> Void)?
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
+        /// v2.86 航向记忆（只在变化超过1°时更新相机）
+        var lastAppliedHeading: Double? = nil
+        var lastWrittenHeading: Double = 0
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
         var lastScaleText = ""
         /// v2.02 折线重建键（内容不变就不重建，避免闪烁/卡顿）
