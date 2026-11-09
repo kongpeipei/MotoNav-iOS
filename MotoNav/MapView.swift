@@ -96,7 +96,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     // 配上俯角 45° 和楼块遮挡，实机上经常"找不到自己在哪"。
     // 用户明确要求"开始导航时当前定位点要在屏幕中显示"，这里把前移量收窄，
     // 车落在屏高约 56%，既在屏幕中部、前方又仍留有视野。
-    static let navCameraForwardRatio: Double = 0.15
+    // v2.94 跟随模式下定位点放屏幕正中心（苹果地图那样）：从 0.15 改成 0
+    static let navCameraForwardRatio: Double = 0.0
 
     /// v2.50 围绕某点构造一个"边长 meters 见方"的地图矩形。
     ///

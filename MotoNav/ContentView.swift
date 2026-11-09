@@ -1587,7 +1587,7 @@ struct ContentView: View {
                     DraggableFloat(key: "routeplantop", defaultPos: CGPoint(x: 0.5, y: 0.02),
                                    lockX: true, topLocked: true,
                                    onFrameChange: { planTopCardFrame = $0 }) {
-                        AnyView(routePlanTopCard)
+                        AnyView(routePlanBottomCard)
                     }
                     .zIndex(60)
                     // v2.23 底部锚定：pos.y 是卡片底边位置，卡片向上生长。
@@ -1604,7 +1604,7 @@ struct ContentView: View {
                                    deleteLabel: "删除",
                                    onSwipeLeft: { closeRoutePlan() },
                                    onFrameChange: { planBottomCardFrame = $0 },
-                                   ) { AnyView(routePlanBottomCard) }
+                                   ) { AnyView(routePlanTopCard) }
                         .zIndex(50)
                 } else if model.tripSummary == nil {
                     // v2.66 删除地图常驻「分类条」：和搜索面板里的 6 宫格是同一批

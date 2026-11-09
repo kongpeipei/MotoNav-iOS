@@ -52,7 +52,7 @@ struct DraggableFloat<Content: View>: View {
     /// 拖的时候两卡可以叠在一起，松手后才弹开去。
     var onDragEnded: ((CGFloat) -> CGFloat?)? = nil
     /// v2.91 每张卡独立的纵向拖动范围（pos.y 比例）。
-    /// nil 表示沿用全局默认（0.002…0.998）。用于让搜索卡/地点卡/规划两卡
+    /// nil 表示沿用全局默认（0…1）。用于让搜索卡/地点卡/规划两卡
     /// 对齐高德的"半屏抽屉"手感：上拉到顶、下拉停在指定位置，不会一路滑出屏。
     var minPosY: CGFloat? = nil
     var maxPosY: CGFloat? = nil
@@ -134,7 +134,7 @@ struct DraggableFloat<Content: View>: View {
             // v2.92 搜索卡（bottommain2）作废旧坐标：上一轮临时加了 maxPosY: 0.67，
             // 用户拖到 0.67 后被存下来；现在删了限制但记忆值还在，
             // 导致卡片重启后停在 0.67 而非默认的贴底位。
-            || (key == "bottommain2" && posVersion < 5)
+            || (key == "bottommain2" && posVersion < 6)
         if stale {
             let v = key == "zoom" ? 4 : (key == "exitnav2" ? 3 : 2)
             UserDefaults.standard.set(v, forKey: "\(key).posV")
@@ -215,8 +215,8 @@ struct DraggableFloat<Content: View>: View {
         //
         // 现在只保留一条底线：任何位置都至少露出 80pt，保证拖飞了还能抓回来。
         // 允许卡片上下各有一半出屏，和系统浮窗的拖动手感一致。
-        // v2.93 取消限制：露出边从 80pt 改成 20pt（几乎可以完全拖出屏）
-        let margin: CGFloat = 20
+        // v2.94 彻底取消露出边限制：margin 从 20pt 改成 0，卡片可以完全拖出屏
+        let margin: CGFloat = 0
         let lo = -h / 2 + margin
         // 键盘弹起时仍然让位（否则卡片会坐到键盘下面，建议列表首选项被键盘盖住）
         let hi = screenH - max(0, extraBottomInset) + h / 2 - margin
@@ -307,7 +307,7 @@ struct DraggableFloat<Content: View>: View {
                                     if dragStartPos == nil { dragStartPos = base }
                                     let sh = max(1, geo.size.height)
                                     pos = CGPoint(x: base.x,
-                                                  y: min(0.998, max(0.002,
+                                                  y: min(1.0, max(0.0,
                                                        base.y + v.translation.height / sh)))
                                 }
                                 .onEnded { _ in
@@ -347,12 +347,12 @@ struct DraggableFloat<Content: View>: View {
                             // v2.64 全屏自由拖动：0.02…0.995 覆盖整屏，不再有
                             // 「顶部锁定只能往下」「底部锚定最多上到 12%」这类半途限制。
                             // 横滑判定保留：斜着右滑时纵向那点位移不该顺带把卡拖走。
-                            // v2.79 记录范围一并放开到 0.002…0.998：旧版 0.02/0.995
+                            // v2.79 记录范围一并放开到 0…1：旧版 0.02/0.995
                             // 在拖到极端位置时会把 pos 截断，松手后卡片又"弹"回一点。
                             let rawY = horizontalSwipe
                                 ? base.y
-                                : min(0.998, max(0.002, base.y + v.translation.height / h))
-                            // v2.91 本卡的纵向范围优先（nil 时退回全局 0.002…0.998）
+                                : min(1.0, max(0.0, base.y + v.translation.height / h))
+                            // v2.91 本卡的纵向范围优先（nil 时退回全局 0…1）
                             // v2.93 取消限制：拖动范围 0~1
                             let newY = min(max(rawY, minPosY ?? 0), maxPosY ?? 1)
                             pos = CGPoint(
@@ -396,8 +396,8 @@ struct DraggableFloat<Content: View>: View {
             .onReceive(NotificationCenter.default.publisher(for: .floatResetAll)) { _ in
                 let rx = UserDefaults.standard.object(forKey: "\(key).x") as? Double
                 let ry = UserDefaults.standard.object(forKey: "\(key).y") as? Double
-                let yLo = minPosY ?? 0.002
-                let yHi = maxPosY ?? 0.998
+                let yLo = minPosY ?? 0.0
+                let yHi = maxPosY ?? 1.0
                 let rawY = topLocked ? defaultPos0.y
                        : min(0.93, max(0.10, ry ?? defaultPos0.y))
                 pos = CGPoint(
