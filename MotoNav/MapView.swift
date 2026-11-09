@@ -829,7 +829,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             // 一旦在导航中执行，相机就停在浏览态 —— 车被顶到屏幕上方、
             // 下方全是身后的路，顶部提示还会被换成"继续导航"。
             if !navigating, focusTick > 0, let fc = focusCoord {
-                context.coordinator.userMoved = true; lastUserMovedTime = Date(); context.coordinator.lastUserMovedTime = Date()
+                context.coordinator.userMoved = true; context.coordinator.lastUserMovedTime = Date()
                 let from = searchLinkFrom
                 let dest = MapGeo.toGCJ(fc)
                 context.coordinator.setRegionProgrammatically {
@@ -960,7 +960,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         if northUpTick != context.coordinator.lastNorthUpTick {
             context.coordinator.lastNorthUpTick = northUpTick
             if northUpTick > 0 {
-                context.coordinator.userMoved = true; lastUserMovedTime = Date(); context.coordinator.lastUserMovedTime = Date()
+                context.coordinator.userMoved = true; context.coordinator.lastUserMovedTime = Date()
                 map.camera.heading = 0
             }
         }
@@ -1108,7 +1108,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         if overviewTick != context.coordinator.lastOverviewTick {
             context.coordinator.lastOverviewTick = overviewTick
             if overviewTick > 0, route.count > 1 {
-                context.coordinator.userMoved = true; lastUserMovedTime = Date(); context.coordinator.lastUserMovedTime = Date()
+                context.coordinator.userMoved = true; context.coordinator.lastUserMovedTime = Date()
                 var rect = MKMapRect.null
                 for c in MapGeo.toGCJ(route) {
                     let p = MKMapPoint(c)
