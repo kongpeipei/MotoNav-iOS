@@ -720,7 +720,13 @@ struct ContentView: View {
             navScaleTarget: model.navScaleTarget,
             navScaleTick: model.navScaleTick,
             onUserMovedChanged: { moved in
-                // v2.22 导航中移动地图 → 收起提示卡，只留"继续导航"
+                // v2.87 对齐高德：用户移动地图后等3秒才变成浏览态，不是一碰就变
+                if moved {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        // 3秒后如果还在移动状态，才真正切到浏览态
+                        // （如果期间又回跟随了，就不切了）
+                    }
+                }
                 model.navUserMoved = moved
             },
             routeStartLink: model.routeStartLink,

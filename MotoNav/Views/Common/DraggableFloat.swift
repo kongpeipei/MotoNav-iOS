@@ -364,7 +364,7 @@ struct DraggableFloat<Content: View>: View {
                         dragStartPos = nil
                         // v2.66 松手吸附（不打断跟手，只在手指抬起这一下做一次归位）
                         if !deleting, let cb = onDragEnded, let snapped = cb(pos.y) {
-                            let snappedY = min(max(snapped, minPosY ?? 0.02), maxPosY ?? 0.995)
+                            let snappedY = min(max(snapped, minPosY ?? 0.02), maxPosY ?? 5.0)
                             withAnimation(.easeOut(duration: 0.18)) {
                                 pos.y = snappedY
                             }

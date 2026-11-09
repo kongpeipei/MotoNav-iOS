@@ -1026,33 +1026,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             cam.centerCoordinateDistance = distance
             // v2.92 修复：同上述 bug
             cam.pitch = CGFloat(pitchDeg)
-            // v2.89 开始导航改成两段式入戏（对齐高德/竞品的"先看全局再落到车"）：
-            //   第一段：立刻全览整条路线（让骑手先确认方向和全程）
-            //   第二段：约 0.9 秒后用动画切进跟随视角，落点车在屏幕偏下、heading 随车头
-            // 旧版是直接瞬切到跟随视角，没有任何"全程"交代，一上来就贴着车看。
-            let coord = context.coordinator
-            coord.navIntroInProgress = true
-            if route.count > 1 {
-                var rect = MKMapRect.null
-                for c in MapGeo.toGCJ(route) {
-                    let p = MKMapPoint(c)
-                    rect = rect.union(MKMapRect(x: p.x, y: p.y, width: 0, height: 0))
-                }
-                coord.setRegionProgrammatically {
-                    map.userTrackingMode = .none
-                    map.setVisibleMapRect(rect, edgePadding: viewportInsets, animated: true)
-                }
-            }
-            let flyIn = cam
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak map] in
-                defer { coord.navIntroInProgress = false }
-                guard coord.navActive, let map else { return }
-                coord.setRegionProgrammatically {
-                    map.userTrackingMode = .none
-                    map.setCamera(flyIn, animated: true)
-                }
-                // 飞入落点用的是 0.9 秒前的车位置（误差十几米）；
-                // 松手后跟随逻辑（位移 > 4m 才挪相机）会立刻把它校正到真实位置。
+            // v2.87 取消两段式入戏动画：导航开始直接进入跟随视角，不先全览再飞入
+            context.coordinator.navIntroInProgress = false
+            context.coordinator.setRegionProgrammatically {
+                map.userTrackingMode = .none
+                map.setCamera(cam, animated: true)
             }
         }
         // 导航跟随：导航开始/结束/到达时进入跟随（高德式：地图随车移动+自动旋转）
