@@ -883,7 +883,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 cur = (cur.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
                 context.coordinator.lastAppliedHeading = cur
             }
-            if let applied = context.coordinator.lastAppliedHeading {
+            if let applied = context.coordinator.lastAppliedHeading,
+               abs(applied - context.coordinator.lastWrittenHeading) > 1 {
+                context.coordinator.lastWrittenHeading = applied
                 map.camera.heading = applied
             }
         }
