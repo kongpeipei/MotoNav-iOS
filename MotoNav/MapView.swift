@@ -195,7 +195,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 类别结果刷新计数
     let categoryTick: Int
     /// v2.87 路口红绿灯标注
-    let trafficLights: [AppModel.TrafficLight]
+    let trafficLights: [TrafficLight]
     /// v2.86 搜索结果标注（地图上显示所有搜索结果）
     let searchResultAnnotations: [SearchResultAnnotation]
     /// 导航中（3D 俯仰视角）
@@ -655,7 +655,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastTrafficLightKey = tlKey
             // 先删掉旧的
             for a in map.annotations {
-                if a is AppModel.TrafficLight { map.removeAnnotation(a) }
+                if a is TrafficLight { map.removeAnnotation(a) }
             }
             // 再加新的
             for tl in trafficLights {
@@ -1753,7 +1753,7 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             // v2.87 红绿灯标注
-            if let tl = annotation as? AppModel.TrafficLight {
+            if let tl = annotation as? TrafficLight {
                 let id = "trafficLight"
                 var v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView
                 if v == nil {
