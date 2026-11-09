@@ -4727,12 +4727,7 @@ struct ContentView: View {
             // 是同一批数据的两种呈现，一个在卡内一个在卡外，用户会以为进了两个不同的面板。
             // 快捷目的地只在搜索面板里出现一次（高德也是这个做法）。
             AnyView(searchInputRow)
-            // v2.63 高德式 6 宫格：搜索框下面一排彩色圆分类，点一下直接搜周边。
-            // 旧版只有键盘上方的横向 chips 条，一是要滚，二是颜色没分层，
-            // 骑行停在路边想找加油站要滑两下才看到。
-            if searchFocused && searchText.isEmpty && slotTarget == nil {
-                AnyView(quickCategoryGrid)
-            }
+            // v2.87 删掉6宫格按钮（用户反馈功能不能用）
             // v1.69：搜索框聚焦且未输入 → 快捷卡片（家/公司/+）+ 历史搜索记录（高德样式）
             // v1.97 常用地点设置态不弹快捷卡片（避免误点跳到导航）
             if searchFocused && searchText.isEmpty && slotTarget == nil {

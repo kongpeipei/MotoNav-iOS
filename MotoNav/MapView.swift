@@ -109,7 +109,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     // v2.94 跟随模式下定位点放屏幕正中心（苹果地图那样）：从 0.15 改成 0
     // v2.86 定位点位置：高德同款，在屏幕下方（不是正中间）
     // 0.0 = 正中间，0.3 = 下方 30%，0.5 = 下方 50%
-    static let navCameraForwardRatio: Double = 0.4
+    static let navCameraForwardRatio: Double = 0.35
 
     /// v2.50 围绕某点构造一个"边长 meters 见方"的地图矩形。
     ///
@@ -941,10 +941,26 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         // v2.87 用户平移地图后 3 秒自动回跟随模式（导航态+巡航态）
         if (navigating || cruise), context.coordinator.userMoved,
-           Date().timeIntervalSince(context.coordinator.lastUserMovedTime) > 3 {
+           Date().timeIntervalSince(context.coordinator.lastUserMovedTime) > 3,
+           let loc = userLocation {
             context.coordinator.userMoved = false
+            let screenH = map.bounds.height
+            let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: screenH)
+            let heading = map.camera.heading
             context.coordinator.setRegionProgrammatically {
-                // 恢复跟随
+                // 恢复跟随：把相机移回跟随位置
+                map.userTrackingMode = navigating ? .none : .followWithHeading
+                var cam = map.camera
+                cam.centerCoordinate = MapGeo.toGCJ(
+                    navigating
+                        ? MapViewRepresentable.forwardCoordinate(
+                            loc,
+                            meters: distance * MapViewRepresentable.navCameraForwardRatio,
+                            bearingDeg: heading)
+                        : loc)
+                cam.centerCoordinateDistance = distance
+                cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
+                map.setCamera(cam, animated: true)
             }
         }
         // v2.32 MapKit 3D 俯视加固：部分机型在 followWithHeading 下会把 pitch 重置回 0
@@ -1085,7 +1101,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             cam.centerCoordinate = MapGeo.toGCJ(fwd)
             cam.centerCoordinateDistance = distance
             // v2.92 修复：同上述 bug
-            cam.pitch = CGFloat(pitchDeg)
+            // v2.87 恢复默认 45 度逻辑：pitchDeg=0 时默认 3D 45度
+            cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
             // v2.87 取消两段式入戏动画：导航开始直接进入跟随视角，不先全览再飞入
             context.coordinator.navIntroInProgress = false
             context.coordinator.setRegionProgrammatically {
