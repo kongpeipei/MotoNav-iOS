@@ -3224,21 +3224,7 @@ struct ContentView: View {
                                 .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
                                 .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
                         }
-                        Button {
-                            haptic()
-                            if model.cruiseMode { model.exitCruise() }
-                            model.togglePitch()
-                        } label: {
-                            Text(model.pitchDeg > 0 ? "2D" : "3D")
-                                .font(.system(size: 15, weight: .heavy))
-                                .foregroundStyle(model.pitchDeg > 0 ? .white : .primary)
-                                .frame(width: 44, height: 44)
-                                .background(model.pitchDeg > 0
-                                            ? AnyShapeStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
-                                            : AnyShapeStyle(Color.white), in: Circle())
-                                .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 1))
-                                .shadow(color: .black.opacity(0.25), radius: 3, y: 2)
-                        }
+                        // v2.88 删除3D切换按钮
                     }
         }
     }
