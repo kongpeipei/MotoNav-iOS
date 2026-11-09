@@ -1617,7 +1617,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             scheduleScale(mapView)   // v2.02 地图稳定后再算比例尺（去抖，避免每帧改状态）
             // v2.86 3D视角自动切换：缩放够近时自动从2D变45度3D，缩放够远时变回去
             // 巡航和导航跟随模式下生效
-            if navActive || cruiseMode {
+            if navActive || cruise {
                 let altitude = mapView.camera.centerCoordinateDistance
                 var targetPitch: CGFloat = 45
                 if altitude > 1000 {
