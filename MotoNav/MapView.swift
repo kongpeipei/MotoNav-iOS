@@ -1355,7 +1355,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// v2.01 俯仰角记忆（pitchDeg 变化才应用，避免覆盖用户双指俯仰）
         var lastPitchDeg: Double = 0
         /// v2.86 航向记忆（只在变化超过1°时更新相机）
-        var lastAppliedHeading: Double? = nil
         var lastWrittenHeading: Double = 0
         /// v2.01 比例尺上次文本（只在变化时回调，避免每帧刷新 SwiftUI）
         var lastScaleText = ""
