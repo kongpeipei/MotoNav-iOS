@@ -173,6 +173,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// 手机朝向（度），驱动地图跟随旋转
     let heading: Double
     /// 搜索预览点（绿色高亮）
+    let preview: CLLocationCoordinate2D?
     /// 市区加油站（橙色"油"标注）
     let gasStations: [CLLocationCoordinate2D]
     /// 加油站全览请求计数（+1 触发缩放显示全部加油站 + 当前位置）
@@ -290,7 +291,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         // v2.66 用户要求删除地图上的绿色道路线：MapKit 的 showsTraffic 会把畅通路段
         // 整条染成绿色，和我们的绿色路线叠在一起，屏幕上出现两套绿。
         // 关掉后底图不再自带绿/黄/红路况着色；路况仍由我们自绘的 trafficColors 图层表达。
-        cfg.showsTraffic = true  // v2.87 试开路况显示，不好用再关
+        cfg.showsTraffic = false
         // ② POI 白名单（v2.60 扩充）：原来只留 6 类刚需，地图显得空；补上餐饮、购物、
         // 公园、酒店、银行，层次更接近高德，同时仍不放电影院/夜生活这类扎堆的类别
         cfg.pointOfInterestFilter = MapViewRepresentable.standardPOIFilter
@@ -361,9 +362,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.planning = !choiceRoutes.isEmpty && !navigating
         context.coordinator.navigating = navigating
         // v2.58 导航态底图切 flat：realistic 会给每栋建筑画出有厚度的灰色块，
-        // v2.87 3D的时候道路也要3D：导航态也用 realistic（有立体感的道路和建筑）
-        // 之前导航态用 flat（平的），现在改成 realistic
-        let wantRealistic = true
+        // 导航视角下满屏都是立体灰砖，看着像调试图；高德导航用的是平整浅灰。
+        // 只在状态翻转时重建 configuration（每次都建会打断地图渲染）。
+        let wantRealistic = !navigating
         if context.coordinator.lastRealisticElevation != wantRealistic {
             context.coordinator.lastRealisticElevation = wantRealistic
             let navCfg = MKStandardMapConfiguration(
@@ -371,7 +372,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 emphasisStyle: .default)
             // v2.60 翻转重建时把路况与 POI 一起补上：旧版这里漏设，
             // 导航态一进一出重建 configuration 后白名单和路况就被打回苹果默认
-            navCfg.showsTraffic = true   // v2.87 试开路况显示，不好用再关
+            navCfg.showsTraffic = false   // v2.66 同上：底图不再自带绿色道路线
             navCfg.pointOfInterestFilter = MapViewRepresentable.navPOIFilter
             map.preferredConfiguration = navCfg
         }
@@ -517,6 +518,29 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
+        // 搜索预览点（绿色高亮）+ 跳转到搜索结果
+        let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
+        let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
+        if previewKey != context.coordinator.lastPreviewKey {
+            context.coordinator.lastPreviewKey = previewKey
+            if let p = preview {
+                context.coordinator.setRegionProgrammatically {
+                    map.userTrackingMode = .none
+                    // v2.50 同地点卡：点落在可见带中心，不被底部搜索卡遮住
+                    map.setVisibleMapRect(
+                        MapViewRepresentable.centerRect(MapGeo.toGCJ(p), meters: 1200),
+                        edgePadding: viewportInsets, animated: true)
+                }
+            }
+        }
+        if let p = preview {
+            if previews.isEmpty {
+                map.addAnnotation(PreviewAnnotation(coordinate: p))
+            } else if let a = previews.first {
+                a.update(p)
+            }
+        } else {
+            previews.forEach { map.removeAnnotation($0) }
         }
         // 加油站标注（v2.12：内容键相同直接跳过）
         var gasHasher = Hasher()
@@ -610,19 +634,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.addAnnotation(a)
             }
         }
-        // v2.87 加油站标注：自动添加/删除
-        let gasHasher = gasStations.count
-        if gasHasher != context.coordinator.lastGasCount {
-            context.coordinator.lastGasCount = gasHasher
-            // 先清掉旧的
-            for a in map.annotations {
-                if a is GasStationAnnotation { map.removeAnnotation(a) }
-            }
-            // 再加新的
-            for g in gasStations {
-                map.addAnnotation(GasStationAnnotation(coordinate: MapGeo.toGCJ(g)))
-            }
-        }
         // v2.02 折线只在"真的变了"时重建
         // 旧实现每次 updateUIView 都 removeOverlays + 重建全部 MKPolyline，而 updateUIView 每秒
         // 会被定位/状态更新触发多次（一次导航卡刷新就可能几十次）→ 折线反复消失重现（雪花闪烁）
@@ -703,26 +714,6 @@ struct MapViewRepresentable: UIViewRepresentable {
                     context.coordinator.trafficColors.append(span.color)
                     map.addOverlay(poly)
                 }
-                // v2.87 车道箭头：只在路口（转弯点）画白色箭头，指示转弯方向
-                var arrows: [LaneArrowAnnotation] = []
-                if gRoute.count >= 3 {
-                    for i in 1..<(gRoute.count - 1) {
-                        // 计算相邻两段的夹角，>30度算转弯路口
-                        let a = gRoute[i-1], b = gRoute[i], c = gRoute[i+1]
-                        let angle1 = atan2(b.latitude - a.latitude, b.longitude - a.longitude)
-                        let angle2 = atan2(c.latitude - b.latitude, c.longitude - b.longitude)
-                        var diff = abs(angle2 - angle1) * 180 / .pi
-                        if diff > 180 { diff = 360 - diff }
-                        if diff > 30 {  // 转弯路口，画箭头
-                            let heading = MapViewRepresentable.bearing(from: b, to: c)
-                            arrows.append(LaneArrowAnnotation(coordinate: b, heading: heading))
-                        }
-                    }
-                }
-                // 清掉旧箭头，加新箭头
-                let oldArrows = map.annotations.compactMap { $0 as? LaneArrowAnnotation }
-                map.removeAnnotations(oldArrows)
-                map.addAnnotations(arrows)
             }
             // v1.99 足迹回放：蓝色虚线（不受路线清空影响）
             if footprint.count >= 2 {
@@ -811,12 +802,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                     let minPad = 200 * MKMapPointsPerMeterAtLatitude(a.latitude)
                     let padX = max(r.width * 0.12, minPad)
                     let padY = max(r.height * 0.12, minPad)
-                    // v2.87 起点偏下、终点偏上：底部 padding 大一点，地图中心往上移
-                    var insets = viewportInsets
-                    insets.bottom = 200  // 底部多留空间，起点就在屏幕下方
-                    insets.top = 80      // 顶部少留空间，终点就在屏幕上方
                     map.setVisibleMapRect(r.insetBy(dx: -padX, dy: -padY),
-                                          edgePadding: insets, animated: true)
+                                          edgePadding: viewportInsets, animated: true)
                 }
             }
         }
@@ -1187,9 +1174,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera = cam
             }
         }
-        // v2.87 自动夜间模式：晚上18点到早上6点用深色，其他时间用浅色（试开，不好用再回退）
-        let hour = Calendar.current.component(.hour, from: Date())
-        let wantDark = (hour >= 18 || hour < 6) ? true : (colorScheme == .dark)
+        // v1.63 深色模式：导航中强制深色底图（高德夜间效果）；非导航跟随外观设置
+        // v2.12：外观可手动切换（自动/浅色/深色），这里跟随 SwiftUI 的 colorScheme
+        // v2.37 G5 导航不再强制深色：白天浅色外观下导航用浅色地图，
+        // 与浅色底卡（systemBackground）统一，不再"白卡叠黑图"；深色外观仍深色
+        let wantDark = colorScheme == .dark
         if wantDark != context.coordinator.lastDarkState {
             context.coordinator.lastDarkState = wantDark
             map.overrideUserInterfaceStyle = wantDark ? .dark : .light
@@ -1331,7 +1320,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// 当前是否仍在导航（延迟回调里用它确认用户没中途退出）
         var navActive = false
         var cruise = false
-        var lastGasCount = -1
         /// v2.25 高亮内容键（标注增删）
         var lastSearchHitKey = ""
         /// v2.25 视野跳转内容键（与标注分开，避免互相覆盖）
@@ -1599,19 +1587,17 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// v2.84 手指落下前的画面中心，用来判断这次到底"真拖动"了没有
         var panStartCenter: CLLocationCoordinate2D?
         var panStartSpan: MKCoordinateSpan?
-        var panStartHeading: CGFloat = 0
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             panStartCenter = mapView.centerCoordinate
             panStartSpan = mapView.region.span
-            panStartHeading = mapView.camera.heading  // v2.87 记录初始 heading
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             scheduleScale(mapView)   // v2.02 地图稳定后再算比例尺（去抖，避免每帧改状态）
-            // v2.87 3D视角自动切换：缩放够近时自动从2D变45度3D，缩放够远时变回去
-            // 巡航和导航跟随模式下生效；用户手动操作过就不要强制改回去
-            if (navActive || cruise) && !context.coordinator.userMoved {
+            // v2.86 3D视角自动切换：缩放够近时自动从2D变45度3D，缩放够远时变回去
+            // 巡航和导航跟随模式下生效
+            if navActive || cruise {
                 let altitude = mapView.camera.centerCoordinateDistance
                 var targetPitch: CGFloat = 45
                 if altitude > 1000 {
@@ -1646,9 +1632,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                                                    longitude: mapView.centerCoordinate.longitude))
                     let zoomed = s0.latitudeDelta > 0
                         && abs(mapView.region.span.latitudeDelta - s0.latitudeDelta) / s0.latitudeDelta > 0.15
-                    // v2.87 旋转也算用户手动操作：heading 变化 >5度就算
-                    let rotated = abs(mapView.camera.heading - panStartHeading) > 5
-                    if moved > 40 || zoomed || rotated { userMoved = true }
+                    if moved > 40 || zoomed { userMoved = true }
                 } else {
                     userMoved = true
                 }
@@ -1687,39 +1671,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            // v2.87 加油站标注
-            if annotation is GasStationAnnotation {
-                let id = "gasStation"
-                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                if v == nil {
-                    v = MKAnnotationView(annotation: annotation, reuseIdentifier: id)
-                    v?.frame = CGRect(x: 0, y: 0, width: 24, height: 24)
-                }
-                v?.annotation = annotation
-                v?.canShowCallout = false
-                v?.image = UIImage(systemName: "fuelpump.fill")?
-                    .withTintColor(.systemGreen, renderingMode: .alwaysOriginal)
-                    .applyingSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: 16, weight: .bold))
-                v?.displayPriority = .defaultLow
-                return v
-            }
-            // v2.87 车道箭头标注
-            if let la = annotation as? LaneArrowAnnotation {
-                let id = "laneArrow"
-                var v = mapView.dequeueReusableAnnotationView(withIdentifier: id)
-                if v == nil {
-                    v = MKAnnotationView(annotation: la, reuseIdentifier: id)
-                    v?.frame = CGRect(x: 0, y: 0, width: 24, height: 24)
-                }
-                v?.annotation = la
-                v?.canShowCallout = false
-                // 白色箭头图标，旋转到路线方向
-                let arrowImage = UIImage(systemName: "arrow.up")?.withTintColor(.white, renderingMode: .alwaysOriginal)
-                v?.image = arrowImage
-                v?.transform = CGAffineTransform(rotationAngle: CGFloat((la.heading - 90) * .pi / 180))
-                v?.displayPriority = .defaultLow
-                return v
-            }
             // v2.86 搜索结果标注
             if annotation is SearchResultAnnotation {
                 let id = "searchResult"
@@ -1779,6 +1730,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v.markerTintColor = .systemTeal
                 v.glyphText = String(ta.name.prefix(1))
                 v.titleVisibility = .visible
+                v.canShowCallout = false
+                return v
+            }
+            if let pa = annotation as? PreviewAnnotation {
+                // v2.58 搜索目的地改脉冲标注：绿圆 + 白勾 + 下方"搜索目标"标签 + 外圈呼吸扩散环
+                let id = "previewPulse"
+                let v = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? PulseHitAnnotationView
+                    ?? PulseHitAnnotationView(annotation: pa)
+                v.annotation = pa
                 v.canShowCallout = false
                 return v
             }
@@ -1980,6 +1940,22 @@ final class RouteEndAnnotation: NSObject, MKAnnotation {
         coordinate = gcj
         wgs = MapGeo.toWGS(gcj)
     }
+}
+
+final class PreviewAnnotation: NSObject, MKAnnotation {
+    private var wgs: CLLocationCoordinate2D
+    var coordinate: CLLocationCoordinate2D { MapGeo.toGCJ(wgs) }
+    init(coordinate: CLLocationCoordinate2D) {
+        self.wgs = coordinate
+        super.init()
+    }
+    /// 坐标变化时手动发 KVO（计算属性不会自动通知，MapKit 靠 KVO 移动标注）
+    func update(_ c: CLLocationCoordinate2D) {
+        willChangeValue(forKey: "coordinate")
+        wgs = c
+        didChangeValue(forKey: "coordinate")
+    }
+    var title: String? { "搜索目标" }
 }
 
 /// v2.25 搜索选点高亮（坐标 + 名称）
@@ -2205,23 +2181,3 @@ extension MapViewRepresentable {
 
 
 
-
-/// v2.87 车道箭头标注：在路线上画白色箭头，指示前进方向
-final class LaneArrowAnnotation: NSObject, MKAnnotation {
-    let coordinate: CLLocationCoordinate2D
-    let heading: CLLocationDirection  // 箭头方向（度）
-    init(coordinate: CLLocationCoordinate2D, heading: CLLocationDirection) {
-        self.coordinate = coordinate
-        self.heading = heading
-        super.init()
-    }
-}
-
-/// v2.87 加油站标注
-final class GasStationAnnotation: NSObject, MKAnnotation {
-    let coordinate: CLLocationCoordinate2D
-    init(coordinate: CLLocationCoordinate2D) {
-        self.coordinate = coordinate
-        super.init()
-    }
-}

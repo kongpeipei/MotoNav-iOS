@@ -412,8 +412,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var nextJunctionIdx = -1
     /// v2.87 路口自动缩放：当前是否已经拉近视野
     private var junctionZoomedIn = false
-    /// v2.87 导航中自动显示前方加油站
-    @Published var gasStations: [CLLocationCoordinate2D] = []
     /// v2.87 上次搜索加油站的时间
     private var lastGasSearchTime = Date.distantPast
     /// v2.22 顶部路线提示（高德式："请先去往出口" / "前方xx米路口直行"）
