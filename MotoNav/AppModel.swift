@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CoreLocation
+import MapKit
 import AVFoundation
 import UserNotifications
 import UIKit
