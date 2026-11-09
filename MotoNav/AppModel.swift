@@ -222,7 +222,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var junctionZoomedIn = false
     private var junctionZoomedInTurn = -1
     /// v2.87 导航中自动显示前方加油站
-    @Published var gasStations: [CLLocationCoordinate2D] = []
     private var lastGasSearchTime = Date.distantPast
     /// 已做过"前方xx米右转"远提示的转向序号（避免重复播报）
     private var farAnnounced: Set<Int> = []

@@ -37,16 +37,6 @@ final class LaneArrowAnnotation: NSObject, MKAnnotation {
     }
 }
 
-/// v2.87 加油站标注
-final class GasAnnotation: NSObject, MKAnnotation {
-    let coordinate: CLLocationCoordinate2D
-    let wgsKey: String
-    init(coordinate: CLLocationCoordinate2D) {
-        self.coordinate = coordinate
-        self.wgsKey = "\(coordinate.latitude),\(coordinate.longitude)"
-    }
-}
-
 /// 轻量地图封装：用户位置 + 按类型着色的点位标注 + 导航路线 + 沿途点位高亮 + 长按选点 + 搜索预览点 + 加油站
 struct MapViewRepresentable: UIViewRepresentable {
     /// v2.28 「1 厘米 = N 米」→ 相机到地图中心的地面距离（米）
@@ -667,8 +657,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             // 再加新的
             for c in gasStations {
-                let gcj = CoordConv.wgs2gcj(c.latitude, c.longitude)
-                let anno = GasAnnotation(coordinate: gcj)
+                let id = "\(c.latitude),\(c.longitude)"
+                let anno = GasAnnotation(id: id, coordinate: c)
                 map.addAnnotation(anno)
             }
         }
@@ -1419,7 +1409,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         var lastPlaceKey: Int?
         var lastCatKey: Int?
         var lastSearchResultKey = 0
-        var lastGasKey = 0
         var lastEndKey = ""
         /// v2.14 首屏加载完成只上报一次（详见 mapViewDidFinishRenderingMap）
         var loadReadyReported = false
