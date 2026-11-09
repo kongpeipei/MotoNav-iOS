@@ -2859,13 +2859,14 @@ struct ContentView: View {
                         ForEach(model.serviceTips.prefix(6)) { tip in
                             Button {
                                 haptic()
-                                model.addWaypoint(name: tip.name, lat: tip.lat, lon: tip.lon)
+                                // 点击直接导航
+                                model.destName = tip.name
+                                model.destLat = tip.lat
+                                model.destLon = tip.lon
+                                model.startRoutePlanning()
                                 model.clearServices()
                             } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(.blue)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(tip.name).font(.caption).lineLimit(1)
                                             .foregroundStyle(.primary)
@@ -2873,6 +2874,12 @@ struct ContentView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     Spacer()
+                                    // 显示距离
+                                    if let dist = tip.distance {
+                                        Text(dist < 1000 ? "\(Int(dist))米" : String(format: "%.1f公里", dist/1000))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 .padding(.vertical, 5)
                                 .contentShape(Rectangle())

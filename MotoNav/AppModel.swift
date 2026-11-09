@@ -146,6 +146,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         let sub: String
         let lat: Double
         let lon: Double
+        var distance: Double?
         var id: String { "\(name)#\(lat)#\(lon)" }
     }
 
@@ -766,7 +767,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let dist = p["distance"] as? String ?? ""
                 var sub = addr.isEmpty ? (p["type"] as? String ?? "地点") : addr
                 if !dist.isEmpty { sub += " · 距此\(Int(Double(dist) ?? 0))米" }
-                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon))
+                out.append(AmapTip(name: name, sub: sub, lat: wlat, lon: wlon, distance: Double(dist)))
             }
             return out
         } catch {
@@ -3483,7 +3484,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             // v2.27（优化建议 #10）：远提示改用 GuidanceEvent 的距离分级，
             // 与顶部提示卡共用同一套取整规则 —— 以前这里报"前方 137 米"、
             // 卡片显示"前方 140 米"，同一件事两个数字。现在两者完全一致。
-            if speechMode.farPrompt && best < 900 && !farAnnounced.contains(idx) {
+            if speechMode.farPrompt && best < 1500 && !farAnnounced.contains(idx) {
                 farAnnounced.insert(idx)
                 let road = t.roadName.isEmpty ? "" : "，进入\(t.roadName)"
                 // 用事件里的分级距离（>300 米不报米数）
@@ -3491,7 +3492,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                 let speakText = d.map { "前方\($0)\(text)\(road)" } ?? "前方\(text)\(road)"
                 speak(speakText)
                 status = "导航：\(speakText) · 余\(Int(toDest / 1000))公里"
-            } else if best < 100 {
+            } else if best < 200 {
                 // v2.93 转向播报加中间档：100米确认
                 lastTurnSpoken = idx
                 if speechMode.verbose {
@@ -3501,7 +3502,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
                     speak("\(text)，距您\(Int(best))米")
                 }
                 status = "导航：\(text) 距\(Int(best))米 · 余\(Int(toDest / 1000))公里"
-            } else if best < 50 && !closeAnnounced.contains(idx) {
+            } else if best < 100 && !closeAnnounced.contains(idx) {
                 // v2.93 转向播报加执行档：50米执行提醒
                 closeAnnounced.insert(idx)
                 speak(text)
