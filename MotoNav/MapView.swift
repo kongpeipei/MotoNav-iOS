@@ -1714,7 +1714,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 v?.annotation = la
                 v?.canShowCallout = false
                 // 白色箭头图标，旋转到路线方向
-                let arrowImage = makeLaneArrow()
+                let arrowImage = UIImage(systemName: "arrow.up")?.withTintColor(.white, renderingMode: .alwaysOriginal)
                 v?.image = arrowImage
                 v?.transform = CGAffineTransform(rotationAngle: CGFloat((la.heading - 90) * .pi / 180))
                 v?.displayPriority = .defaultLow
@@ -1911,32 +1911,6 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             return MKOverlayRenderer(overlay: overlay)
         }
-    }
-}
-
-/// v2.87 生成车道箭头图标（白色实心小箭头）
-private func makeLaneArrow() -> UIImage {
-    let size: CGFloat = 24
-    let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
-    return renderer.image { ctx in
-        let c = ctx.cgContext
-        let cx = size / 2
-        let arrow = UIBezierPath()
-        arrow.move(to: CGPoint(x: cx, y: 2))
-        arrow.addLine(to: CGPoint(x: cx - 7, y: 16))
-        arrow.addLine(to: CGPoint(x: cx - 2, y: 16))
-        arrow.addLine(to: CGPoint(x: cx - 2, y: 22))
-        arrow.addLine(to: CGPoint(x: cx + 2, y: 22))
-        arrow.addLine(to: CGPoint(x: cx + 2, y: 16))
-        arrow.addLine(to: CGPoint(x: cx + 7, y: 16))
-        arrow.close()
-        c.setFillColor(UIColor.white.cgColor)
-        c.addPath(arrow.cgPath)
-        c.fillPath()
-        c.setLineWidth(1)
-        c.setStrokeColor(UIColor.black.cgColor)
-        c.addPath(arrow.cgPath)
-        c.strokePath()
     }
 }
 
