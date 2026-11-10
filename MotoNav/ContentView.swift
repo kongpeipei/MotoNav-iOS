@@ -207,10 +207,6 @@ struct ContentView: View {
                 AnyView(mapLayer)
                 // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
                 CruiseButton(model: model, selectedTab: selectedTab, searchExpanded: searchExpanded, tapPlace: tapPlace)
-                // v2.88 定位点脉冲动画，和屏幕中心的蓝色三角形重合
-                if model.navigating || model.cruiseMode {
-                    PulseCircle()
-                }
                 // v2.78 左上角品牌水印（"机车地图"）。
                 // 放在地图层正上方、其余浮层之下：卡片和提示条照常盖住它，
                 // 不会在导航态顶部条里插一行字；搜索整屏态直接不显示（那块被白色页面盖住）。
@@ -4342,6 +4338,11 @@ struct ContentView: View {
         overviewCountdown = 13
         overviewTask?.cancel()
         overviewTask = nil
+        // v2.88 取消全览时同时关掉加油站面板，回到导航跟随
+        if model.gasPanelVisible {
+            model.gasPanelVisible = false
+            model.gasStations = []
+        }
         model.navigateFollowTick += 1
         // v2.94 修复：取消全览后定位点不在屏幕可见范围。
         // 全览时相机被缩放到路线中心，单加 navigateFollowTick 有时不触发相机重置

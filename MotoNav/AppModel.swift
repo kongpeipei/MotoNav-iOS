@@ -3832,7 +3832,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     // 从 [20,32,48,68,95,130] 调到 [30,45,65,90,120,160]
     // v2.94 导航视野再拉远一档：[30,45,65,90,120,160] → [40,60,85,120,160,200]
     // v2.85 跟随模式视野增加一档（整体拉远）
-    static let navScaleSteps = [50, 75, 105, 145, 190, 240]
+    static let navScaleSteps = [35, 55, 80, 110, 150, 200]
     /// 相邻档位的升级边界（km/h），与新档位一一对应
     // v2.92 升档边界随新 steps 表调整：低速起步就有足够视野，速度越快看得越远
     private static let navScaleUpBounds = [12, 20, 32, 48, 65]
