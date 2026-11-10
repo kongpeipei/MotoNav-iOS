@@ -5647,7 +5647,12 @@ final class VoiceSearchService: ObservableObject {
 struct CruiseButton: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        if !model.navigating && !model.cruiseMode {
+        // v2.88 巡航按钮只在首页显示（搜索框出现时）：不在导航/巡航/搜索展开/选点/路线规划/我的tab
+        if !model.navigating && !model.cruiseMode,
+           selectedTab == 0,
+           !searchExpanded,
+           tapPlace == nil,
+           model.route.isEmpty {
             DraggableFloat(key: "cruisebutton", defaultPos: CGPoint(x: 0.85, y: 0.12)) {
                 Button(action: {
                     model.cruiseMode = true
