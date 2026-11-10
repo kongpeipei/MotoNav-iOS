@@ -1104,12 +1104,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             }
         }
-        // v2.88 巡航态也强制保持45度3D视角，全览时不执行
+        // v2.88 巡航态也强制保持45度3D视角，视野和导航态同步，全览时不执行
         if cruise, !navigating, !showRouteOverview {
             let targetPitch: CGFloat = 45
-            if abs(map.camera.pitch - targetPitch) > 1 {
+            let targetDistance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: map.bounds.height)
+            if abs(map.camera.pitch - targetPitch) > 1 || abs(map.camera.centerCoordinateDistance - targetDistance) > 50 {
                 var cam = map.camera
                 cam.pitch = targetPitch
+                cam.centerCoordinateDistance = targetDistance
                 map.setCamera(cam, animated: true)
             }
         }
