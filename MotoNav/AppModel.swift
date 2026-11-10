@@ -405,7 +405,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// v2.22 导航中用户手动拖动了地图（提示卡切换为"继续导航"）
     @Published var navUserMoved = false
     /// v2.22 导航视野档位目标（比例尺 1 厘米对应的米数：50 / 500）
-    @Published var navScaleTarget = 50
+    @Published var navScaleTarget = 35
     /// v2.81 转弯缩放的滞回状态：0 = 远离路口，1 = 中档（<250 m），2 = 近档（<100 m）
     private var navNearZone = 0
     /// v2.81 供界面用：当前是否处于"临近转弯"区间。
@@ -3861,7 +3861,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             idx = 0
             for b in AppModel.navScaleUpBounds where kph >= Double(b) { idx += 1 }
         } else {
-            idx = steps.firstIndex(of: navScaleTarget) ?? 2
+            idx = steps.firstIndex(of: navScaleTarget) ?? 0
         }
         // 升档：超过边界 + 滞回带
         if !snap, idx < steps.count - 1,
