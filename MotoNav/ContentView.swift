@@ -91,6 +91,8 @@ struct ContentView: View {
     @State private var tapPlace: TapPlaceInfo?
     /// v1.81.2 退出导航确认态：点状态卡左侧×后切换为"退出导航/取消"两按钮
     @State private var showExitConfirm = false
+    /// v2.88 巡航退出二次确认
+    @State private var showExitCruiseConfirm = false
     /// v2.51 从导航底卡"搜索"进入退出确认：确认后要回到首页并聚焦搜索框
     // v1.81.4 导航全览：导航退出卡"全览"→ 缩放显示全程路线 + 固定全览/取消全览(13s倒计时) 操作条
     @State private var showRouteOverview = false
@@ -3352,16 +3354,24 @@ struct ContentView: View {
         // v2.87 巡航模式底部白卡：退出 + 已巡航 + 搜索
         if model.cruiseMode {
             HStack(spacing: 16) {
-                // 左边：退出按钮
+                // 左边：退出按钮（二次确认）
                 Button {
                     haptic()
-                    model.exitCruise()
+                    showExitCruiseConfirm = true
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(.black.opacity(0.7))
                 }
                 .buttonStyle(.plain)
+                .alert("退出巡航？", isPresented: $showExitCruiseConfirm) {
+                    Button("取消", role: .cancel) {}
+                    Button("退出", role: .destructive) {
+                        model.exitCruise()
+                    }
+                } message: {
+                    Text("退出后将停止巡航记录")
+                }
                 // 中间：巡航信息（时间 + 路程）
                 if let startTime = model.cruiseStartTime {
                     let duration = Int(Date().timeIntervalSince(startTime))
