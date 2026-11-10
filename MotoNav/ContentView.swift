@@ -207,6 +207,10 @@ struct ContentView: View {
                 AnyView(mapLayer)
                 // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
                 CruiseButton(model: model, selectedTab: selectedTab, searchExpanded: searchExpanded, tapPlace: tapPlace)
+                // v2.88 导航/巡航态定位点脉冲动画，屏幕中心
+                if model.navigating || model.cruiseMode {
+                    PulseCircle()
+                }
                 // v2.78 左上角品牌水印（"机车地图"）。
                 // 放在地图层正上方、其余浮层之下：卡片和提示条照常盖住它，
                 // 不会在导航态顶部条里插一行字；搜索整屏态直接不显示（那块被白色页面盖住）。
@@ -5673,6 +5677,21 @@ final class VoiceSearchService: ObservableObject {
         try? s.setActive(false, options: .notifyOthersOnDeactivation)
         // 还给 TTS：AppModel 的 audioSessionActive 已置 false，下次播报会重新激活 Playback
         try? s.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+    }
+}
+
+// v2.88 定位点脉冲动画圆圈
+struct PulseCircle: View {
+    @State private var animate = false
+    var body: some View {
+        Circle()
+            .stroke(Color.blue.opacity(animate ? 0 : 0.5), lineWidth: 2)
+            .frame(width: animate ? 80 : 20, height: animate ? 80 : 20)
+            .onAppear {
+                withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
+                    animate = true
+                }
+            }
     }
 }
 
