@@ -904,7 +904,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // v2.88 用户平移地图后 1 秒自动回跟随模式（导航态+巡航态）
-        if (navigating || cruise), context.coordinator.userMoved,
+        // 全览模式下不执行自动回跟随，防止全览被拉回定位点
+        if (navigating || cruise), context.coordinator.userMoved, !showRouteOverview,
            Date().timeIntervalSince(context.coordinator.lastUserMovedTime) > 1,
            let loc = userLocation {
             context.coordinator.userMoved = false
