@@ -3426,7 +3426,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// v2.87 搜索附近加油站
-    private func searchGasStationsNear(_ coord: CLLocationCoordinate2D) {
+    func searchGasStationsNear(_ coord: CLLocationCoordinate2D) {
         Task {
             let tips = await amapKeywordSearch("加油站", lat: coord.latitude, lon: coord.longitude, radius: 5000)
             gasStations = tips.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
