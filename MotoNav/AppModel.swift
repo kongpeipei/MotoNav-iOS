@@ -3503,11 +3503,7 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
             endLiveActivity()
             return
         }
-        // v2.87 每隔30秒搜索5公里内加油站
-        if navigating, Date().timeIntervalSince(lastGasSearchTime) > 30 {
-            lastGasSearchTime = Date()
-            searchGasStationsNear(coord)
-        }
+        // v2.88 取消导航中自动搜索加油站，改成全览按钮手动触发
         // 接近终点播报（高德式：剩余500米提示即将到达）
         if toDest < 500 && !arriveAnnounced {
             arriveAnnounced = true

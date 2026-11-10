@@ -4080,12 +4080,14 @@ struct ContentView: View {
                     }
                 }
 
-                // v2.92 恢复右侧全览按钮（只一个，不分全览+换路线两个）
+                // v2.88 右侧加油站按钮（原来全览按钮，改成显示附近加油站）
                 Button {
                     haptic()
-                    startRouteOverview()
+                    if let loc = model.currentLocation {
+                        model.searchGasStationsNear(loc)
+                    }
                 } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    Image(systemName: "fuelpump.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(mainFg)
                         .frame(width: 44, height: 38)
