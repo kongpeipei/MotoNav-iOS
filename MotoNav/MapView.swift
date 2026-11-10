@@ -201,6 +201,8 @@ struct MapViewRepresentable: UIViewRepresentable {
     let navigating: Bool
     /// 导航中路线全览请求计数（v1.81.4 导航退出卡"全览"）
     let overviewTick: Int
+    /// 是否正在全览模式：全览时关闭自动跟随，防止地图乱跳
+    let showRouteOverview: Bool
     /// v1.84 巡航模式：非导航下定位点跟随（300m 位移触发后持续）
     let cruise: Bool
     let cruiseTick: Int
@@ -911,7 +913,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             let heading = map.camera.heading
             context.coordinator.setRegionProgrammatically {
                 // 恢复跟随：把相机移回跟随位置
-                map.userTrackingMode = .followWithHeading
+                // v2.88 全览模式下关闭自动跟随，防止地图乱跳
+                if showRouteOverview {
+                    map.userTrackingMode = .none
+                } else {
+                    map.userTrackingMode = .followWithHeading
+                }
                 var cam = map.camera
                 cam.centerCoordinate = MapGeo.toGCJ(
                     navigating

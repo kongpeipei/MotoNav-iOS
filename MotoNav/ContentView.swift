@@ -607,6 +607,7 @@ struct ContentView: View {
             navigateFollowTick: model.navigateFollowTick,
             navigating: model.navigating,
             overviewTick: model.overviewTick,
+            showRouteOverview: showRouteOverview,
             cruise: model.cruiseMode,
             cruiseTick: model.cruiseTick,
             zoomInTick: model.zoomInTick,
