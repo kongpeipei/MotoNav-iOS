@@ -1096,6 +1096,15 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             }
         }
+        // v2.88 巡航态也强制保持45度3D视角
+        if cruise, !navigating {
+            let targetPitch: CGFloat = 45
+            if abs(map.camera.pitch - targetPitch) > 1 {
+                var cam = map.camera
+                cam.pitch = targetPitch
+                map.setCamera(cam, animated: true)
+            }
+        }
         // v2.88 导航态跟随用系统 followWithHeading，不用手动定时更新了，更流畅
         // v1.81.4 导航中全览：缩放显示当前路线全程，暂停跟随（取消/固定恢复由 navigateFollowTick 接管）
         if overviewTick != context.coordinator.lastOverviewTick {
