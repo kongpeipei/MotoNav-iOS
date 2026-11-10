@@ -159,7 +159,7 @@ struct DraggableFloat<Content: View>: View {
         // 体感就是"拉到中间就不能下拉了"。
         // v2.93 取消所有位置限制：拖动范围放大到 0~1（几乎整屏自由拖）
         let yLo = minPosY ?? 0
-        let yHi = maxPosY ?? 1
+        let yHi = maxPosY ?? 5.0
         let py: CGFloat
         if topLocked {
             py = min(max(defaultPos.y, yLo), yHi)
@@ -396,9 +396,9 @@ struct DraggableFloat<Content: View>: View {
                 let rx = UserDefaults.standard.object(forKey: "\(key).x") as? Double
                 let ry = UserDefaults.standard.object(forKey: "\(key).y") as? Double
                 let yLo = minPosY ?? 0.0
-                let yHi = maxPosY ?? 1.0
+                let yHi = maxPosY ?? 5.0
                 let rawY = topLocked ? defaultPos0.y
-                       : min(1.0, max(0.0, ry ?? defaultPos0.y))
+                       : min(5.0, max(0.0, ry ?? defaultPos0.y))
                 pos = CGPoint(
                     x: min(0.96, max(0.04, rx ?? defaultPos0.x)),
                     y: min(max(rawY, yLo), yHi))
