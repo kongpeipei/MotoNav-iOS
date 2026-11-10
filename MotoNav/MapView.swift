@@ -424,7 +424,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.hasCentered = true
             context.coordinator.setRegionProgrammatically {
                 map.setRegion(
-                    MKCoordinateRegion(center: MapGeo.toGCJ(loc), latitudinalMeters: 1200, longitudinalMeters: 1200),
+                    MKCoordinateRegion(center: MapGeo.toGCJ(loc), latitudinalMeters: 600, longitudinalMeters: 600),
                     animated: false)
             }
         }
