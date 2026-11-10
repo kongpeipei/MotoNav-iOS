@@ -751,33 +751,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                                                  coordinate: m.coordinate))
             }
         }
-        // v2.22 起终点内部道路：蓝色虚线连接定位点↔道路入口，并标入口转向箭头
-        let connKey = "\(routeStartLink?.from.latitude ?? 0)-\(routeStartLink?.to.longitude ?? 0)-\(routeEndLink?.from.latitude ?? 0)-\(routeEndLink?.to.longitude ?? 0)-\(routeStartArrow)-\(routeEndArrow)"
-        if connKey != context.coordinator.lastConnKey {
-            context.coordinator.lastConnKey = connKey
-            for p in context.coordinator.connectorPolylines { map.removeOverlay(p) }
-            context.coordinator.connectorPolylines = []
-            for a in context.coordinator.entryArrowAnnotations { map.removeAnnotation(a) }
-            context.coordinator.entryArrowAnnotations = []
-            if let sl = routeStartLink {
-                let pts = [MapGeo.toGCJ(sl.from), MapGeo.toGCJ(sl.to)]
-                let poly = MKPolyline(coordinates: pts, count: pts.count)
-                context.coordinator.connectorPolylines.append(poly)
-                map.addOverlay(poly)
-                let ann = RouteEndAnnotation(kind: "arrow_\(routeStartArrow)", coordinate: sl.to)
-                context.coordinator.entryArrowAnnotations.append(ann)
-                map.addAnnotation(ann)
-            }
-            if let el = routeEndLink {
-                let pts = [MapGeo.toGCJ(el.from), MapGeo.toGCJ(el.to)]
-                let poly = MKPolyline(coordinates: pts, count: pts.count)
-                context.coordinator.connectorPolylines.append(poly)
-                map.addOverlay(poly)
-                let ann = RouteEndAnnotation(kind: "arrow_\(routeEndArrow)", coordinate: el.from)
-                context.coordinator.entryArrowAnnotations.append(ann)
-                map.addAnnotation(ann)
-            }
-        }
+        // v2.88 去掉起终点内部道路蓝色虚线
         // v2.25 搜索选点高亮：橙色定位环 + 名称气泡
         let hitKey = searchHit.map { "\($0.coord.latitude)-\($0.coord.longitude)-\($0.title)" } ?? ""
         if hitKey != context.coordinator.lastSearchHitKey {
