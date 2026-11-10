@@ -1010,16 +1010,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
-        // v2.86 导航态：手指缩放地图查看路线时自动变2D，速度起来时自动变3D
+        // v2.88 导航态强制保持45度3D视角，不自动切2D（对标高德）
         if navigating {
-            var targetPitch: CGFloat = CGFloat(pitchDeg)
-            if context.coordinator.userMoved {
-                // 用户手动移图/缩放 → 自动切2D
-                targetPitch = 0
-            } else if context.coordinator.navActive, userLocation != nil {
-                // 跟随中且速度起来 → 自动切3D
-                targetPitch = 45
-            }
+            let targetPitch: CGFloat = 45
             if abs(map.camera.pitch - targetPitch) > 1 {
                 var cam = map.camera
                 cam.pitch = targetPitch
