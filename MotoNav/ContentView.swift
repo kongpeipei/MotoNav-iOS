@@ -207,7 +207,7 @@ struct ContentView: View {
                 AnyView(mapLayer)
                 // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
                 CruiseButton(model: model, selectedTab: selectedTab, searchExpanded: searchExpanded, tapPlace: tapPlace)
-                // v2.88 导航/巡航态定位点脉冲动画，屏幕中心
+                // v2.88 定位点脉冲动画，和屏幕中心的蓝色三角形重合
                 if model.navigating || model.cruiseMode {
                     PulseCircle()
                 }
