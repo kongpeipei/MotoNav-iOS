@@ -4080,18 +4080,32 @@ struct ContentView: View {
                     }
                 }
 
-                // v2.88 右侧加油站按钮（原来全览按钮，改成显示附近加油站）
+                // v2.88 右侧加油站按钮（第一次点击显示加油站+全览，再点关闭+回跟随）
                 Button {
                     haptic()
-                    if let loc = model.currentLocation {
-                        model.searchGasStationsNear(loc)
+                    if model.gasPanelVisible {
+                        // 关闭加油站面板，回到跟随
+                        model.gasPanelVisible = false
+                        model.gasStations = []
+                        model.navUserMoved = false
+                        model.navigateFollowTick += 1
+                    } else {
+                        // 打开加油站面板，搜索附近加油站+全览
+                        model.gasPanelVisible = true
+                        if let loc = model.currentLocation {
+                            model.searchGasStationsNear(loc)
+                        }
+                        startRouteOverview()
                     }
                 } label: {
                     Image(systemName: "fuelpump.fill")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(mainFg)
+                        .foregroundStyle(model.gasPanelVisible ? .white : mainFg)
                         .frame(width: 44, height: 38)
-                        .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(model.gasPanelVisible
+                                    ? Color(red: 0.16, green: 0.38, blue: 1.0)
+                                    : Color.black.opacity(0.07),
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }

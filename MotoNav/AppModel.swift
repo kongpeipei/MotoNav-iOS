@@ -134,6 +134,8 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var searchResultAnnotations: [SearchResultAnnotation] = []
     /// 市区加油站坐标
     @Published var gasStations: [CLLocationCoordinate2D] = []
+    /// v2.88 加油站面板是否已显示
+    @Published var gasPanelVisible = false
     /// 加油站全览请求计数
     @Published var gasTick = 0
     /// 地图小区/商铺名称标签（带坐标）
