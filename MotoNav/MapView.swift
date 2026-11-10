@@ -935,7 +935,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         // v2.32 MapKit 3D 俯视加固：部分机型在 followWithHeading 下会把 pitch 重置回 0
         // （MapKit known issue：3D 相机由系统接管）。导航态每 ≥3 秒检测一次，
         // 俯角被吞（<30°）就恢复 45°；不打断手势、不每次刷新。
-        if (navigating || cruise), pitchDeg > 0, !context.coordinator.userMoved,
+        if (navigating || cruise), pitchDeg > 0, !context.coordinator.userMoved, !showRouteOverview,
            Date().timeIntervalSince(context.coordinator.lastPitchRestoreAt) > 3,
            map.camera.pitch < 30 {
             context.coordinator.lastPitchRestoreAt = Date()
@@ -1018,7 +1018,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // v2.88 导航态强制保持45度3D视角，不自动切2D（对标高德）
-        if navigating {
+        // 全览模式下不执行，保留2D平面方便看整个路线
+        if navigating, !showRouteOverview {
             let targetPitch: CGFloat = 45
             if abs(map.camera.pitch - targetPitch) > 1 {
                 var cam = map.camera
@@ -1103,8 +1104,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             }
         }
-        // v2.88 巡航态也强制保持45度3D视角
-        if cruise, !navigating {
+        // v2.88 巡航态也强制保持45度3D视角，全览时不执行
+        if cruise, !navigating, !showRouteOverview {
             let targetPitch: CGFloat = 45
             if abs(map.camera.pitch - targetPitch) > 1 {
                 var cam = map.camera
