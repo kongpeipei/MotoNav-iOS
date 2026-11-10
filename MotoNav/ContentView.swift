@@ -1699,8 +1699,10 @@ struct ContentView: View {
                     // 报的是同一件事（下一步怎么转、多远），却悬在屏幕中段，
                     // 正好横在中轴线把整条路线切成两截。高德的路口放大图只出现在屏幕上部，
                     // 这里跟着上移，中下部留给路线和定位箭头。
-                    // v2.88 重新挂载路口放大图（高德同款）
-                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.20)) { AnyView(turnAheadCard) }
+                    // v2.88 顶部常驻绿色转向条
+                    navTopGreenBar
+                    // v2.88 接近路口时弹出白色大卡片路口放大图
+                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.30)) { AnyView(turnAheadCard) }
                 }
             }
         }
@@ -2897,6 +2899,30 @@ struct ContentView: View {
 
     /// 高德式路口放大示意图：接近下一转向时显示交叉路口 + 转弯箭头 + 路名
     /// v2.34 触发距离按车速动态调整：基准 200m + 当前车速(m/s)×3 秒行驶距离（上限 350m），
+    /// v2.88 高德同款顶部常驻绿色转向提示条
+    private var navTopGreenBar: some View {
+        Group {
+            if let ns = model.navStatusCache,
+               let t = ns.nextTurn {
+                HStack(spacing: 12) {
+                    Text(t.action)
+                        .font(.system(size: 28, weight: .heavy))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .background(Color(red: 0.13, green: 0.72, blue: 0.35), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+        }
+    }
+
     /// v2.88 高德同款路口放大图：白色大卡片 + 大转弯箭头 + 路名
     private var turnAheadCard: some View {
         Group {
