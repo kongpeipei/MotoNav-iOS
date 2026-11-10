@@ -136,8 +136,8 @@ struct DraggableFloat<Content: View>: View {
             // 导致卡片重启后停在 0.67 而非默认的贴底位。
             || (key == "bottommain2" && posVersion < 6)
         if stale {
-            // v2.85 作废后 posVersion 直接设到 6，只作废一次旧坐标，之后用户拖到哪里就保持哪里
-            let v = 6
+            // v2.85 作废后 posVersion 直接设到对应版本号，只作废一次旧坐标，之后用户拖到哪里就保持哪里
+            let v = 8
             UserDefaults.standard.set(v, forKey: "\(key).posV")
             // v2.59 真正把旧坐标清掉。旧版这里只推进了版本号，UserDefaults 里的 y 原样留着：
             // 作废只在"当次显示"生效（用 defaultPos），下一次进页面 posVersion 已经是 1、
