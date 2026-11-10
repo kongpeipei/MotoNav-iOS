@@ -1130,6 +1130,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.lastOverviewTick = overviewTick
             if overviewTick > 0, route.count > 1 {
                 context.coordinator.userMoved = true; context.coordinator.lastUserMovedTime = Date()
+                // v2.88 全览时关闭跟随，防止系统自动更新位置导致乱跳
+                map.userTrackingMode = .none
                 var rect = MKMapRect.null
                 for c in MapGeo.toGCJ(route) {
                     let p = MKMapPoint(c)
