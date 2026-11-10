@@ -529,6 +529,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
         // 搜索预览点（绿色高亮）+ 跳转到搜索结果
+        // v2.88 导航开始后强制删掉搜索预览点，避免和导航终点叠在一起出现两个终点
+        if navigating {
+            let oldPreviews = map.annotations.compactMap { $0 as? PreviewAnnotation }
+            oldPreviews.forEach { map.removeAnnotation($0) }
+        }
         let previews = map.annotations.compactMap { $0 as? PreviewAnnotation }
         let previewKey = preview.map { "\($0.latitude),\($0.longitude)" } ?? ""
         if previewKey != context.coordinator.lastPreviewKey {
