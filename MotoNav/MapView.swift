@@ -922,9 +922,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 map.camera.heading = applied
             }
         }
-        // v2.87 用户平移地图后 3 秒自动回跟随模式（导航态+巡航态）
+        // v2.88 用户平移地图后 1 秒自动回跟随模式（导航态+巡航态）
         if (navigating || cruise), context.coordinator.userMoved,
-           Date().timeIntervalSince(context.coordinator.lastUserMovedTime) > 3,
+           Date().timeIntervalSince(context.coordinator.lastUserMovedTime) > 1,
            let loc = userLocation {
             context.coordinator.userMoved = false
             let screenH = map.bounds.height
