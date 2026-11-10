@@ -206,7 +206,7 @@ struct ContentView: View {
             if selectedTab == 0 {
                 AnyView(mapLayer)
                 // v2.86 首页右上角巡航按钮（白底黑字），点击直接进入巡航模式
-                CruiseButton(model: model)
+                CruiseButton(model: model, selectedTab: selectedTab, searchExpanded: searchExpanded, tapPlace: tapPlace)
                 // v2.78 左上角品牌水印（"机车地图"）。
                 // 放在地图层正上方、其余浮层之下：卡片和提示条照常盖住它，
                 // 不会在导航态顶部条里插一行字；搜索整屏态直接不显示（那块被白色页面盖住）。
@@ -5654,6 +5654,9 @@ final class VoiceSearchService: ObservableObject {
 // v2.87 首页巡航按钮（白底卡片，可拖动，位置持久化）
 struct CruiseButton: View {
     @ObservedObject var model: AppModel
+    var selectedTab: Int
+    var searchExpanded: Bool
+    var tapPlace: TapPlaceInfo?
     var body: some View {
         // v2.88 巡航按钮只在首页显示（搜索框出现时）：不在导航/巡航/搜索展开/选点/路线规划/我的tab
         if !model.navigating && !model.cruiseMode,
