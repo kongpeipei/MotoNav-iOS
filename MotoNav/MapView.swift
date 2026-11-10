@@ -1106,21 +1106,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // v2.49 导航态用手动跟随（车位置下移），非导航态保持系统朝向跟随
                 map.userTrackingMode = navigating ? .none : .followWithHeading
                 if navigating {
-                    // v2.22 导航视野改为按"比例尺 1 厘米 = N 米"反推（默认 50 米/厘米）
+                    // v2.88 导航态直接用系统的 followWithHeading，自动实时跟随，流畅不卡顿
+                    map.userTrackingMode = .followWithHeading
                     var cam = map.camera
                     cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-                    // v2.28：与 navScaleTick 用同一套换算（真实物理尺寸）
                     let distance = MapViewRepresentable.altitudeForScale(navScaleTarget,
                                                                         screenH: map.bounds.height)
                     cam.centerCoordinateDistance = distance
-                    // v2.49 相机中心放到车前 35% 视距：车出现在屏高约 70%，前方占 2/3 屏
-                    if let loc = userLocation {
-                        cam.centerCoordinate = MapGeo.toGCJ(
-                            MapViewRepresentable.forwardCoordinate(
-                                loc,
-                                meters: distance * MapViewRepresentable.navCameraForwardRatio,
-                                bearingDeg: heading))
-                    }
                     map.camera = cam
                 } else {
                     // v2.33 退出导航/到达/清路线：回 2D 平视，导航 45° 俯视不残留
@@ -1132,32 +1124,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
             }
         }
-        // v2.88 导航态实时跟随：用户没有手动移图时，每隔2秒更新一次相机跟随定位点
-        if navigating, !context.coordinator.userMoved,
-           Date().timeIntervalSince(context.coordinator.lastNavFollowUpdateAt) > 2,
-           let loc = userLocation {
-            context.coordinator.lastNavFollowUpdateAt = Date()
-            // 只有定位点移动超过10米才更新，避免GPS抖动
-            if context.coordinator.navLastFollow == nil ||
-                CLLocation(latitude: loc.latitude, longitude: loc.longitude)
-                    .distance(from: CLLocation(latitude: context.coordinator.navLastFollow!.latitude,
-                                              longitude: context.coordinator.navLastFollow!.longitude)) > 10 {
-                context.coordinator.navLastFollow = loc
-                let screenH = map.bounds.height
-                let distance = MapViewRepresentable.altitudeForScale(navScaleTarget, screenH: screenH)
-                context.coordinator.setRegionProgrammatically {
-                    var cam = map.camera
-                    cam.centerCoordinate = MapGeo.toGCJ(
-                        MapViewRepresentable.forwardCoordinate(
-                            loc,
-                            meters: distance * MapViewRepresentable.navCameraForwardRatio,
-                            bearingDeg: heading))
-                    cam.centerCoordinateDistance = distance
-                    cam.pitch = CGFloat(pitchDeg > 0 ? pitchDeg : 45)
-                    map.setCamera(cam, animated: true)
-                }
-            }
-        }
+        // v2.88 导航态跟随用系统 followWithHeading，不用手动定时更新了，更流畅
         // v1.81.4 导航中全览：缩放显示当前路线全程，暂停跟随（取消/固定恢复由 navigateFollowTick 接管）
         if overviewTick != context.coordinator.lastOverviewTick {
             context.coordinator.lastOverviewTick = overviewTick
