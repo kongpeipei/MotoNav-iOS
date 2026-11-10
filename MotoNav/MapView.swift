@@ -277,7 +277,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         map.showsUserLocation = true
         // v2.53 关闭苹果原生路况层：本项目按高德 API 的 tmc/tmcs 自绘粗色段，
         // 两层同屏（细红线 + 粗橙带）颜色打架；高德只有一层粗色段。
-        map.showsScale = true    // v2.53 左下角比例尺（视野档位收小后需要一个校验地标）
+        map.showsScale = false    // 删除左下角比例尺
         // v2.54 底图配置集中到 MKStandardMapConfiguration，并加 emphasisStyle = .muted。
         //
         // 起因：用户实拍反馈园区里有一条"白色条纹"。实测该条宽约 5pt、
