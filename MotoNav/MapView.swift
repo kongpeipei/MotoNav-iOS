@@ -1873,10 +1873,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                     return r
                 }
                 if poly === self.traveledPolyline {
-                    // v2.88 已走过的路段：蓝色虚线（高德同款蓝色圆点效果）
-                    r.strokeColor = UIColor(red: 0.20, green: 0.55, blue: 1.0, alpha: 0.95)
+                    // v2.88 已走过的路段：青色实线
+                    r.strokeColor = UIColor(red: 0.0, green: 0.8, blue: 0.8, alpha: 0.95)
                     r.lineWidth = self.navigating ? 7 : 5
-                    r.lineDashPattern = [6, 6]
+                    r.lineDashPattern = nil
                     return r
                 }
                 if self.connectorPolylines.contains(where: { $0 === poly }) {
