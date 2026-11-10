@@ -53,7 +53,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// 定位精度（米），越小信号越好
     @Published var locationAccuracy: CLLocationAccuracy = 0
     @Published var monitoring = false
-    @Published var simulating = false
     @Published var status = "等待定位…"
     @Published var route: [CLLocationCoordinate2D] = []
     /// 多路线方案（点"去这里"后展示，选择后应用）
@@ -184,8 +183,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     private var lastSpeakText = ""
     /// 导航巡航 Live Activity（灵动岛/锁屏：头盔 + 已出发/去往目的地，导航中生效）
     private var liveActivity: Activity<MotoNavAttributes>?
-    private var simTimer: Timer?
-    private var simStep = 0
     /// 偏离路线检测
     private var offRouteCount = 0
     private var lastReroute = Date(timeIntervalSince1970: 0)
@@ -1612,40 +1609,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    /// v2.88 测试导航：模拟导航到虚拟目的地，用来测试导航功能
-    func startTestNavigation() {
-        // 先退出巡航
-        exitCruise()
-        // 用当前位置作为起点，前方1公里作为终点，生成一条直线路线
-        guard let currentLoc = currentLocation else {
-            status = "无法获取当前位置"
-            return
-        }
-        // 终点：当前位置向北1公里
-        let destLat = currentLoc.latitude + 0.009
-        let destLon = currentLoc.longitude
-        // 生成一条简单的直线路线（10个点）
-        var testRoute: [CLLocationCoordinate2D] = []
-        for i in 0...10 {
-            let ratio = Double(i) / 10.0
-            let lat = currentLoc.latitude + (destLat - currentLoc.latitude) * ratio
-            let lon = currentLoc.longitude + (destLon - currentLoc.longitude) * ratio
-            testRoute.append(CLLocationCoordinate2D(latitude: lat, longitude: lon))
-        }
-        route = testRoute
-        destName = "测试目的地"
-        // 开始导航
-        navigating = true
-        heading = compass.angle
-        UIApplication.shared.isIdleTimerDisabled = true
-        pitchDeg = 45
-        navScaleTarget = 100
-        navScaleTick += 1
-        navUserMoved = false
-        navigateFollowTick += 1
-        status = "测试导航中"
-    }
-
     /// v2.34 体验审查 E5：手动退出巡航 → 本次会话内不再自动进入（避免反复打扰）。
     /// 与 exitCruise 的区别：exitCruise 供程序内部调用（如规划路线时让位），不抑制；
     /// 用户点巡航卡 × 走这里，App 重启前不再自动进巡航。
@@ -2048,36 +2011,6 @@ final class AppModel: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     // MARK: - 本地通知
 
-
-    // MARK: - 模拟测试
-
-    func toggleSimulation() {
-        simulating.toggle()
-        if simulating {
-            stopMonitoring()
-            simTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.simTick() }
-            }
-        } else {
-            simTimer?.invalidate()
-            simTimer = nil
-        }
-    }
-
-    private func simTick() {
-        let pts: [(Double, Double)] = [
-            (31.8090, 117.2140), (31.8120, 117.2220), (31.8150, 117.2310),
-            (31.8120, 117.2260), (31.8090, 117.2140)
-        ]
-        let a = pts[simStep % pts.count]
-        let b = pts[(simStep + 1) % pts.count]
-        let t = Double(simStep % 40) / 40.0
-        let lat = a.0 + (b.0 - a.0) * t
-        let lon = a.1 + (b.1 - a.1) * t
-        simStep += 2
-        currentLocation = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        status = String(format: "模拟行驶中 %.5f,%.5f", lat, lon)
-    }
 
     // MARK: - 目的地搜索与路线规划
 

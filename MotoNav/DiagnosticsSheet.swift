@@ -82,18 +82,6 @@ struct DiagnosticsSheet: View {
                     row("已走过索引", "\(model.traveledIdx)")
                 }
 
-                // ── 测试工具 ────────────────────────────────────
-                Section {
-                    Toggle("模拟导航", isOn: Binding(
-                        get: { model.simulating },
-                        set: { _ in model.toggleSimulation() }
-                    ))
-                } header: {
-                    Text("测试")
-                } footer: {
-                    Text("模拟移动定位演示导航效果；只用于测试，不影响真实定位。")
-                }
-
                 // ── 最近日志 ────────────────────────────────────
                 Section {
                     ForEach(Array(model.recentLogs.suffix(20).enumerated()), id: \.offset) { _, line in
