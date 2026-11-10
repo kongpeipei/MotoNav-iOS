@@ -5709,13 +5709,12 @@ struct CruiseButton: View {
                     model.cruiseTotalDistance = 0
                 }) {
                     Text("巡航")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.black)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .background(.white)
-                        .cornerRadius(24)
-                        .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 14)
+                        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
                 }
                 .buttonStyle(.plain)
             }
