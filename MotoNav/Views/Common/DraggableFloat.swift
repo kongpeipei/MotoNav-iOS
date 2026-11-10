@@ -127,7 +127,7 @@ struct DraggableFloat<Content: View>: View {
             // v2.92 规划两卡作废旧坐标：上一轮临时加了 min/maxPosY，
             // 用户拖到边界后被存下来，现在删了限制但记忆值还在。
             || (key == "routeplantop" && posVersion < 3)
-            || (key == "routeplanbottom" && posVersion < 4)
+            || (key == "routeplanbottom" && posVersion < 7)
             // v2.59 搜索卡从"底边锚定 0.97"改成"中心定位 0.88"，语义变了，
             // 记忆里的 0.97（旧语义=底边）直接套到中心定位会把卡片整体推下去半个卡高 —— 必须作废
             || (key == "bottommain" && posVersion < 2)
