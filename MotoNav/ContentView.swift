@@ -1699,8 +1699,8 @@ struct ContentView: View {
                     // 报的是同一件事（下一步怎么转、多远），却悬在屏幕中段，
                     // 正好横在中轴线把整条路线切成两截。高德的路口放大图只出现在屏幕上部，
                     // 这里跟着上移，中下部留给路线和定位箭头。
-                    // v2.86 删除转弯箭头卡片，改为路线上显示白色大箭头
-                    // DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.20)) { AnyView(turnAheadCard) }
+                    // v2.88 重新挂载路口放大图（高德同款）
+                    DraggableFloat(key: "turnahead", defaultPos: CGPoint(x: 0.5, y: 0.20)) { AnyView(turnAheadCard) }
                 }
             }
         }
