@@ -866,41 +866,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         // 高德 2D 导航截图（n1/n4）里地图文字都是水平的、路线斜向，就是北向上。
         // 旧版这里不分 2D/3D，2D 也照样每帧写 camera.heading ——
         // 用户点"2D"之后地图还在跟着手机转，等于这个按钮只换了俯角没换朝向规则。
+        // v2.91 导航态heading交给系统followWithHeading管理，不再手动每帧改，避免和系统抢控制权导致抖动
+        // 只在2D模式下强制北向上一次
         if navigating, !context.coordinator.userMoved, pitchDeg <= 0 {
-            // 2D：只在俯角刚切到 0 或朝向还不是正北时纠正一次，之后不动
             if abs(map.camera.heading) > 0.5 {
                 context.coordinator.setRegionProgrammatically {
                     map.camera.heading = 0
                 }
-            }
-            context.coordinator.lastAppliedHeading = 0
-            context.coordinator.lastHeadingTickAt = Date()
-        } else if !context.coordinator.userMoved && navigating {
-            let target = CLLocationDirection(heading)
-            let now = Date()
-            let dt = max(0.016, min(0.5, now.timeIntervalSince(context.coordinator.lastHeadingTickAt)))
-            context.coordinator.lastHeadingTickAt = now
-            // MKUserLocation 本身没有 speed，速度在它的 CLLocation 上（未定位时 location 为 nil）
-            let mps = map.userLocation.location?.speed ?? -1
-            let moving = mps > 1.4 || mps < 0   // <5 km/h 冻结；负值表示速度无效，按行驶处理
-            if moving || context.coordinator.lastAppliedHeading == nil {
-                var cur = context.coordinator.lastAppliedHeading ?? target
-                var d = target - cur
-                while d > 180 { d -= 360 }
-                while d < -180 { d += 360 }
-                if abs(d) > 120 {
-                    cur = target
-                } else if abs(d) >= 2 {
-                    let k = min(1.0, dt / 0.25)
-                    cur += d * k
-                }
-                cur = (cur.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
-                context.coordinator.lastAppliedHeading = cur
-            }
-            if let applied = context.coordinator.lastAppliedHeading,
-               abs(applied - context.coordinator.lastWrittenHeading) > 1 {
-                context.coordinator.lastWrittenHeading = applied
-                map.camera.heading = applied
             }
         }
         // v2.88 用户平移地图后 1 秒自动回跟随模式（导航态+巡航态）
@@ -1018,14 +990,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
         }
-        // v2.88 导航态强制保持45度3D视角，不自动切2D（对标高德）
+        // v2.91 导航态强制45度3D视角：3秒检查一次，只有被系统吞掉（<30度）才恢复，避免每帧改相机导致抖动
         // 全览模式下不执行，保留2D平面方便看整个路线
-        if navigating, !showRouteOverview {
-            let targetPitch: CGFloat = 45
-            if abs(map.camera.pitch - targetPitch) > 1 {
+        if navigating, !showRouteOverview, !context.coordinator.userMoved,
+           Date().timeIntervalSince(context.coordinator.lastPitchRestoreAt) > 3,
+           map.camera.pitch < 30 {
+            context.coordinator.lastPitchRestoreAt = Date()
+            context.coordinator.setRegionProgrammatically {
                 var cam = map.camera
-                cam.pitch = targetPitch
-                map.setCamera(cam, animated: true)
+                cam.pitch = 45
+                map.camera = cam
             }
         }
         // v2.65 导航首帧定点：进入导航那一刻必须把相机放到车上。
