@@ -2897,27 +2897,33 @@ struct ContentView: View {
 
     /// 高德式路口放大示意图：接近下一转向时显示交叉路口 + 转弯箭头 + 路名
     /// v2.34 触发距离按车速动态调整：基准 200m + 当前车速(m/s)×3 秒行驶距离（上限 350m），
-    /// v2.88 高德同款顶部绿色转向提示条
+    /// v2.88 高德同款路口放大图：白色大卡片 + 大转弯箭头 + 路名
     private var turnAheadCard: some View {
         Group {
             if let ns = model.navStatusCache,
                let t = ns.nextTurn,
                ns.distToTurnM < min(350, 200 + Int(model.currentSpeed * 3.0)) {
-                HStack(spacing: 12) {
-                    // 左边：转向文字
-                    Text(t.action)
-                        .font(.system(size: 28, weight: .heavy))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    // 右边：喇叭图标
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
+                VStack(spacing: 12) {
+                    // 大转弯箭头
+                    Image(systemName: navTurnIcon(t))
+                        .font(.system(size: 64, weight: .heavy))
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    // 距离 + 路名
+                    VStack(spacing: 4) {
+                        Text(ns.distToTurnM < 1000 ? "\(ns.distToTurnM)米" : String(format: "%.1f公里", Double(ns.distToTurnM)/1000.0))
+                            .font(.system(size: 24, weight: .heavy))
+                            .foregroundStyle(.black)
+                        if !t.roadName.isEmpty {
+                            Text(t.roadName)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.black.opacity(0.6))
+                        }
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
-                .background(Color(red: 0.13, green: 0.72, blue: 0.35), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             }
