@@ -2897,38 +2897,36 @@ struct ContentView: View {
 
     /// 高德式路口放大示意图：接近下一转向时显示交叉路口 + 转弯箭头 + 路名
     /// v2.34 触发距离按车速动态调整：基准 200m + 当前车速(m/s)×3 秒行驶距离（上限 350m），
-    /// 高速提前亮、低速贴近才亮，避免高速路口一闪而过或低速时卡片过早占屏。
+    /// v2.88 高德原生风格转向提示卡：白色圆角卡片，左边大蓝色箭头，右边距离+路名
     private var turnAheadCard: some View {
         Group {
             if let ns = model.navStatusCache,
                let t = ns.nextTurn,
                ns.distToTurnM < min(350, 200 + Int(model.currentSpeed * 3.0)) {
-                ZStack {
-                    // 当前道路（垂直）
-                    Rectangle().fill(.white.opacity(0.92))
-                        .frame(width: 12, height: 110)
-                    // 目标道路（水平）
-                    Rectangle().fill(.white.opacity(0.92))
-                        .frame(width: 110, height: 12)
-                    // 转弯箭头
+                HStack(spacing: 16) {
+                    // 左边：大转向箭头
                     Image(systemName: navTurnIcon(t))
-                        .font(.system(size: 46, weight: .bold))
-                        .foregroundStyle(Color(red: 0.25, green: 0.72, blue: 1.0))
-                    // 路名标签
-                    if !t.roadName.isEmpty {
-                        Text(t.roadName)
-                            .font(.caption2.bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
-                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            .offset(y: 54)
+                        .font(.system(size: 48, weight: .heavy))
+                        .foregroundStyle(Color(red: 0.16, green: 0.38, blue: 1.0))
+                    // 右边：距离+路名
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(ns.distToTurnM < 1000 ? "\(ns.distToTurnM)米" : String(format: "%.1f公里", Double(ns.distToTurnM)/1000.0))
+                            .font(.system(size: 28, weight: .heavy))
+                            .foregroundStyle(.black)
+                        if !t.roadName.isEmpty {
+                            Text(t.roadName)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.black.opacity(0.6))
+                        }
                     }
+                    Spacer()
                 }
-                .frame(width: 110, height: 110)
-                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.horizontal)
-                .padding(.bottom, 4)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
             }
         }
     }

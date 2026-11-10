@@ -932,7 +932,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             let heading = map.camera.heading
             context.coordinator.setRegionProgrammatically {
                 // 恢复跟随：把相机移回跟随位置
-                map.userTrackingMode = navigating ? .none : .followWithHeading
+                map.userTrackingMode = .followWithHeading
                 var cam = map.camera
                 cam.centerCoordinate = MapGeo.toGCJ(
                     navigating
@@ -1008,7 +1008,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 context.coordinator.setRegionProgrammatically {
                     // v2.49 导航态改手动跟随（.none）：相机中心放在车前 35% 视距，
                     // 车落在屏幕下方 1/3，前方视野比"车居中"多约 40%（高德同款）
-                    map.userTrackingMode = navigating ? .none : .followWithHeading
+                    map.userTrackingMode = .followWithHeading
                     var cam = map.camera
                     cam.centerCoordinate = MapGeo.toGCJ(
                         navigating
@@ -1104,7 +1104,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             if !context.coordinator.navIntroInProgress {
             context.coordinator.setRegionProgrammatically {
                 // v2.49 导航态用手动跟随（车位置下移），非导航态保持系统朝向跟随
-                map.userTrackingMode = navigating ? .none : .followWithHeading
+                map.userTrackingMode = .followWithHeading
                 if navigating {
                     // v2.88 导航态直接用系统的 followWithHeading，自动实时跟随，流畅不卡顿
                     map.userTrackingMode = .followWithHeading
